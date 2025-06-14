@@ -11,6 +11,17 @@ data_dir = Path(__file__).parent.parent / "data"
 downloaded_paths = []
 os.makedirs(data_dir, exist_ok=True)
 
+columns_to_keep = [
+    "in.puma",
+    "in.nhgis_puma_gisjoin",
+    "in.resstock_puma_id",
+    "in.state",
+    "in.state_name",
+    "in.resstock_county_id",
+    "bldg_id",
+    "upgrade",
+]
+
 for release_name, release in data.items():
     release_year = release["release_year"]
     res_com = release["res_com"]
