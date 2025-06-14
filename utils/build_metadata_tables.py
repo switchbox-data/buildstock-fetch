@@ -27,7 +27,7 @@ columns_to_keep = [
 bucket_name = "oedi-data-lake"
 s3 = fs.S3FileSystem(anonymous=True, region="us-west-2")
 
-for _, release in data.items():
+for release_name, release in data.items():
     release_year = release["release_year"]
     res_com = release["res_com"]
     weather = release["weather"]
@@ -57,9 +57,17 @@ for _, release in data.items():
             df = table.to_pandas()
             print(f"Successfully loaded {len(df)} rows with {len(df.columns)} columns")
 
+            # Save to Feather file
+            feather_filename = f"{data_dir}/{release_name}_baseline.feather"
+            df.to_feather(feather_filename, compression="zstd")
+
         except Exception as e:
-            print(f"Error reading parquet file: {e}")
-    elif release_year == "2022":
+            print(f"Error processing file: {e}")
+    elif (
+        release_year == "2022"
+        or release_year == "2023"
+        or (release_year == "2024" and release_name == "com_2024_amy2018_1")
+    ):
         for upgrade_id in upgrade_ids:
             upgrade_id = int(upgrade_id)
             if upgrade_id == 0:
@@ -90,5 +98,11 @@ for _, release in data.items():
                 df = table.to_pandas()
                 print(f"Successfully loaded {len(df)} rows with {len(df.columns)} columns")
 
+                # Save to Feather file
+                feather_filename = f"{data_dir}/{release_name}_upgrade{upgrade_id:02d}.feather"
+                df.to_feather(feather_filename, compression="zstd")
+                print(f"Successfully saved DataFrame to {feather_filename}")
+                break
+
             except Exception as e:
-                print(f"Error reading parquet file: {e}")
+                print(f"Error processing file: {e}")
