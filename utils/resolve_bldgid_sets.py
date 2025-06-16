@@ -78,6 +78,45 @@ def _get_upgrade_ids(s3_client, bucket_name: str, model_path: str) -> list[str]:
     return sorted(upgrade_ids, key=int)  # Sort numerically
 
 
+def _find_available_data(s3_client, bucket_name: str, prefix: str) -> list[str]:
+    """
+    Find the available data directories (building_energy_model, metadata).
+    Returns a list of directories that exist, searching up to depth 3.
+    """
+    found_dirs = set()
+    expected_dirs = ["building_energy_model", "metadata"]
+    paginator = s3_client.get_paginator("list_objects_v2")
+
+    # Queue for BFS: (prefix, depth)
+    queue = [(prefix, 0)]
+    visited = set()
+
+    while queue and len(found_dirs) < len(expected_dirs):
+        current_prefix, depth = queue.pop(0)
+        if depth > 2 or current_prefix in visited:
+            continue
+
+        visited.add(current_prefix)
+        pages = paginator.paginate(Bucket=bucket_name, Prefix=current_prefix, Delimiter="/")
+
+        for page in pages:
+            if "CommonPrefixes" in page:
+                # First check current level for matches
+                for prefix in page["CommonPrefixes"]:
+                    dir_name = prefix["Prefix"].rstrip("/").split("/")[-1]
+                    for expected in expected_dirs:
+                        if expected in dir_name and expected not in found_dirs:
+                            found_dirs.add(expected)
+                            if len(found_dirs) == len(expected_dirs):
+                                return list(found_dirs)
+
+                # Then add subdirectories to queue for next level
+                for prefix in page["CommonPrefixes"]:
+                    queue.append((prefix["Prefix"], depth + 1))
+
+    return list(found_dirs)
+
+
 def _find_upgrade_ids(s3_client, bucket_name: str, prefix: str) -> list[str]:
     """
     Find the unique building_energy_model directory and its upgrade IDs.
@@ -107,6 +146,7 @@ def _process_release(
     match: re.Match[str],
     seen_combinations: set[tuple[str, str, str, str]],
     releases: dict[str, BuildStockRelease],
+    available_data: list[str],
 ):
     """
     Process a release directory and extract its metadata.
@@ -132,6 +172,7 @@ def _process_release(
         "weather": weather,
         "release_number": release_number,
         "upgrade_ids": upgrade_ids,
+        "available_data": available_data,
     }
     # Create key following the pattern: {res/com}_{release_year}_{weather}_{release_number}
     key = f"{res_com_type}_{release_year}_{weather}_{release_number}"
@@ -200,14 +241,20 @@ def resolve_bldgid_sets(
                     # Check for 2024 ResStock TMY3 release 1 pattern first
                     match = re.match(pattern_2024_resstock_tmy3_1, relative_path)
                     if match:
-                        _process_release(s3_client, bucket_name, release_path, match, seen_combinations, releases)
+                        available_data = _find_available_data(s3_client, bucket_name, release_path)
+                        _process_release(
+                            s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data
+                        )
                         continue
 
                     # Then check for standard pattern
                     match = re.match(pattern, relative_path)
 
                     if match:
-                        _process_release(s3_client, bucket_name, release_path, match, seen_combinations, releases)
+                        available_data = _find_available_data(s3_client, bucket_name, release_path)
+                        _process_release(
+                            s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data
+                        )
 
     # Save to JSON file with consistent formatting
     output_path = Path(__file__).parent / output_file
