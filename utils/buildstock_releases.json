@@ -308,6 +308,13 @@
       "16"
     ]
   },
+  "res_2024_tmy3_1": {
+    "release_year": "2024",
+    "res_com": "resstock",
+    "weather": "tmy3",
+    "release_number": "1",
+    "upgrade_ids": []
+  },
   "res_2024_tmy3_2": {
     "release_year": "2024",
     "res_com": "resstock",

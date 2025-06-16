@@ -78,7 +78,7 @@ def _get_upgrade_ids(s3_client, bucket_name: str, model_path: str) -> list[str]:
     return sorted(upgrade_ids, key=int)  # Sort numerically
 
 
-def find_upgrade_ids(s3_client, bucket_name: str, prefix: str) -> list[str]:
+def _find_upgrade_ids(s3_client, bucket_name: str, prefix: str) -> list[str]:
     """
     Find the unique building_energy_model directory and its upgrade IDs.
     For 2021 releases, returns ['0'] as the only upgrade ID.
@@ -98,6 +98,44 @@ def find_upgrade_ids(s3_client, bucket_name: str, prefix: str) -> list[str]:
     model_path = _find_model_directory(s3_client, bucket_name, prefix)
     upgrade_ids = _get_upgrade_ids(s3_client, bucket_name, model_path)
     return upgrade_ids
+
+
+def _process_release(
+    s3_client,
+    bucket_name: str,
+    release_path: str,
+    match: re.Match[str],
+    seen_combinations: set[tuple[str, str, str, str]],
+    releases: dict[str, BuildStockRelease],
+):
+    """
+    Process a release directory and extract its metadata.
+    """
+    # Check if this is the 2024 pattern by looking at the pattern itself
+    if "2024/resstock_dataset_2024.1" in match.string:
+        release_year, res_com_type, _, release_number = match.groups()
+        weather = "tmy3"
+    else:
+        release_year, res_com_type, weather, release_number = match.groups()
+
+    combination = (release_year, f"{res_com_type}stock", weather, release_number)
+
+    if combination not in seen_combinations:
+        seen_combinations.add(combination)
+
+    # Find the building_energy_model directory and its upgrade IDs
+    upgrade_ids = _find_upgrade_ids(s3_client, bucket_name, release_path)
+
+    release_data = {
+        "release_year": release_year,
+        "res_com": f"{res_com_type}stock",
+        "weather": weather,
+        "release_number": release_number,
+        "upgrade_ids": upgrade_ids,
+    }
+    # Create key following the pattern: {res/com}_{release_year}_{weather}_{release_number}
+    key = f"{res_com_type}_{release_year}_{weather}_{release_number}"
+    releases[key] = release_data
 
 
 def resolve_bldgid_sets(
@@ -131,6 +169,8 @@ def resolve_bldgid_sets(
 
     # Regex pattern to extract components from full release path
     pattern = r"(\d{4})/(res|com)stock_(\w+)_release_(\d+(?:\.\d+)?)"
+    # 2024 ResStock TMY3 release 1 has a different pattern from the rest
+    pattern_2024_resstock_tmy3_1 = r"(\d{4})/(res|com)stock_dataset_(\d{4})\.(\d+(?:\.\d+)?)"
 
     # First, list all year directories
     paginator = s3_client.get_paginator("list_objects_v2")
@@ -156,28 +196,18 @@ def resolve_bldgid_sets(
 
                     # Try to match the pattern against the full path
                     relative_path = release_path.replace(prefix, "").lstrip("/")
+
+                    # Check for 2024 ResStock TMY3 release 1 pattern first
+                    match = re.match(pattern_2024_resstock_tmy3_1, relative_path)
+                    if match:
+                        _process_release(s3_client, bucket_name, release_path, match, seen_combinations, releases)
+                        continue
+
+                    # Then check for standard pattern
                     match = re.match(pattern, relative_path)
 
                     if match:
-                        release_year, res_com_type, weather, release_number = match.groups()
-                        # Create a tuple of the components to check uniqueness
-                        combination = (release_year, f"{res_com_type}stock", weather, release_number)
-                        if combination not in seen_combinations:
-                            seen_combinations.add(combination)
-
-                            # Find the building_energy_model directory and its upgrade IDs
-                            upgrade_ids = find_upgrade_ids(s3_client, bucket_name, release_path)
-
-                            release_data = {
-                                "release_year": release_year,
-                                "res_com": f"{res_com_type}stock",
-                                "weather": weather,
-                                "release_number": release_number,
-                                "upgrade_ids": upgrade_ids,
-                            }
-                            # Create key following the pattern: {res/com}_{release_year}_{weather}_{release_number}
-                            key = f"{res_com_type}_{release_year}_{weather}_{release_number}"
-                            releases[key] = release_data
+                        _process_release(s3_client, bucket_name, release_path, match, seen_combinations, releases)
 
     # Save to JSON file with consistent formatting
     output_path = Path(__file__).parent / output_file
