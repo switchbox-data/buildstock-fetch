@@ -22,6 +22,7 @@ dependencies = [
     "boto3~=1.33.0",
     "botocore~=1.33.0",
     "pyarrow",
+    "pandas>=2.2.3",
 ]
 
 [project.urls]
