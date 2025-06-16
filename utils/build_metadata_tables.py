@@ -2,9 +2,12 @@ import json
 import os
 from pathlib import Path
 
+import boto3
 import pandas as pd
 import pyarrow.fs as fs
 import pyarrow.parquet as pq
+from botocore import UNSIGNED
+from botocore.config import Config
 
 
 def process_parquet_file(file_key: str, columns_to_keep: list, s3: fs.S3FileSystem, bucket_name: str) -> pd.DataFrame:
@@ -45,6 +48,24 @@ def process_parquet_file(file_key: str, columns_to_keep: list, s3: fs.S3FileSyst
         return df
 
 
+def find_metadata_files(base_file_key: str, file_key_suffix: str, s3_client: boto3.client, bucket_name: str) -> list:
+    """
+    Find all metadata files in the S3 bucket.
+    """
+    download_files = []
+    paginator = s3_client.get_paginator("list_objects_v2")
+    pages = paginator.paginate(Bucket=bucket_name, Prefix=base_file_key)
+    for page in pages:
+        if "Contents" in page:
+            for obj in page["Contents"]:
+                key = obj["Key"]
+
+                # Check if file ends with 'baseline.parquet'
+                if key.endswith(file_key_suffix):
+                    download_files.append(key)
+    return download_files
+
+
 # Load the release data
 with open("/workspaces/buildstock-fetcher/utils/buildstock_releases.json") as file:
     data = json.load(file)
@@ -70,6 +91,7 @@ columns_to_keep = [
 # S3 bucket and filesystem
 bucket_name = "oedi-data-lake"
 s3 = fs.S3FileSystem(anonymous=True, region="us-west-2")
+s3_client = boto3.client("s3", region_name="us-west-2", config=Config(signature_version=UNSIGNED))
 
 for release_name, release in data.items():
     release_year = release["release_year"]
@@ -114,3 +136,15 @@ for release_name, release in data.items():
                 df.to_feather(feather_filename, compression="zstd")
                 print(f"Successfully saved DataFrame to {feather_filename}")
                 break
+
+    elif release_year == "2024" and release_name == "com_2024_amy2018_2":
+        for upgrade_id in upgrade_ids:
+            upgrade_id = int(upgrade_id)
+            base_file_key = (
+                f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
+                f"{release_year}/{res_com}_{weather}_release_{release_number}/"
+                f"metadata_and_annual_results/by_state_and_county/full/parquet/"
+            )
+            file_key_suffix = "baseline.parquet" if upgrade_id == 0 else f"upgrade{upgrade_id:02d}.parquet"
+            download_files = find_metadata_files(base_file_key, file_key_suffix, s3_client, bucket_name)
+            print(f"Found {len(download_files)} {file_key_suffix} files:")
