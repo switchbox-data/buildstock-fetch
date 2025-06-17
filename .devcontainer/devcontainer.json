@@ -3,16 +3,28 @@
 {
     "name": "buildstock-fetch",
     // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-    "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bullseye",
-    "features": {},
+    "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bullseye",
+
+    "features": {
+        // Install just
+        "ghcr.io/guiyomh/features/just:0.1.0": {
+            "version": "1.40.0"
+        }
+    },
 
     // Use 'postCreateCommand' to run commands after the container is created.
+    // This is used to install post-commit hooks, uv, virtualenv, and dependencies.
     "postCreateCommand": "./.devcontainer/postCreateCommand.sh",
 
-    // Configure tool-specific properties.
     "customizations": {
         "vscode": {
-            "extensions": ["ms-python.python", "editorconfig.editorconfig"],
+            // Install VS Code extensions.
+            "extensions": [
+                "ms-python.python",
+                "nefrob.vscode-just-syntax",
+                "tamasfe.even-better-toml"
+            ],
+            // Configure tool-specific settings.
             "settings": {
                 "python.testing.pytestArgs": ["tests"],
                 "python.testing.unittestEnabled": false,
