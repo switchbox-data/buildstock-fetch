@@ -8,6 +8,11 @@
       "0"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
       "metadata"
     ]
   },
@@ -20,6 +25,11 @@
       "0"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
       "metadata"
     ]
   },
@@ -32,6 +42,11 @@
       "0"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
       "metadata"
     ]
   },
@@ -44,6 +59,11 @@
       "0"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
       "metadata"
     ]
   },
@@ -66,9 +86,14 @@
       "10"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "schedule",
+      "15min_load_curve",
       "HPXML",
-      "metadata",
-      "schedule"
+      "hourly_load_curve",
+      "metadata"
     ]
   },
   "res_2022_amy2012_1": {
@@ -90,9 +115,14 @@
       "10"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "schedule",
+      "15min_load_curve",
       "HPXML",
-      "metadata",
-      "schedule"
+      "hourly_load_curve",
+      "metadata"
     ]
   },
   "res_2022_amy2018_1.1": {
@@ -114,9 +144,14 @@
       "10"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "schedule",
+      "15min_load_curve",
       "HPXML",
-      "metadata",
-      "schedule"
+      "hourly_load_curve",
+      "metadata"
     ]
   },
   "res_2022_amy2018_1": {
@@ -138,9 +173,14 @@
       "10"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "schedule",
+      "15min_load_curve",
       "HPXML",
-      "metadata",
-      "schedule"
+      "hourly_load_curve",
+      "metadata"
     ]
   },
   "res_2022_tmy3_1.1": {
@@ -162,9 +202,14 @@
       "10"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "schedule",
+      "15min_load_curve",
       "HPXML",
-      "metadata",
-      "schedule"
+      "hourly_load_curve",
+      "metadata"
     ]
   },
   "res_2022_tmy3_1": {
@@ -186,9 +231,14 @@
       "10"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "schedule",
+      "15min_load_curve",
       "HPXML",
-      "metadata",
-      "schedule"
+      "hourly_load_curve",
+      "metadata"
     ]
   },
   "com_2023_amy2018_1": {
@@ -210,6 +260,11 @@
       "10"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
       "metadata"
     ]
   },
@@ -240,6 +295,11 @@
       "18"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
       "metadata"
     ]
   },
@@ -283,6 +343,11 @@
       "32"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
       "metadata"
     ]
   },
@@ -334,6 +399,11 @@
       "39"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
       "metadata"
     ]
   },
@@ -362,9 +432,12 @@
       "16"
     ],
     "available_data": [
-      "HPXML",
+      "monthly_load_curve",
       "metadata",
-      "schedule"
+      "annual_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "daily_load_curve"
     ]
   },
   "res_2024_tmy3_1": {
@@ -402,9 +475,12 @@
       "16"
     ],
     "available_data": [
-      "HPXML",
+      "monthly_load_curve",
       "metadata",
-      "schedule"
+      "annual_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "daily_load_curve"
     ]
   },
   "com_2025_amy2018_1": {
@@ -473,6 +549,11 @@
       "57"
     ],
     "available_data": [
+      "monthly_load_curve",
+      "annual_load_curve",
+      "daily_load_curve",
+      "15min_load_curve",
+      "hourly_load_curve",
       "metadata"
     ]
   }

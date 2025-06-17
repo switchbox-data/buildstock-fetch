@@ -173,13 +173,44 @@ def _find_and_process_model_file(s3_client, bucket_name: str, prefix: str) -> se
     return available_data
 
 
+def _process_directory_match(
+    s3_client, bucket_name: str, current_prefix: str, expected: str, found_dirs: set[str]
+) -> None:
+    """Process a matched directory and update found_dirs accordingly."""
+    if expected == "building_energy_model":
+        available_data = _find_and_process_model_file(s3_client, bucket_name, current_prefix)
+        found_dirs.update(available_data - {"building_energy_model"})
+    elif expected == "timeseries_individual_buildings":
+        found_dirs.add("15min_load_curve")
+        found_dirs.add("hourly_load_curve")
+        found_dirs.add("daily_load_curve")
+        found_dirs.add("monthly_load_curve")
+        found_dirs.add("annual_load_curve")
+
+
+def _check_directory_matches(
+    s3_client,
+    bucket_name: str,
+    current_prefix: str,
+    prefix: CommonPrefix,
+    expected_dirs: list[str],
+    found_dirs: set[str],
+) -> None:
+    """Check if a directory matches any expected directories and process it."""
+    dir_name = prefix["Prefix"].rstrip("/").split("/")[-1]
+    for expected in expected_dirs:
+        if expected in dir_name and expected not in found_dirs:
+            found_dirs.add(expected)
+            _process_directory_match(s3_client, bucket_name, current_prefix, expected, found_dirs)
+
+
 def _find_available_data(s3_client, bucket_name: str, prefix: str) -> list[str]:
     """
-    Find the available data directories (building_energy_model, metadata).
+    Find the available data directories (building_energy_model, metadata, timeseries_individual_buildings).
     Returns a list of directories that exist, searching up to depth 3.
     """
     found_dirs = set()
-    expected_dirs = ["building_energy_model", "metadata"]
+    expected_dirs = ["building_energy_model", "metadata", "timeseries_individual_buildings"]
     paginator = s3_client.get_paginator("list_objects_v2")
 
     # Queue for BFS: (prefix, depth)
@@ -197,22 +228,17 @@ def _find_available_data(s3_client, bucket_name: str, prefix: str) -> list[str]:
         for page in pages:
             if "CommonPrefixes" in page:
                 # First check current level for matches
-                for prefix in page["CommonPrefixes"]:
-                    dir_name = str(prefix["Prefix"]).rstrip("/").split("/")[-1]  # type: ignore[attr-defined]
-                    for expected in expected_dirs:
-                        if expected in dir_name and expected not in found_dirs:
-                            found_dirs.add(expected)
-                            # If we found building_energy_model, process it
-                            if expected == "building_energy_model":
-                                available_data = _find_and_process_model_file(s3_client, bucket_name, current_prefix)
-                                # Add available data types but exclude building_energy_model
-                                found_dirs.update(available_data - {"building_energy_model"})
+                for prefix_obj in page["CommonPrefixes"]:
+                    _check_directory_matches(
+                        s3_client, bucket_name, current_prefix, prefix_obj, expected_dirs, found_dirs
+                    )
 
                 # Then add subdirectories to queue for next level
-                for prefix in page["CommonPrefixes"]:
-                    queue.append((str(prefix["Prefix"]), depth + 1))  # type: ignore[attr-defined]
+                for prefix_obj in page["CommonPrefixes"]:
+                    queue.append((str(prefix_obj["Prefix"]), depth + 1))
 
     found_dirs.discard("building_energy_model")
+    found_dirs.discard("timeseries_individual_buildings")
     return list(found_dirs)
 
 
