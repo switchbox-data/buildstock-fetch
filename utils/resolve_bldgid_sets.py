@@ -1,6 +1,9 @@
 import json
+import os
 import re
+import tempfile
 import time
+import zipfile
 from pathlib import Path
 from typing import TypedDict
 
@@ -15,6 +18,11 @@ class BuildStockRelease(TypedDict):
     weather: str
     release_number: str
     upgrade_ids: list[str]
+    available_data: list[str]
+
+
+class CommonPrefix(TypedDict):
+    Prefix: str
 
 
 def _find_model_directory(s3_client, bucket_name: str, prefix: str) -> str:
@@ -78,6 +86,82 @@ def _get_upgrade_ids(s3_client, bucket_name: str, model_path: str) -> list[str]:
     return sorted(upgrade_ids, key=int)  # Sort numerically
 
 
+def _process_zip_file(s3_client, bucket_name: str, key: str, zip_files_found: int, unique_files: set[str]) -> int:
+    """Process a single zip file and return updated count of files found."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        local_path = os.path.join(temp_dir, os.path.basename(key))
+        print(f"\nDownloading {key}...")
+        s3_client.download_file(bucket_name, key, local_path)
+        print(f"Files in zip archive {zip_files_found + 1}:")
+        with zipfile.ZipFile(local_path, "r") as zip_ref:
+            for file_name in zip_ref.namelist():
+                print(f"- {file_name}")
+                unique_files.add(file_name)
+    return zip_files_found + 1
+
+
+def _check_directory_contents(
+    s3_client, bucket_name: str, current_prefix: str, zip_files_found: int, unique_files: set[str]
+) -> tuple[int, bool]:
+    """Check directory contents for zip files and process them."""
+    response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=current_prefix)
+    if "Contents" not in response:
+        return zip_files_found, False
+
+    for obj in response["Contents"]:
+        key = obj["Key"]  # type: ignore[attr-defined]
+        if key.endswith(".osm.gz"):
+            print(f"Skipping release - found .osm.gz file: {key}")
+            return zip_files_found, True
+        if key.endswith(".zip") and zip_files_found < 5:
+            zip_files_found = _process_zip_file(s3_client, bucket_name, key, zip_files_found, unique_files)
+            if zip_files_found == 5:
+                print("\nUnique files found across all zip archives:")
+                for file_name in sorted(unique_files):
+                    print(f"- {file_name}")
+                return zip_files_found, True
+
+    return zip_files_found, False
+
+
+def _find_and_process_model_file(s3_client, bucket_name: str, prefix: str) -> None:
+    """
+    Breadth-first search for the first 5 .zip files in building_energy_model directories.
+    Collects unique filenames from all zip files found.
+    """
+    paginator = s3_client.get_paginator("list_objects_v2")
+    queue = [(prefix, 0)]  # (prefix, depth)
+    visited = set()
+    zip_files_found = 0
+    unique_files: set[str] = set()
+
+    while queue and zip_files_found < 5:
+        current_prefix, depth = queue.pop(0)
+        if current_prefix in visited:
+            continue
+
+        visited.add(current_prefix)
+
+        # Check current directory contents
+        zip_files_found, should_return = _check_directory_contents(
+            s3_client, bucket_name, current_prefix, zip_files_found, unique_files
+        )
+        if should_return:
+            return
+
+        # Check subdirectories
+        pages = paginator.paginate(Bucket=bucket_name, Prefix=current_prefix, Delimiter="/")
+        for page in pages:
+            if "CommonPrefixes" in page:
+                for prefix_obj in page["CommonPrefixes"]:
+                    dir_path = prefix_obj["Prefix"]  # type: ignore[attr-defined]
+                    dir_name = dir_path.rstrip("/").split("/")[-1]
+
+                    # Only queue directories that might contain building_energy_model
+                    if "building_energy_model" in dir_name.lower() or depth == 0:
+                        queue.append((dir_path, depth + 1))
+
+
 def _find_available_data(s3_client, bucket_name: str, prefix: str) -> list[str]:
     """
     Find the available data directories (building_energy_model, metadata).
@@ -103,16 +187,17 @@ def _find_available_data(s3_client, bucket_name: str, prefix: str) -> list[str]:
             if "CommonPrefixes" in page:
                 # First check current level for matches
                 for prefix in page["CommonPrefixes"]:
-                    dir_name = prefix["Prefix"].rstrip("/").split("/")[-1]
+                    dir_name = str(prefix["Prefix"]).rstrip("/").split("/")[-1]  # type: ignore[attr-defined]
                     for expected in expected_dirs:
                         if expected in dir_name and expected not in found_dirs:
                             found_dirs.add(expected)
-                            if len(found_dirs) == len(expected_dirs):
-                                return list(found_dirs)
+                            # If we found building_energy_model, process it
+                            if expected == "building_energy_model":
+                                _find_and_process_model_file(s3_client, bucket_name, current_prefix)
 
                 # Then add subdirectories to queue for next level
                 for prefix in page["CommonPrefixes"]:
-                    queue.append((prefix["Prefix"], depth + 1))
+                    queue.append((str(prefix["Prefix"]), depth + 1))  # type: ignore[attr-defined]
 
     return list(found_dirs)
 
@@ -176,7 +261,7 @@ def _process_release(
     }
     # Create key following the pattern: {res/com}_{release_year}_{weather}_{release_number}
     key = f"{res_com_type}_{release_year}_{weather}_{release_number}"
-    releases[key] = release_data
+    releases[key] = BuildStockRelease(**release_data)  # Cast to BuildStockRelease type
 
 
 def resolve_bldgid_sets(
