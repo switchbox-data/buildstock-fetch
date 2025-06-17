@@ -6,14 +6,6 @@
     "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bullseye",
 
     "features": {
-        // Install Quarto CLI
-        "ghcr.io/rocker-org/devcontainer-features/quarto-cli:1": {
-            "installChromium": true
-        },
-        // Install Chromium to render mermaid and graphviz diagrams
-        "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
-            "packages": "chromium"
-        },
         // Install just
         "ghcr.io/guiyomh/features/just:0.1.0": {
             "version": "1.40.0"
@@ -24,17 +16,11 @@
     // This is used to install post-commit hooks, uv, virtualenv, and dependencies.
     "postCreateCommand": "./.devcontainer/postCreateCommand.sh",
 
-    // Tell quarto to use Python interpreter in the uv virtual environment.
-    "containerEnv": {
-        "QUARTO_PYTHON": "/workspaces/rate-design-platform/.venv/bin/python"
-    },
-
     "customizations": {
         "vscode": {
             // Install VS Code extensions.
             "extensions": [
                 "ms-python.python",
-                "quarto.quarto",
                 "nefrob.vscode-just-syntax",
                 "tamasfe.even-better-toml"
             ],
@@ -43,8 +29,8 @@
                 "python.testing.pytestArgs": ["tests"],
                 "python.testing.unittestEnabled": false,
                 "python.testing.pytestEnabled": true,
-                "python.defaultInterpreterPath": "/workspaces/rate-design-platform/.venv/bin/python",
-                "python.testing.pytestPath": "/workspaces/rate-design-platform/.venv/bin/pytest"
+                "python.defaultInterpreterPath": "/workspaces/buildstock-fetch/.venv/bin/python",
+                "python.testing.pytestPath": "/workspaces/buildstock-fetch/.venv/bin/pytest"
             }
         }
     }
