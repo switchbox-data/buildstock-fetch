@@ -8,8 +8,7 @@
       "0"
     ],
     "available_data": [
-      "metadata",
-      "building_energy_model"
+      "metadata"
     ]
   },
   "com_2021_tmy3_1": {
@@ -21,8 +20,7 @@
       "0"
     ],
     "available_data": [
-      "metadata",
-      "building_energy_model"
+      "metadata"
     ]
   },
   "res_2021_amy2018_1": {
@@ -34,8 +32,7 @@
       "0"
     ],
     "available_data": [
-      "metadata",
-      "building_energy_model"
+      "metadata"
     ]
   },
   "res_2021_tmy3_1": {
@@ -47,8 +44,7 @@
       "0"
     ],
     "available_data": [
-      "metadata",
-      "building_energy_model"
+      "metadata"
     ]
   },
   "res_2022_amy2012_1.1": {
@@ -70,8 +66,9 @@
       "10"
     ],
     "available_data": [
+      "HPXML",
       "metadata",
-      "building_energy_model"
+      "schedule"
     ]
   },
   "res_2022_amy2012_1": {
@@ -93,8 +90,9 @@
       "10"
     ],
     "available_data": [
+      "HPXML",
       "metadata",
-      "building_energy_model"
+      "schedule"
     ]
   },
   "res_2022_amy2018_1.1": {
@@ -116,8 +114,9 @@
       "10"
     ],
     "available_data": [
+      "HPXML",
       "metadata",
-      "building_energy_model"
+      "schedule"
     ]
   },
   "res_2022_amy2018_1": {
@@ -139,8 +138,9 @@
       "10"
     ],
     "available_data": [
+      "HPXML",
       "metadata",
-      "building_energy_model"
+      "schedule"
     ]
   },
   "res_2022_tmy3_1.1": {
@@ -162,8 +162,9 @@
       "10"
     ],
     "available_data": [
+      "HPXML",
       "metadata",
-      "building_energy_model"
+      "schedule"
     ]
   },
   "res_2022_tmy3_1": {
@@ -185,8 +186,9 @@
       "10"
     ],
     "available_data": [
+      "HPXML",
       "metadata",
-      "building_energy_model"
+      "schedule"
     ]
   },
   "com_2023_amy2018_1": {
@@ -208,8 +210,7 @@
       "10"
     ],
     "available_data": [
-      "metadata",
-      "building_energy_model"
+      "metadata"
     ]
   },
   "com_2023_amy2018_2": {
@@ -239,8 +240,7 @@
       "18"
     ],
     "available_data": [
-      "metadata",
-      "building_energy_model"
+      "metadata"
     ]
   },
   "com_2024_amy2018_1": {
@@ -283,8 +283,7 @@
       "32"
     ],
     "available_data": [
-      "metadata",
-      "building_energy_model"
+      "metadata"
     ]
   },
   "com_2024_amy2018_2": {
@@ -335,8 +334,7 @@
       "39"
     ],
     "available_data": [
-      "metadata",
-      "building_energy_model"
+      "metadata"
     ]
   },
   "res_2024_amy2018_2": {
@@ -364,8 +362,9 @@
       "16"
     ],
     "available_data": [
+      "HPXML",
       "metadata",
-      "building_energy_model"
+      "schedule"
     ]
   },
   "res_2024_tmy3_1": {
@@ -403,8 +402,9 @@
       "16"
     ],
     "available_data": [
+      "HPXML",
       "metadata",
-      "building_energy_model"
+      "schedule"
     ]
   },
   "com_2025_amy2018_1": {
@@ -473,8 +473,7 @@
       "57"
     ],
     "available_data": [
-      "metadata",
-      "building_energy_model"
+      "metadata"
     ]
   }
 }

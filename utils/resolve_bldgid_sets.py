@@ -86,54 +86,62 @@ def _get_upgrade_ids(s3_client, bucket_name: str, model_path: str) -> list[str]:
     return sorted(upgrade_ids, key=int)  # Sort numerically
 
 
-def _process_zip_file(s3_client, bucket_name: str, key: str, zip_files_found: int, unique_files: set[str]) -> int:
-    """Process a single zip file and return updated count of files found."""
+def _process_zip_file(
+    s3_client, bucket_name: str, key: str, zip_files_found: int, unique_files: set[str]
+) -> tuple[int, set[str]]:
+    """Process a single zip file and return updated count of files found and available data types."""
+    available_data = set()
     with tempfile.TemporaryDirectory() as temp_dir:
         local_path = os.path.join(temp_dir, os.path.basename(key))
-        print(f"\nDownloading {key}...")
         s3_client.download_file(bucket_name, key, local_path)
-        print(f"Files in zip archive {zip_files_found + 1}:")
         with zipfile.ZipFile(local_path, "r") as zip_ref:
             for file_name in zip_ref.namelist():
-                print(f"- {file_name}")
                 unique_files.add(file_name)
-    return zip_files_found + 1
+                # Check for XML files
+                if file_name.lower().endswith(".xml"):
+                    available_data.add("HPXML")
+                # Check for schedule CSV files
+                if file_name.lower().endswith(".csv") and "schedule" in file_name.lower():
+                    available_data.add("schedule")
+    return zip_files_found + 1, available_data
 
 
 def _check_directory_contents(
     s3_client, bucket_name: str, current_prefix: str, zip_files_found: int, unique_files: set[str]
-) -> tuple[int, bool]:
+) -> tuple[int, bool, set[str]]:
     """Check directory contents for zip files and process them."""
     response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=current_prefix)
     if "Contents" not in response:
-        return zip_files_found, False
+        return zip_files_found, False, set()
 
+    available_data = set()
     for obj in response["Contents"]:
         key = obj["Key"]  # type: ignore[attr-defined]
         if key.endswith(".osm.gz"):
-            print(f"Skipping release - found .osm.gz file: {key}")
-            return zip_files_found, True
+            return zip_files_found, True, set()
         if key.endswith(".zip") and zip_files_found < 5:
-            zip_files_found = _process_zip_file(s3_client, bucket_name, key, zip_files_found, unique_files)
+            zip_files_found, zip_available_data = _process_zip_file(
+                s3_client, bucket_name, key, zip_files_found, unique_files
+            )
+            available_data.update(zip_available_data)
             if zip_files_found == 5:
-                print("\nUnique files found across all zip archives:")
-                for file_name in sorted(unique_files):
-                    print(f"- {file_name}")
-                return zip_files_found, True
+                return zip_files_found, True, available_data
 
-    return zip_files_found, False
+    return zip_files_found, False, available_data
 
 
-def _find_and_process_model_file(s3_client, bucket_name: str, prefix: str) -> None:
+def _find_and_process_model_file(s3_client, bucket_name: str, prefix: str) -> set[str]:
     """
     Breadth-first search for the first 5 .zip files in building_energy_model directories.
     Collects unique filenames from all zip files found.
+    Returns set of available data types found.
     """
     paginator = s3_client.get_paginator("list_objects_v2")
     queue = [(prefix, 0)]  # (prefix, depth)
     visited = set()
     zip_files_found = 0
     unique_files: set[str] = set()
+    available_data: set[str] = set()
 
     while queue and zip_files_found < 5:
         current_prefix, depth = queue.pop(0)
@@ -143,11 +151,12 @@ def _find_and_process_model_file(s3_client, bucket_name: str, prefix: str) -> No
         visited.add(current_prefix)
 
         # Check current directory contents
-        zip_files_found, should_return = _check_directory_contents(
+        zip_files_found, should_return, dir_available_data = _check_directory_contents(
             s3_client, bucket_name, current_prefix, zip_files_found, unique_files
         )
+        available_data.update(dir_available_data)
         if should_return:
-            return
+            return available_data
 
         # Check subdirectories
         pages = paginator.paginate(Bucket=bucket_name, Prefix=current_prefix, Delimiter="/")
@@ -160,6 +169,8 @@ def _find_and_process_model_file(s3_client, bucket_name: str, prefix: str) -> No
                     # Only queue directories that might contain building_energy_model
                     if "building_energy_model" in dir_name.lower() or depth == 0:
                         queue.append((dir_path, depth + 1))
+
+    return available_data
 
 
 def _find_available_data(s3_client, bucket_name: str, prefix: str) -> list[str]:
@@ -193,12 +204,15 @@ def _find_available_data(s3_client, bucket_name: str, prefix: str) -> list[str]:
                             found_dirs.add(expected)
                             # If we found building_energy_model, process it
                             if expected == "building_energy_model":
-                                _find_and_process_model_file(s3_client, bucket_name, current_prefix)
+                                available_data = _find_and_process_model_file(s3_client, bucket_name, current_prefix)
+                                # Add available data types but exclude building_energy_model
+                                found_dirs.update(available_data - {"building_energy_model"})
 
                 # Then add subdirectories to queue for next level
                 for prefix in page["CommonPrefixes"]:
                     queue.append((str(prefix["Prefix"]), depth + 1))  # type: ignore[attr-defined]
 
+    found_dirs.discard("building_energy_model")
     return list(found_dirs)
 
 
