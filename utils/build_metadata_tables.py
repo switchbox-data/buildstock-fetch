@@ -74,10 +74,7 @@ def rename_columns(df: pd.DataFrame) -> pd.DataFrame:
         elif col in COUNTY_COLUMNS_TO_KEEP:
             column_mapping[col] = "county"
         elif col in BUILDING_COLUMNS_TO_KEEP:
-            if col == "bldg_id":
-                column_mapping[col] = "bldg_id"
-            elif col == "upgrade":
-                column_mapping[col] = "upgrade"
+            column_mapping[col] = "bldg_id"
 
     return df.rename(columns=column_mapping)
 
@@ -88,7 +85,8 @@ def process_parquet_file(
     bucket_name: str,
     res_com: str | None = None,
     weather: str | None = None,
-    release_number: str | None = None,
+    release_version: str | None = None,
+    release_year: str | None = None,
 ) -> pd.DataFrame | None:
     """
     Process a parquet file from S3 and return a pandas DataFrame.
@@ -99,7 +97,8 @@ def process_parquet_file(
         bucket_name (str): Name of the S3 bucket
         res_com (str): The res_com value (resstock or comstock)
         weather (str): The weather value (tmy3, amy2012, or amy2018)
-        release_number (str): The release number
+        release_version (str): The release number
+        release_year (str): The release year
 
     Returns:
         pd.DataFrame: Processed DataFrame
@@ -129,8 +128,10 @@ def process_parquet_file(
             df["product"] = res_com
         if weather is not None:
             df["weather_file"] = weather
-        if release_number is not None:
-            df["release_number"] = release_number
+        if release_version is not None:
+            df["release_version"] = release_version
+        if release_year is not None:
+            df["release_year"] = release_year
 
         print(f"Successfully loaded {len(df)} rows with {len(df.columns)} columns")
 
@@ -236,6 +237,9 @@ if __name__ == "__main__":
     downloaded_paths = []
     os.makedirs(data_dir, exist_ok=True)
 
+    # List to collect all DataFrames
+    all_dataframes = []
+
     # S3 bucket and filesystem
     bucket_name = "oedi-data-lake"
     s3 = fs.S3FileSystem(anonymous=True, region="us-west-2")
@@ -245,19 +249,17 @@ if __name__ == "__main__":
         release_year = release["release_year"]
         res_com = release["res_com"]
         weather = release["weather"]
-        release_number = release["release_number"]
+        release_version = release["release_number"]
         upgrade_ids = release.get("upgrade_ids", [])
 
         if release_year == "2021":
             file_key = (
                 f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                f"{release_year}/{res_com}_{weather}_release_{release_number}/metadata/metadata.parquet"
+                f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/metadata.parquet"
             )
-            df = process_parquet_file(file_key, s3, bucket_name, res_com, weather, release_number)
+            df = process_parquet_file(file_key, s3, bucket_name, res_com, weather, release_version, release_year)
             if df is not None:
-                feather_filename = f"{data_dir}/{release_name}_baseline.feather"
-                df.to_feather(feather_filename, compression="zstd")
-                print(f"Successfully saved DataFrame to {feather_filename}")
+                all_dataframes.append(df)
 
         elif (
             release_year == "2022"
@@ -270,25 +272,23 @@ if __name__ == "__main__":
                 if upgrade_id == 0:
                     file_key = (
                         f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                        f"{release_year}/{res_com}_{weather}_release_{release_number}/metadata/baseline.parquet"
+                        f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/baseline.parquet"
                     )
                 else:
                     file_key = (
                         f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                        f"{release_year}/{res_com}_{weather}_release_{release_number}/metadata/"
+                        f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/"
                         f"upgrade{upgrade_id:02d}.parquet"
                     )
 
-                df = process_parquet_file(file_key, s3, bucket_name, res_com, weather, release_number)
+                df = process_parquet_file(file_key, s3, bucket_name, res_com, weather, release_version, release_year)
                 if df is not None:
-                    feather_filename = f"{data_dir}/{release_name}_upgrade{upgrade_id:02d}.feather"
-                    df.to_feather(feather_filename, compression="zstd")
-                    print(f"Successfully saved DataFrame to {feather_filename}")
+                    all_dataframes.append(df)
 
         elif release_year == "2024" and release_name == "com_2024_amy2018_2":
             base_file_key = (
                 f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                f"{release_year}/{res_com}_{weather}_release_{release_number}/"
+                f"{release_year}/{res_com}_{weather}_release_{release_version}/"
                 f"metadata_and_annual_results/by_state_and_county/full/parquet/"
             )
 
@@ -309,26 +309,45 @@ if __name__ == "__main__":
                 print(f"Found {len(available_files)} {file_key_suffix} files:")
 
                 if available_files:
-                    # Combine all parquet files for this upgrade (limit to 5 files)
+                    # Combine all parquet files for this upgrade
                     combined_dfs = []
-                    files_to_process = available_files[:5]  # Limit to first 5 files
+                    files_to_process = available_files  # Process all available files
 
                     for i, file_key in enumerate(files_to_process, 1):
                         print(f"Processing file {i} out of {len(files_to_process)}")
-                        df = process_parquet_file(file_key, s3, bucket_name, res_com, weather, release_number)
+                        df = process_parquet_file(
+                            file_key, s3, bucket_name, res_com, weather, release_version, release_year
+                        )
                         if df is not None:
                             combined_dfs.append(df)
 
                     if combined_dfs:
-                        # Concatenate all DataFrames
+                        # Concatenate all DataFrames for this release
                         combined_df = pd.concat(combined_dfs, ignore_index=True)
                         print(f"Combined {len(combined_dfs)} files into {len(combined_df)} total rows")
-
-                        # Save to CSV file
-                        csv_filename = f"{data_dir}/{release_name}_upgrade{upgrade_id:02d}.csv"
-                        combined_df.to_csv(csv_filename, index=False)
-                        print(f"Successfully saved combined DataFrame to {csv_filename}")
+                        all_dataframes.append(combined_df)
                     else:
                         print(f"No valid data found for {file_key_suffix}")
                 else:
                     print(f"No files found for {file_key_suffix}")
+
+    # Combine all DataFrames and save as partitioned parquet
+    if all_dataframes:
+        print(f"Combining {len(all_dataframes)} DataFrames...")
+        final_df = pd.concat(all_dataframes, ignore_index=True)
+        print(f"Final DataFrame has {len(final_df)} rows and {len(final_df.columns)} columns")
+
+        # Sort by county
+        if "county" in final_df.columns:
+            final_df = final_df.sort_values("county")
+
+        # Save as partitioned parquet file
+        output_file = f"{data_dir}/building_data/combined_metadata.parquet"
+        final_df.to_parquet(
+            output_file,
+            partition_cols=["product", "release_year", "weather_file", "release_version", "state"],
+            index=False,
+        )
+        print(f"Successfully saved combined DataFrame to {output_file}")
+    else:
+        print("No data to save")

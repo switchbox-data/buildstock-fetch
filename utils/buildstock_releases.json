@@ -1,4 +1,308 @@
 {
+  "com_2021_amy2018_1": {
+    "release_year": "2021",
+    "res_com": "comstock",
+    "weather": "amy2018",
+    "release_number": "1",
+    "upgrade_ids": [
+      "0"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
+    ]
+  },
+  "com_2021_tmy3_1": {
+    "release_year": "2021",
+    "res_com": "comstock",
+    "weather": "tmy3",
+    "release_number": "1",
+    "upgrade_ids": [
+      "0"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
+    ]
+  },
+  "res_2021_amy2018_1": {
+    "release_year": "2021",
+    "res_com": "resstock",
+    "weather": "amy2018",
+    "release_number": "1",
+    "upgrade_ids": [
+      "0"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
+    ]
+  },
+  "res_2021_tmy3_1": {
+    "release_year": "2021",
+    "res_com": "resstock",
+    "weather": "tmy3",
+    "release_number": "1",
+    "upgrade_ids": [
+      "0"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
+    ]
+  },
+  "res_2022_amy2012_1.1": {
+    "release_year": "2022",
+    "res_com": "resstock",
+    "weather": "amy2012",
+    "release_number": "1.1",
+    "upgrade_ids": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "HPXML",
+      "schedule",
+      "annual_load_curve"
+    ]
+  },
+  "res_2022_amy2012_1": {
+    "release_year": "2022",
+    "res_com": "resstock",
+    "weather": "amy2012",
+    "release_number": "1",
+    "upgrade_ids": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "HPXML",
+      "schedule",
+      "annual_load_curve"
+    ]
+  },
+  "res_2022_amy2018_1.1": {
+    "release_year": "2022",
+    "res_com": "resstock",
+    "weather": "amy2018",
+    "release_number": "1.1",
+    "upgrade_ids": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "HPXML",
+      "schedule",
+      "annual_load_curve"
+    ]
+  },
+  "res_2022_amy2018_1": {
+    "release_year": "2022",
+    "res_com": "resstock",
+    "weather": "amy2018",
+    "release_number": "1",
+    "upgrade_ids": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "HPXML",
+      "schedule",
+      "annual_load_curve"
+    ]
+  },
+  "res_2022_tmy3_1.1": {
+    "release_year": "2022",
+    "res_com": "resstock",
+    "weather": "tmy3",
+    "release_number": "1.1",
+    "upgrade_ids": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "HPXML",
+      "schedule",
+      "annual_load_curve"
+    ]
+  },
+  "res_2022_tmy3_1": {
+    "release_year": "2022",
+    "res_com": "resstock",
+    "weather": "tmy3",
+    "release_number": "1",
+    "upgrade_ids": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "HPXML",
+      "schedule",
+      "annual_load_curve"
+    ]
+  },
+  "com_2023_amy2018_1": {
+    "release_year": "2023",
+    "res_com": "comstock",
+    "weather": "amy2018",
+    "release_number": "1",
+    "upgrade_ids": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
+    ]
+  },
+  "com_2023_amy2018_2": {
+    "release_year": "2023",
+    "res_com": "comstock",
+    "weather": "amy2018",
+    "release_number": "2",
+    "upgrade_ids": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "18"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
+    ]
+  },
   "com_2024_amy2018_1": {
     "release_year": "2024",
     "res_com": "comstock",
@@ -37,6 +341,14 @@
       "30",
       "31",
       "32"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
     ]
   },
   "com_2024_amy2018_2": {
@@ -85,6 +397,14 @@
       "37",
       "38",
       "39"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
     ]
   },
   "res_2024_amy2018_2": {
@@ -110,6 +430,24 @@
       "14",
       "15",
       "16"
+    ],
+    "available_data": [
+      "15min_load_curve",
+      "metadata",
+      "monthly_load_curve",
+      "hourly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
+    ]
+  },
+  "res_2024_tmy3_1": {
+    "release_year": "2024",
+    "res_com": "resstock",
+    "weather": "tmy3",
+    "release_number": "1",
+    "upgrade_ids": [],
+    "available_data": [
+      "metadata"
     ]
   },
   "res_2024_tmy3_2": {
@@ -135,6 +473,14 @@
       "14",
       "15",
       "16"
+    ],
+    "available_data": [
+      "15min_load_curve",
+      "metadata",
+      "monthly_load_curve",
+      "hourly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
     ]
   },
   "com_2025_amy2018_1": {
@@ -201,6 +547,14 @@
       "55",
       "56",
       "57"
+    ],
+    "available_data": [
+      "metadata",
+      "15min_load_curve",
+      "hourly_load_curve",
+      "monthly_load_curve",
+      "daily_load_curve",
+      "annual_load_curve"
     ]
   }
 }
