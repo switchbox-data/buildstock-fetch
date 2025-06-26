@@ -9,18 +9,97 @@ import pyarrow.parquet as pq
 from botocore import UNSIGNED
 from botocore.config import Config
 
+# Global column definitions - organized by category with priority
+PUMA_COLUMNS_TO_KEEP = [
+    "in.puma",
+    "in.nhgis_puma_gisjoin",
+    "in.resstock_puma_id",
+]
+
+STATE_COLUMNS_TO_KEEP = [
+    "in.state",
+    "in.state_name",
+]
+
+COUNTY_COLUMNS_TO_KEEP = [
+    "in.resstock_county_id",
+    "in.nhgis_county_gisjoin",
+    "in.county_name",
+    "in.county",
+]
+
+BUILDING_COLUMNS_TO_KEEP = [
+    "bldg_id",
+]
+
+
+def select_priority_columns(available_columns: list) -> list:
+    """
+    Select one column from each category based on priority (first available).
+
+    Args:
+        available_columns (list): List of available columns in the parquet file
+
+    Returns:
+        list: Selected columns with one from each category
+    """
+    selected_columns = []
+
+    # Select one column from each category
+    for col_list in [PUMA_COLUMNS_TO_KEEP, STATE_COLUMNS_TO_KEEP, COUNTY_COLUMNS_TO_KEEP, BUILDING_COLUMNS_TO_KEEP]:
+        for col in col_list:
+            if col in available_columns:
+                selected_columns.append(col)
+                break  # Only take the first available column from this category
+
+    return selected_columns
+
+
+def rename_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rename columns to standardized names based on their category.
+
+    Args:
+        df (pd.DataFrame): DataFrame with columns to rename
+
+    Returns:
+        pd.DataFrame: DataFrame with renamed columns
+    """
+    column_mapping = {}
+    for col in df.columns:
+        if col in PUMA_COLUMNS_TO_KEEP:
+            column_mapping[col] = "puma"
+        elif col in STATE_COLUMNS_TO_KEEP:
+            column_mapping[col] = "state"
+        elif col in COUNTY_COLUMNS_TO_KEEP:
+            column_mapping[col] = "county"
+        elif col in BUILDING_COLUMNS_TO_KEEP:
+            if col == "bldg_id":
+                column_mapping[col] = "bldg_id"
+            elif col == "upgrade":
+                column_mapping[col] = "upgrade"
+
+    return df.rename(columns=column_mapping)
+
 
 def process_parquet_file(
-    file_key: str, columns_to_keep: list, s3: fs.S3FileSystem, bucket_name: str
+    file_key: str,
+    s3: fs.S3FileSystem,
+    bucket_name: str,
+    res_com: str | None = None,
+    weather: str | None = None,
+    release_number: str | None = None,
 ) -> pd.DataFrame | None:
     """
     Process a parquet file from S3 and return a pandas DataFrame.
 
     Args:
         file_key (str): The S3 key of the parquet file
-        columns_to_keep (list): List of column names to keep
         s3 (fs.S3FileSystem): S3 filesystem instance
         bucket_name (str): Name of the S3 bucket
+        res_com (str): The res_com value (resstock or comstock)
+        weather (str): The weather value (tmy3, amy2012, or amy2018)
+        release_number (str): The release number
 
     Returns:
         pd.DataFrame: Processed DataFrame
@@ -29,18 +108,30 @@ def process_parquet_file(
         # Check available columns
         parquet_file = pq.ParquetFile(f"{bucket_name}/{file_key}", filesystem=s3)
         available_columns = parquet_file.schema_arrow.names
-        existing_columns = [col for col in columns_to_keep if col in available_columns]
-        missing_columns = [col for col in columns_to_keep if col not in available_columns]
 
-        # Report missing columns
-        if missing_columns:
-            print(f"Warning: These columns don't exist and will be skipped: {missing_columns}")
+        # Select columns with priority (first available in each category)
+        selected_columns = select_priority_columns(available_columns)
 
-        # Read with existing columns (will read all if existing_columns is empty)
-        table = pq.read_table(f"{bucket_name}/{file_key}", columns=existing_columns or None, filesystem=s3)
+        # Report which columns were selected
+        print(f"Selected columns: {selected_columns}")
+
+        # Read with selected columns (will read all if selected_columns is empty)
+        table = pq.read_table(f"{bucket_name}/{file_key}", columns=selected_columns or None, filesystem=s3)
 
         # Convert to DataFrame
         df = table.to_pandas()
+
+        # Rename columns to standardized names
+        df = rename_columns(df)
+
+        # Add new columns
+        if res_com is not None:
+            df["product"] = res_com
+        if weather is not None:
+            df["weather_file"] = weather
+        if release_number is not None:
+            df["release_number"] = release_number
+
         print(f"Successfully loaded {len(df)} rows with {len(df.columns)} columns")
 
     except Exception as e:
@@ -145,19 +236,6 @@ if __name__ == "__main__":
     downloaded_paths = []
     os.makedirs(data_dir, exist_ok=True)
 
-    # Columns to keep from the metadata table
-    columns_to_keep = [
-        "in.puma",
-        "in.nhgis_puma_gisjoin",
-        "in.resstock_puma_id",
-        "in.state",
-        "in.state_name",
-        "in.resstock_county_id",
-        "in.county",
-        "bldg_id",
-        "upgrade",
-    ]
-
     # S3 bucket and filesystem
     bucket_name = "oedi-data-lake"
     s3 = fs.S3FileSystem(anonymous=True, region="us-west-2")
@@ -175,7 +253,7 @@ if __name__ == "__main__":
                 f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
                 f"{release_year}/{res_com}_{weather}_release_{release_number}/metadata/metadata.parquet"
             )
-            df = process_parquet_file(file_key, columns_to_keep, s3, bucket_name)
+            df = process_parquet_file(file_key, s3, bucket_name, res_com, weather, release_number)
             if df is not None:
                 feather_filename = f"{data_dir}/{release_name}_baseline.feather"
                 df.to_feather(feather_filename, compression="zstd")
@@ -186,8 +264,9 @@ if __name__ == "__main__":
             or release_year == "2023"
             or (release_year == "2024" and release_name != "com_2024_amy2018_2")
         ):
-            for upgrade_id in upgrade_ids:
-                upgrade_id = int(upgrade_id)
+            # Process only the first upgrade_id
+            if upgrade_ids:
+                upgrade_id = int(upgrade_ids[0])
                 if upgrade_id == 0:
                     file_key = (
                         f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
@@ -200,12 +279,11 @@ if __name__ == "__main__":
                         f"upgrade{upgrade_id:02d}.parquet"
                     )
 
-                df = process_parquet_file(file_key, columns_to_keep, s3, bucket_name)
+                df = process_parquet_file(file_key, s3, bucket_name, res_com, weather, release_number)
                 if df is not None:
                     feather_filename = f"{data_dir}/{release_name}_upgrade{upgrade_id:02d}.feather"
                     df.to_feather(feather_filename, compression="zstd")
                     print(f"Successfully saved DataFrame to {feather_filename}")
-                    break
 
         elif release_year == "2024" and release_name == "com_2024_amy2018_2":
             base_file_key = (
@@ -218,8 +296,9 @@ if __name__ == "__main__":
             all_parquet_files = find_all_2024_comstock_amy2018_2_parquet(base_file_key, s3_client, bucket_name)
             print(f"Found parquet files: {list(all_parquet_files.keys())}")
 
-            for upgrade_id in upgrade_ids:
-                upgrade_id = int(upgrade_id)
+            # Process only the first upgrade_id
+            if upgrade_ids:
+                upgrade_id = int(upgrade_ids[0])
                 if upgrade_id == 0:
                     file_key_suffix = "baseline.parquet"
                     available_files = all_parquet_files.get("baseline", [])
@@ -230,10 +309,13 @@ if __name__ == "__main__":
                 print(f"Found {len(available_files)} {file_key_suffix} files:")
 
                 if available_files:
-                    # Combine all parquet files for this upgrade
+                    # Combine all parquet files for this upgrade (limit to 5 files)
                     combined_dfs = []
-                    for file_key in available_files:
-                        df = process_parquet_file(file_key, columns_to_keep, s3, bucket_name)
+                    files_to_process = available_files[:5]  # Limit to first 5 files
+
+                    for i, file_key in enumerate(files_to_process, 1):
+                        print(f"Processing file {i} out of {len(files_to_process)}")
+                        df = process_parquet_file(file_key, s3, bucket_name, res_com, weather, release_number)
                         if df is not None:
                             combined_dfs.append(df)
 
@@ -242,10 +324,10 @@ if __name__ == "__main__":
                         combined_df = pd.concat(combined_dfs, ignore_index=True)
                         print(f"Combined {len(combined_dfs)} files into {len(combined_df)} total rows")
 
-                        # Save to feather file
-                        feather_filename = f"{data_dir}/{release_name}_upgrade{upgrade_id:02d}.feather"
-                        combined_df.to_feather(feather_filename, compression="zstd")
-                        print(f"Successfully saved combined DataFrame to {feather_filename}")
+                        # Save to CSV file
+                        csv_filename = f"{data_dir}/{release_name}_upgrade{upgrade_id:02d}.csv"
+                        combined_df.to_csv(csv_filename, index=False)
+                        print(f"Successfully saved combined DataFrame to {csv_filename}")
                     else:
                         print(f"No valid data found for {file_key_suffix}")
                 else:
