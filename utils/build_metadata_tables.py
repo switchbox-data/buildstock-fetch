@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 
 import boto3
@@ -75,8 +76,140 @@ def rename_columns(df: pd.DataFrame) -> pd.DataFrame:
             column_mapping[col] = "county"
         elif col in BUILDING_COLUMNS_TO_KEEP:
             column_mapping[col] = "bldg_id"
+    print(column_mapping)
 
     return df.rename(columns=column_mapping)
+
+
+def _read_parquet_with_columns(file_key: str, s3: fs.S3FileSystem, bucket_name: str) -> tuple[pd.DataFrame, list]:
+    """
+    Read parquet file and return DataFrame with selected columns.
+
+    Args:
+        file_key (str): The S3 key of the parquet file
+        s3 (fs.S3FileSystem): S3 filesystem instance
+        bucket_name (str): Name of the S3 bucket
+
+    Returns:
+        tuple: (DataFrame, list of available columns)
+    """
+    # Check available columns
+    parquet_file = pq.ParquetFile(f"{bucket_name}/{file_key}", filesystem=s3)
+    available_columns = parquet_file.schema_arrow.names
+
+    # Select columns with priority (first available in each category)
+    selected_columns = select_priority_columns(available_columns)
+
+    # Read with selected columns (will read all if selected_columns is empty)
+    table = pq.read_table(f"{bucket_name}/{file_key}", columns=selected_columns or None, filesystem=s3)
+
+    # Convert to pandas, preserving index if bldg_id is the index
+    df = table.to_pandas(use_threads=False)
+
+    return df, available_columns
+
+
+def _handle_bldg_id_column(df: pd.DataFrame, file_key: str, s3: fs.S3FileSystem, bucket_name: str) -> pd.DataFrame:
+    """
+    Handle bldg_id column extraction and validation.
+
+    Args:
+        df (pd.DataFrame): DataFrame to process
+        file_key (str): The S3 key of the parquet file
+        s3 (fs.S3FileSystem): S3 filesystem instance
+        bucket_name (str): Name of the S3 bucket
+
+    Returns:
+        pd.DataFrame: DataFrame with bldg_id properly handled
+    """
+    # Check if bldg_id is missing from columns but present as index
+    if "bldg_id" not in df.columns and df.index.name == "bldg_id":
+        # Add bldg_id from index to columns
+        df["bldg_id"] = df.index
+        df = df.reset_index(drop=True)
+        print("Added bldg_id from index to columns")
+
+    # If bldg_id is still missing, try reading the parquet file with index
+    if "bldg_id" not in df.columns:
+        # Read the parquet file directly to check for index
+        parquet_file = pq.ParquetFile(f"{bucket_name}/{file_key}", filesystem=s3)
+        df_with_index = parquet_file.read().to_pandas()
+
+        if df_with_index.index.name == "bldg_id":
+            # Re-read with index preserved
+            df = parquet_file.read().to_pandas()
+            df["bldg_id"] = df.index
+            df = df.reset_index(drop=True)
+            print("Added bldg_id from index to columns (second attempt)")
+        else:
+            print("Warning: bldg_id column not found in data or index")
+
+    return df
+
+
+def _validate_bldg_id(df: pd.DataFrame, release_name: str | None) -> bool:
+    """
+    Validate bldg_id column and return True if valid.
+
+    Args:
+        df (pd.DataFrame): DataFrame to validate
+        release_name (str | None): Name of the release for error reporting
+
+    Returns:
+        bool: True if bldg_id is valid, False otherwise
+    """
+    if "bldg_id" not in df.columns:
+        print("ERROR: bldg_id column not found in DataFrame after processing in", release_name)
+        print("This indicates the column was not properly extracted from the parquet file")
+        return False
+
+    # Ensure bldg_id is integer if it exists
+    df["bldg_id"] = df["bldg_id"].astype("Int64")
+    print("Converted bldg_id to integer type")
+
+    # Verify that bldg_id contains proper integer values
+    nan_count = df["bldg_id"].isna().sum()
+    total_rows = len(df)
+
+    if nan_count == total_rows:
+        print(f"ERROR: bldg_id column contains only NaN values after conversion in {release_name}")
+        print("This indicates the column was not properly extracted from the parquet file")
+        return False
+    elif nan_count > total_rows * 0.5:  # More than 50% NaN
+        print(f"ERROR: bldg_id column has {nan_count} NaN values out of {total_rows} total rows in {release_name}")
+        print("This indicates the column was not properly extracted from the parquet file")
+        return False
+    else:
+        print(f"bldg_id column verified: {total_rows - nan_count} valid integer values in {release_name}")
+        return True
+
+
+def _add_metadata_columns(
+    df: pd.DataFrame, res_com: str | None, weather: str | None, release_version: str | None, release_year: str | None
+) -> pd.DataFrame:
+    """
+    Add metadata columns to DataFrame.
+
+    Args:
+        df (pd.DataFrame): DataFrame to add columns to
+        res_com (str | None): The res_com value
+        weather (str | None): The weather value
+        release_version (str | None): The release number
+        release_year (str | None): The release year
+
+    Returns:
+        pd.DataFrame: DataFrame with metadata columns added
+    """
+    if res_com is not None:
+        df["product"] = res_com
+    if weather is not None:
+        df["weather_file"] = weather
+    if release_version is not None:
+        df["release_version"] = release_version
+    if release_year is not None:
+        df["release_year"] = release_year
+
+    return df
 
 
 def process_parquet_file(
@@ -87,6 +220,7 @@ def process_parquet_file(
     weather: str | None = None,
     release_version: str | None = None,
     release_year: str | None = None,
+    release_name: str | None = None,
 ) -> pd.DataFrame | None:
     """
     Process a parquet file from S3 and return a pandas DataFrame.
@@ -99,41 +233,30 @@ def process_parquet_file(
         weather (str): The weather value (tmy3, amy2012, or amy2018)
         release_version (str): The release number
         release_year (str): The release year
+        release_name (str): The release name
 
     Returns:
         pd.DataFrame: Processed DataFrame
     """
     try:
-        # Check available columns
-        parquet_file = pq.ParquetFile(f"{bucket_name}/{file_key}", filesystem=s3)
-        available_columns = parquet_file.schema_arrow.names
+        # Read parquet file with selected columns
+        df, available_columns = _read_parquet_with_columns(file_key, s3, bucket_name)
 
-        # Select columns with priority (first available in each category)
-        selected_columns = select_priority_columns(available_columns)
-
-        # Report which columns were selected
-        print(f"Selected columns: {selected_columns}")
-
-        # Read with selected columns (will read all if selected_columns is empty)
-        table = pq.read_table(f"{bucket_name}/{file_key}", columns=selected_columns or None, filesystem=s3)
-
-        # Convert to DataFrame
-        df = table.to_pandas()
+        # Handle bldg_id column extraction
+        df = _handle_bldg_id_column(df, file_key, s3, bucket_name)
 
         # Rename columns to standardized names
         df = rename_columns(df)
+        print("Columns after renaming: ", df.columns)
 
-        # Add new columns
-        if res_com is not None:
-            df["product"] = res_com
-        if weather is not None:
-            df["weather_file"] = weather
-        if release_version is not None:
-            df["release_version"] = release_version
-        if release_year is not None:
-            df["release_year"] = release_year
+        # Validate bldg_id column
+        if not _validate_bldg_id(df, release_name):
+            return None
 
-        print(f"Successfully loaded {len(df)} rows with {len(df.columns)} columns")
+        # Add metadata columns
+        df = _add_metadata_columns(df, res_com, weather, release_version, release_year)
+
+        print(f"Successfully loaded {len(df)} rows with {len(df.columns)} columns in {release_name}")
 
     except Exception as e:
         print(f"Error processing file: {e}")
@@ -188,7 +311,7 @@ def _extract_upgrade_number(filename: str) -> str | None:
     return upgrade_part[:dot_index]
 
 
-def find_all_2024_comstock_amy2018_2_parquet(base_file_key: str, s3_client, bucket_name: str) -> dict:
+def find_all_parquet_files(base_file_key: str, s3_client, bucket_name: str) -> dict:
     """
     Find all parquet files in the S3 bucket and organize them by upgrade type.
 
@@ -257,9 +380,15 @@ if __name__ == "__main__":
                 f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
                 f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/metadata.parquet"
             )
-            df = process_parquet_file(file_key, s3, bucket_name, res_com, weather, release_version, release_year)
-            if df is not None:
+            df = process_parquet_file(
+                file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
+            )
+            if df is not None and len(df) > 0:
                 all_dataframes.append(df)
+            else:
+                print(f"ERROR: Failed to process {release_name} due to bldg_id issues")
+                print("Exiting script...")
+                sys.exit(1)
 
         elif (
             release_year == "2022"
@@ -281,11 +410,17 @@ if __name__ == "__main__":
                         f"upgrade{upgrade_id:02d}.parquet"
                     )
 
-                df = process_parquet_file(file_key, s3, bucket_name, res_com, weather, release_version, release_year)
-                if df is not None:
+                df = process_parquet_file(
+                    file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
+                )
+                if df is not None and len(df) > 0:
                     all_dataframes.append(df)
+                else:
+                    print(f"ERROR: Failed to process {release_name} due to bldg_id issues")
+                    print("Exiting script...")
+                    sys.exit(1)
 
-        elif release_year == "2024" and release_name == "com_2024_amy2018_2":
+        elif release_name == "com_2024_amy2018_2" or release_name == "com_2025_amy2018_1":
             base_file_key = (
                 f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
                 f"{release_year}/{res_com}_{weather}_release_{release_version}/"
@@ -293,15 +428,18 @@ if __name__ == "__main__":
             )
 
             # Find all available parquet files at once
-            all_parquet_files = find_all_2024_comstock_amy2018_2_parquet(base_file_key, s3_client, bucket_name)
+            all_parquet_files = find_all_parquet_files(base_file_key, s3_client, bucket_name)
             print(f"Found parquet files: {list(all_parquet_files.keys())}")
 
             # Process only the first upgrade_id
             if upgrade_ids:
                 upgrade_id = int(upgrade_ids[0])
-                if upgrade_id == 0:
+                if upgrade_id == 0 and release_name == "com_2024_amy2018_2":
                     file_key_suffix = "baseline.parquet"
                     available_files = all_parquet_files.get("baseline", [])
+                elif release_name == "com_2025_amy2018_1":
+                    file_key_suffix = f"upgrade{upgrade_id}.parquet"
+                    available_files = all_parquet_files.get(f"upgrade_{upgrade_id}", [])
                 else:
                     file_key_suffix = f"upgrade{upgrade_id:02d}.parquet"
                     available_files = all_parquet_files.get(f"upgrade_{upgrade_id:02d}", [])
@@ -316,20 +454,26 @@ if __name__ == "__main__":
                     for i, file_key in enumerate(files_to_process, 1):
                         print(f"Processing file {i} out of {len(files_to_process)}")
                         df = process_parquet_file(
-                            file_key, s3, bucket_name, res_com, weather, release_version, release_year
+                            file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
                         )
-                        if df is not None:
+                        if df is not None and len(df) > 0:
                             combined_dfs.append(df)
+                        else:
+                            print(f"ERROR: Failed to process file {file_key} due to bldg_id issues in {release_name}")
+                            print("Exiting script...")
+                            sys.exit(1)
 
                     if combined_dfs:
                         # Concatenate all DataFrames for this release
                         combined_df = pd.concat(combined_dfs, ignore_index=True)
-                        print(f"Combined {len(combined_dfs)} files into {len(combined_df)} total rows")
+                        print(
+                            f"Combined {len(combined_dfs)} files into {len(combined_df)} total rows in {release_name}"
+                        )
                         all_dataframes.append(combined_df)
                     else:
-                        print(f"No valid data found for {file_key_suffix}")
+                        print(f"No valid data found for {file_key_suffix} in {release_name}")
                 else:
-                    print(f"No files found for {file_key_suffix}")
+                    print(f"No files found for {file_key_suffix} in {release_name}")
 
     # Combine all DataFrames and save as partitioned parquet
     if all_dataframes:
