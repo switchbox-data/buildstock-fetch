@@ -180,6 +180,9 @@ def _validate_bldg_id(df: pd.DataFrame, release_name: str | None) -> bool:
         print("This indicates the column was not properly extracted from the parquet file")
         return False
     else:
+        # Remove rows where bldg_id is NaN
+        df.dropna(subset=["bldg_id"], inplace=True)
+        print(f"Removed {nan_count} rows with NaN bldg_id values in {release_name}")
         print(f"bldg_id column verified: {total_rows - nan_count} valid integer values in {release_name}")
         return True
 
@@ -386,7 +389,9 @@ if __name__ == "__main__":
             if df is not None and len(df) > 0:
                 all_dataframes.append(df)
             else:
-                print(f"ERROR: Failed to process {release_name} due to bldg_id issues")
+                print(
+                    f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
+                )
                 print("Exiting script...")
                 sys.exit(1)
 
@@ -416,7 +421,9 @@ if __name__ == "__main__":
                 if df is not None and len(df) > 0:
                     all_dataframes.append(df)
                 else:
-                    print(f"ERROR: Failed to process {release_name} due to bldg_id issues")
+                    print(
+                        f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
+                    )
                     print("Exiting script...")
                     sys.exit(1)
 
@@ -459,7 +466,9 @@ if __name__ == "__main__":
                         if df is not None and len(df) > 0:
                             combined_dfs.append(df)
                         else:
-                            print(f"ERROR: Failed to process file {file_key} due to bldg_id issues in {release_name}")
+                            print(
+                                f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
+                            )
                             print("Exiting script...")
                             sys.exit(1)
 
