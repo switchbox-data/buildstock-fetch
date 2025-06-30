@@ -3,6 +3,7 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import click
 import requests
 
 
@@ -52,6 +53,7 @@ def fetch_bldg_ids(state: str) -> list[BuildingID]:
         raise NotImplementedError(f"State {state} not supported")
 
 
+@click.command()
 def fetch_bldg_data(bldg_ids: list[BuildingID]) -> list[Path]:
     """Download building data for a given list of building ids
 
