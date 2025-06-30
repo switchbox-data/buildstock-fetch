@@ -47,20 +47,20 @@ def test_fetch_bldg_data(cleanup_downloads):
     fetch_bldg_data_core(
         bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)], file_type=["hpxml"], output_dir=Path("data")
     )
-    assert Path("data/0000007/bldg0000007.hpxml").exists()
-    assert Path("data/0000008/bldg0000008.hpxml").exists()
+    assert Path("data/bldg0000007-up00.xml").exists()
+    assert Path("data/bldg0000008-up00.xml").exists()
 
     fetch_bldg_data_core(
         bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)], file_type=["schedule"], output_dir=Path("data")
     )
-    assert Path("data/0000007/bldg0000007.sched.h5").exists()
-    assert Path("data/0000008/bldg0000008.sched.h5").exists()
+    assert Path("data/bldg0000007-up00_schedule.csv").exists()
+    assert Path("data/bldg0000008-up00_schedule.csv").exists()
     fetch_bldg_data_core(
         bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)],
         file_type=["hpxml", "schedule"],
         output_dir=Path("data"),
     )
-    assert Path("data/0000007/bldg0000007.hpxml").exists()
-    assert Path("data/0000008/bldg0000008.hpxml").exists()
-    assert Path("data/0000007/bldg0000007.sched.h5").exists()
-    assert Path("data/0000008/bldg0000008.sched.h5").exists()
+    assert Path("data/bldg0000007-up00.xml").exists()
+    assert Path("data/bldg0000008-up00.xml").exists()
+    assert Path("data/bldg0000007-up00_schedule.csv").exists()
+    assert Path("data/bldg0000008-up00_schedule.csv").exists()
