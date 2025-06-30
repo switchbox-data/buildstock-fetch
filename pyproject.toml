@@ -19,6 +19,8 @@ classifiers = [
 ]
 dependencies = [
     "requests>=2.32.3",
+    "boto3~=1.33.0",
+    "botocore~=1.33.0",
 ]
 
 [project.urls]
@@ -37,7 +39,8 @@ dev = [
     "mkdocs>=1.4.2",
     "mkdocs-material>=8.5.10",
     "mkdocstrings[python]>=0.26.1",
-    "types-requests>=2.32.0.20250602",
+    "types-requests>=2.31.0",
+    "types-boto3",
 ]
 
 [build-system]
