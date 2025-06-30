@@ -54,7 +54,9 @@ def fetch_bldg_ids(state: str) -> list[BuildingID]:
 
 
 @click.command()
-def fetch_bldg_data(bldg_ids: list[BuildingID]) -> list[Path]:
+@click.argument("file_type", nargs=-1, required=True)
+@click.option("output_dir", default=Path(__file__).parent.parent / "data")
+def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_dir: Path) -> list[Path]:
     """Download building data for a given list of building ids
 
     Downloads the data for the given building ids and returns list of paths to the downloaded files.
@@ -65,19 +67,22 @@ def fetch_bldg_data(bldg_ids: list[BuildingID]) -> list[Path]:
     Returns:
         A list of paths to the downloaded files.
     """
-    data_dir = Path(__file__).parent.parent / "data"
+    if isinstance(output_dir, str):
+        output_dir = Path(output_dir)
+    if not output_dir.exists():
+        os.makedirs(output_dir, exist_ok=True)
+
     downloaded_paths = []
-    os.makedirs(data_dir, exist_ok=True)
 
     for bldg_id in bldg_ids:
         response = requests.get(bldg_id.get_download_url(), timeout=30)
         response.raise_for_status()
 
-        output_path = data_dir / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
-        with open(output_path, "wb") as file:
+        output_file = output_dir / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
+        with open(output_file, "wb") as file:
             file.write(response.content)
 
-        downloaded_paths.append(output_path)
+        downloaded_paths.append(output_file)
     return downloaded_paths
 
 
