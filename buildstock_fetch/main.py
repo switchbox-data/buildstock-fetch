@@ -99,8 +99,12 @@ def fetch_bldg_data_core(bldg_ids: list[BuildingID], file_type: list[str], outpu
                     if xml_files:
                         xml_file = xml_files[0]  # Take the first (and only) XML file
                         zip_ref.extract(xml_file, output_dir)
-                        extracted_path = output_dir / xml_file
-                        downloaded_paths.append(extracted_path)
+                        # Rename to the specified convention
+                        old_path = output_dir / xml_file
+                        new_name = f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}.xml"
+                        new_path = output_dir / new_name
+                        old_path.rename(new_path)
+                        downloaded_paths.append(new_path)
 
                 if "schedule" in file_type:
                     # Find and extract the schedule CSV file
@@ -108,10 +112,16 @@ def fetch_bldg_data_core(bldg_ids: list[BuildingID], file_type: list[str], outpu
                     if schedule_files:
                         schedule_file = schedule_files[0]  # Take the first (and only) schedule file
                         zip_ref.extract(schedule_file, output_dir)
-                        extracted_path = output_dir / schedule_file
-                        downloaded_paths.append(extracted_path)
+                        # Rename to the specified convention
+                        old_path = output_dir / schedule_file
+                        new_name = f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}_schedule.csv"
+                        new_path = output_dir / new_name
+                        old_path.rename(new_path)
+                        downloaded_paths.append(new_path)
 
-        downloaded_paths.append(output_file)
+            # Remove the zip file after extraction
+            output_file.unlink()
+
     return downloaded_paths
 
 
