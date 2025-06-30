@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -9,6 +10,14 @@ import pyarrow.fs as fs
 import pyarrow.parquet as pq
 from botocore import UNSIGNED
 from botocore.config import Config
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("build_metadata_tables.log")],
+)
+logger = logging.getLogger(__name__)
 
 # Global column definitions - organized by category with priority
 PUMA_COLUMNS_TO_KEEP = [
@@ -76,7 +85,7 @@ def rename_columns(df: pd.DataFrame) -> pd.DataFrame:
             column_mapping[col] = "county"
         elif col in BUILDING_COLUMNS_TO_KEEP:
             column_mapping[col] = "bldg_id"
-    print(column_mapping)
+    logger.info(f"Column mapping: {column_mapping}")
 
     return df.rename(columns=column_mapping)
 
@@ -127,7 +136,7 @@ def _handle_bldg_id_column(df: pd.DataFrame, file_key: str, s3: fs.S3FileSystem,
         # Add bldg_id from index to columns
         df["bldg_id"] = df.index
         df = df.reset_index(drop=True)
-        print("Added bldg_id from index to columns")
+        logger.info("Added bldg_id from index to columns")
 
     # If bldg_id is still missing, try reading the parquet file with index
     if "bldg_id" not in df.columns:
@@ -140,9 +149,9 @@ def _handle_bldg_id_column(df: pd.DataFrame, file_key: str, s3: fs.S3FileSystem,
             df = parquet_file.read().to_pandas()
             df["bldg_id"] = df.index
             df = df.reset_index(drop=True)
-            print("Added bldg_id from index to columns (second attempt)")
+            logger.info("Added bldg_id from index to columns (second attempt)")
         else:
-            print("Warning: bldg_id column not found in data or index")
+            logger.warning("Warning: bldg_id column not found in data or index")
 
     return df
 
@@ -159,31 +168,33 @@ def _validate_bldg_id(df: pd.DataFrame, release_name: str | None) -> bool:
         bool: True if bldg_id is valid, False otherwise
     """
     if "bldg_id" not in df.columns:
-        print("ERROR: bldg_id column not found in DataFrame after processing in", release_name)
-        print("This indicates the column was not properly extracted from the parquet file")
+        logger.exception(f"ERROR: bldg_id column not found in DataFrame after processing in {release_name}")
+        logger.exception("This indicates the column was not properly extracted from the parquet file")
         return False
 
     # Ensure bldg_id is integer if it exists
     df["bldg_id"] = df["bldg_id"].astype("Int64")
-    print("Converted bldg_id to integer type")
+    logger.info("Converted bldg_id to integer type")
 
     # Verify that bldg_id contains proper integer values
     nan_count = df["bldg_id"].isna().sum()
     total_rows = len(df)
 
     if nan_count == total_rows:
-        print(f"ERROR: bldg_id column contains only NaN values after conversion in {release_name}")
-        print("This indicates the column was not properly extracted from the parquet file")
+        logger.exception(f"ERROR: bldg_id column contains only NaN values after conversion in {release_name}")
+        logger.exception("This indicates the column was not properly extracted from the parquet file")
         return False
     elif nan_count > total_rows * 0.5:  # More than 50% NaN
-        print(f"ERROR: bldg_id column has {nan_count} NaN values out of {total_rows} total rows in {release_name}")
-        print("This indicates the column was not properly extracted from the parquet file")
+        logger.exception(
+            f"ERROR: bldg_id column has {nan_count} NaN values out of {total_rows} total rows in {release_name}"
+        )
+        logger.exception("This indicates the column was not properly extracted from the parquet file")
         return False
     else:
         # Remove rows where bldg_id is NaN
         df.dropna(subset=["bldg_id"], inplace=True)
-        print(f"Removed {nan_count} rows with NaN bldg_id values in {release_name}")
-        print(f"bldg_id column verified: {total_rows - nan_count} valid integer values in {release_name}")
+        logger.info(f"Removed {nan_count} rows with NaN bldg_id values in {release_name}")
+        logger.info(f"bldg_id column verified: {total_rows - nan_count} valid integer values in {release_name}")
         return True
 
 
@@ -250,7 +261,7 @@ def process_parquet_file(
 
         # Rename columns to standardized names
         df = rename_columns(df)
-        print("Columns after renaming: ", df.columns)
+        logger.info(f"Columns after renaming: {df.columns}")
 
         # Validate bldg_id column
         if not _validate_bldg_id(df, release_name):
@@ -259,10 +270,10 @@ def process_parquet_file(
         # Add metadata columns
         df = _add_metadata_columns(df, res_com, weather, release_version, release_year)
 
-        print(f"Successfully loaded {len(df)} rows with {len(df.columns)} columns in {release_name}")
+        logger.info(f"Successfully loaded {len(df)} rows with {len(df.columns)} columns in {release_name}")
 
-    except Exception as e:
-        print(f"Error processing file: {e}")
+    except Exception:
+        logger.exception("Error processing file")
         return None
     else:
         return df
@@ -389,10 +400,10 @@ if __name__ == "__main__":
             if df is not None and len(df) > 0:
                 all_dataframes.append(df)
             else:
-                print(
+                logger.exception(
                     f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
                 )
-                print("Exiting script...")
+                logger.exception("Exiting script...")
                 sys.exit(1)
 
         elif (
@@ -421,10 +432,10 @@ if __name__ == "__main__":
                 if df is not None and len(df) > 0:
                     all_dataframes.append(df)
                 else:
-                    print(
+                    logger.exception(
                         f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
                     )
-                    print("Exiting script...")
+                    logger.exception("Exiting script...")
                     sys.exit(1)
 
         elif release_name == "com_2024_amy2018_2" or release_name == "com_2025_amy2018_1":
@@ -436,7 +447,7 @@ if __name__ == "__main__":
 
             # Find all available parquet files at once
             all_parquet_files = find_all_parquet_files(base_file_key, s3_client, bucket_name)
-            print(f"Found parquet files: {list(all_parquet_files.keys())}")
+            logger.info(f"Found parquet files: {list(all_parquet_files.keys())}")
 
             # Process only the first upgrade_id
             if upgrade_ids:
@@ -451,7 +462,7 @@ if __name__ == "__main__":
                     file_key_suffix = f"upgrade{upgrade_id:02d}.parquet"
                     available_files = all_parquet_files.get(f"upgrade_{upgrade_id:02d}", [])
 
-                print(f"Found {len(available_files)} {file_key_suffix} files:")
+                logger.info(f"Found {len(available_files)} {file_key_suffix} files:")
 
                 if available_files:
                     # Combine all parquet files for this upgrade
@@ -459,36 +470,36 @@ if __name__ == "__main__":
                     files_to_process = available_files  # Process all available files
 
                     for i, file_key in enumerate(files_to_process, 1):
-                        print(f"Processing file {i} out of {len(files_to_process)}")
+                        logger.info(f"Processing file {i} out of {len(files_to_process)}")
                         df = process_parquet_file(
                             file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
                         )
                         if df is not None and len(df) > 0:
                             combined_dfs.append(df)
                         else:
-                            print(
+                            logger.exception(
                                 f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
                             )
-                            print("Exiting script...")
+                            logger.exception("Exiting script...")
                             sys.exit(1)
 
                     if combined_dfs:
                         # Concatenate all DataFrames for this release
                         combined_df = pd.concat(combined_dfs, ignore_index=True)
-                        print(
+                        logger.info(
                             f"Combined {len(combined_dfs)} files into {len(combined_df)} total rows in {release_name}"
                         )
                         all_dataframes.append(combined_df)
                     else:
-                        print(f"No valid data found for {file_key_suffix} in {release_name}")
+                        logger.warning(f"No valid data found for {file_key_suffix} in {release_name}")
                 else:
-                    print(f"No files found for {file_key_suffix} in {release_name}")
+                    logger.warning(f"No files found for {file_key_suffix} in {release_name}")
 
     # Combine all DataFrames and save as partitioned parquet
     if all_dataframes:
-        print(f"Combining {len(all_dataframes)} DataFrames...")
+        logger.info(f"Combining {len(all_dataframes)} DataFrames...")
         final_df = pd.concat(all_dataframes, ignore_index=True)
-        print(f"Final DataFrame has {len(final_df)} rows and {len(final_df.columns)} columns")
+        logger.info(f"Final DataFrame has {len(final_df)} rows and {len(final_df.columns)} columns")
 
         # Sort by county
         if "county" in final_df.columns:
@@ -501,6 +512,6 @@ if __name__ == "__main__":
             partition_cols=["product", "release_year", "weather_file", "release_version", "state"],
             index=False,
         )
-        print(f"Successfully saved combined DataFrame to {output_file}")
+        logger.info(f"Successfully saved combined DataFrame to {output_file}")
     else:
-        print("No data to save")
+        logger.warning("No data to save")
