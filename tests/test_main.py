@@ -44,6 +44,16 @@ def test_building_id_config():
 
 
 def test_fetch_bldg_data(cleanup_downloads):
-    fetch_bldg_data([BuildingID(bldg_id=7), BuildingID(bldg_id=8)])
-    assert Path("data/0000007_upgrade0.zip").exists()
-    assert Path("data/0000008_upgrade0.zip").exists()
+    fetch_bldg_data([BuildingID(bldg_id=7), BuildingID(bldg_id=8)], file_type=("hpxml"))
+    assert Path("data/0000007/bldg0000007.hpxml").exists()
+    assert Path("data/0000008/bldg0000008.hpxml").exists()
+
+    fetch_bldg_data([BuildingID(bldg_id=7), BuildingID(bldg_id=8)], file_type=("schedule"))
+    assert Path("data/0000007/bldg0000007.sched.h5").exists()
+    assert Path("data/0000008/bldg0000008.sched.h5").exists()
+
+    fetch_bldg_data([BuildingID(bldg_id=7), BuildingID(bldg_id=8)], file_type=("hpxml", "schedule"))
+    assert Path("data/0000007/bldg0000007.hpxml").exists()
+    assert Path("data/0000008/bldg0000008.hpxml").exists()
+    assert Path("data/0000007/bldg0000007.sched.h5").exists()
+    assert Path("data/0000008/bldg0000008.sched.h5").exists()

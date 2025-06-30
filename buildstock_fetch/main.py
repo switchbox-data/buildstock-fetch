@@ -1,5 +1,6 @@
 import json
 import os
+import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -16,7 +17,7 @@ class BuildingID:
     weather: str = "tmy3"
     upgrade_id: str = "0"
 
-    def get_download_url(self) -> str:
+    def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""
         return (
             "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/"
@@ -75,12 +76,36 @@ def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_di
     downloaded_paths = []
 
     for bldg_id in bldg_ids:
-        response = requests.get(bldg_id.get_download_url(), timeout=30)
-        response.raise_for_status()
+        if "hpxml" in file_type or "schedule" in file_type:
+            base_url = bldg_id.get_building_data_url()
+            response = requests.get(base_url, timeout=30)
+            response.raise_for_status()
 
-        output_file = output_dir / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
-        with open(output_file, "wb") as file:
-            file.write(response.content)
+            output_file = output_dir / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
+            with open(output_file, "wb") as file:
+                file.write(response.content)
+
+            # Extract specific files based on file_type
+            with zipfile.ZipFile(output_file, "r") as zip_ref:
+                zip_file_list = zip_ref.namelist()
+
+                if "hpxml" in file_type:
+                    # Find and extract the XML file
+                    xml_files = [f for f in zip_file_list if f.endswith(".xml")]
+                    if xml_files:
+                        xml_file = xml_files[0]  # Take the first (and only) XML file
+                        zip_ref.extract(xml_file, output_dir)
+                        extracted_path = output_dir / xml_file
+                        downloaded_paths.append(extracted_path)
+
+                if "schedule" in file_type:
+                    # Find and extract the schedule CSV file
+                    schedule_files = [f for f in zip_file_list if "schedule" in f.lower() and f.endswith(".csv")]
+                    if schedule_files:
+                        schedule_file = schedule_files[0]  # Take the first (and only) schedule file
+                        zip_ref.extract(schedule_file, output_dir)
+                        extracted_path = output_dir / schedule_file
+                        downloaded_paths.append(extracted_path)
 
         downloaded_paths.append(output_file)
     return downloaded_paths
