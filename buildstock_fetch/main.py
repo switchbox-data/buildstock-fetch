@@ -59,16 +59,15 @@ def fetch_bldg_ids(state: str) -> list[BuildingID]:
         raise NotImplementedError(f"State {state} not supported")
 
 
-@click.command()
-@click.argument("file_type", nargs=-1, required=True)
-@click.option("output_dir", default=Path(__file__).parent.parent / "data")
-def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_dir: Path) -> list[Path]:
+def fetch_bldg_data_core(bldg_ids: list[BuildingID], file_type: list[str], output_dir: Path) -> list[Path]:
     """Download building data for a given list of building ids
 
     Downloads the data for the given building ids and returns list of paths to the downloaded files.
 
     Args:
         bldg_ids: A list of BuildingID objects to download data for.
+        file_type: Tuple of file types to extract (e.g., "hpxml", "schedule")
+        output_dir: Directory to save the downloaded files.
 
     Returns:
         A list of paths to the downloaded files.
@@ -114,6 +113,24 @@ def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_di
 
         downloaded_paths.append(output_file)
     return downloaded_paths
+
+
+@click.command()
+@click.argument("bldg_ids", nargs=-1, required=True)
+@click.argument("file_type", nargs=-1, required=True)
+@click.argument("output_dir", default=Path(__file__).parent / "data")
+def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_dir: Path) -> list[Path]:
+    """Download building data for a given list of building ids
+
+    Downloads the data for the given building ids and returns list of paths to the downloaded files.
+
+    Args:
+        bldg_ids: A list of BuildingID objects to download data for.
+
+    Returns:
+        A list of paths to the downloaded files.
+    """
+    return fetch_bldg_data_core(bldg_ids, list(file_type), output_dir)
 
 
 if __name__ == "__main__":  # pragma: no cover
