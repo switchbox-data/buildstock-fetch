@@ -16,13 +16,18 @@ class BuildingID:
     res_com: str = "resstock"
     weather: str = "tmy3"
     upgrade_id: str = "0"
+    base_url: str = (
+        f"https://oedi-data-lake.s3.amazonaws.com/"
+        "nrel-pds-building-stock/"
+        "end-use-load-profiles-for-us-building-stock/"
+        f"{release_year}/"
+        f"{res_com}_{weather}_release_{release_number}/"
+    )
 
     def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""
         return (
-            "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/"
-            f"end-use-load-profiles-for-us-building-stock/{self.release_year}/"
-            f"{self.res_com}_{self.weather}_release_{self.release_number}/"
+            f"{self.base_url}"
             f"building_energy_models/upgrade={self.upgrade_id}/"
             f"bldg{self.bldg_id:07}-up0{self.upgrade_id}.zip"
         )
