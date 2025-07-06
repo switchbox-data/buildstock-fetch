@@ -31,6 +31,25 @@ class BuildingID:
         return json.dumps(asdict(self))
 
 
+def _validate_release_name(release_name: str) -> bool:
+    """Validate the release name.
+
+    Args:
+        release_name: The release name to validate.
+
+    Returns:
+        True if the release name is valid, False otherwise.
+    """
+    # Read the valid release names from the JSON file
+    releases_file = Path(__file__).parent.parent / "utils" / "buildstock_releases.json"
+    with open(releases_file) as f:
+        releases_data = json.load(f)
+
+    # Get the top-level keys as valid release names
+    valid_release_names = list(releases_data.keys())
+    return release_name in valid_release_names
+
+
 def fetch_bldg_ids(
     product: str, release_year: str, weather_file: str, release_version: str, state: str, upgrade_id: str
 ) -> list[BuildingID]:
