@@ -43,6 +43,7 @@ dev = [
     "mkdocstrings[python]>=0.26.1",
     "types-requests>=2.31.0",
     "types-boto3",
+    "pandas-stubs>=2.2.0",
 ]
 
 [build-system]
