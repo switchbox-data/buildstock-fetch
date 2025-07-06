@@ -7,6 +7,18 @@ import pandas as pd
 import requests
 
 
+class InvalidProductError(ValueError):
+    """Raised when an invalid product is provided."""
+
+    pass
+
+
+class InvalidReleaseNameError(ValueError):
+    """Raised when an invalid release name is provided."""
+
+    pass
+
+
 @dataclass
 class BuildingID:
     bldg_id: int
@@ -69,6 +81,17 @@ def fetch_bldg_ids(
     """
     # Construct the absolute path to the parquet directory
     parquet_dir = Path("/workspaces/buildstock-fetch/utils/building_data/combined_metadata.parquet")
+
+    if product == "resstock":
+        product_str = "res"
+    elif product == "comstock":
+        product_str = "com"
+    else:
+        raise InvalidProductError(product)
+
+    release_name = f"{product_str}_{release_year}_{weather_file}_{release_version}"
+    if not _validate_release_name(release_name):
+        raise InvalidReleaseNameError(release_name)
 
     # Read the specific partition that matches our criteria
     partition_path = (
@@ -137,4 +160,3 @@ if __name__ == "__main__":  # pragma: no cover
     tmp_ids = fetch_bldg_ids(
         product="resstock", weather_file="tmy3", release_version="1", release_year="2021", state="MA", upgrade_id="0"
     )
-    print(tmp_ids[:5])
