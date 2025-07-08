@@ -1,6 +1,22 @@
-name: Switchbox Ticket
+name: Switchbox ticket
 description: Help describe what you're building and why
+assignees: ["@me"]
+labels: []
+projects: ["Switchbox"]
 body:
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: Issue Type
+      description: What type of issue is this?
+      options:
+        - Feature
+        - Bug
+        - Enhancement
+        - Documentation
+    validations:
+      required: true
+
   - type: textarea
     id: what
     attributes:
