@@ -1,6 +1,6 @@
-name: Switchbox ticket
+name: Feature/Bug Report
 description: Help describe what you're building and why
-title: "Short, descriptive title here"
+title: ""
 labels: []
 assignees: []
 body:
@@ -27,7 +27,7 @@ body:
     attributes:
       label: How
       description: Outline your approach or key steps. This doesn't need to be exhaustive - just enough to show you have a plan.
-      placeholder: "Example: 1. Add argparse options for filter parameters, 2. Build query string construction logic, 3. Update API client to handle filtered requests, 4. Add unit tests for new functionality."
+      placeholder: "Example:\n1. Add argparse options for filter parameters\n2. Build query string construction logic\n3. Update API client to handle filtered requests\n4. Add unit tests for new functionality"
     validations:
       required: false
 
