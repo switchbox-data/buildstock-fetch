@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import questionary
 import typer
 from rich.console import Console
@@ -13,6 +16,10 @@ app = typer.Typer(
     rich_markup_mode="rich",
     no_args_is_help=False,
 )
+
+
+# File configuration
+BUILDSTOCK_RELEASES_FILE = Path(__file__).parent.parent / "utils" / "buildstock_releases.json"
 
 
 def _get_release_version_options() -> list[str]:
@@ -94,7 +101,43 @@ def _get_product_type_options() -> list[str]:
 
 
 def _get_available_release_options() -> list[str]:
-    return ["2021", "2022", "2023", "2024", "2025"]
+    # Read the buildstock releases JSON file
+    with open(BUILDSTOCK_RELEASES_FILE) as f:
+        buildstock_releases = json.load(f)
+
+    # Return the top-level keys as release options
+    return list(buildstock_releases.keys())
+
+
+def _parse_buildstock_releases(buildstock_releases: list[str]) -> dict[str, dict]:
+    """Parse buildstock releases and extract components from keys in format: {product}_{release_year}_{weather_file}_{release_version}"""
+    parsed_releases = {}
+
+    for release_name in buildstock_releases:
+        # Split the release name by underscore
+        parts = release_name.split("_")
+
+        product = parts[0]  # e.g., "res" or "com"
+        if product == "res":
+            product = "resstock"
+        elif product == "com":
+            product = "comstock"
+        else:
+            message = f"Invalid product type: {product}"
+            console.print(Panel(message, title="Error", border_style="red"))
+            raise ValueError(message)
+
+        release_year = parts[1]  # e.g., "2021"
+        weather_file = parts[2]  # e.g., "tmy3" or "amy2018"
+        release_version = parts[3]  # e.g., "1" or "1.1"
+
+        parsed_releases[release_name] = {
+            "product": product,
+            "release_year": release_year,
+            "weather_file": weather_file,
+            "release_version": release_version,
+        }
+    return parsed_releases
 
 
 def main_callback(
@@ -196,4 +239,10 @@ app.callback(invoke_without_command=True)(main_callback)
 
 
 if __name__ == "__main__":
+    # Print the available release options
+    print(_get_available_release_options())
+
+    # Print the parsed release options
+    print(_parse_buildstock_releases(_get_available_release_options()))
+
     app()
