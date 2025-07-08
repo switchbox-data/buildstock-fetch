@@ -31,6 +31,9 @@ Homepage = "https://switchbox-data.github.io/buildstock-fetch/"
 Repository = "https://github.com/switchbox-data/buildstock-fetch"
 Documentation = "https://switchbox-data.github.io/buildstock-fetch/"
 
+[project.scripts]
+dbf = "buildstock_fetch.main_cli:app"
+
 [dependency-groups]
 dev = [
     "pytest>=7.2.0",
