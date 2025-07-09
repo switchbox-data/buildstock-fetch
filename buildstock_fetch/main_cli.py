@@ -234,8 +234,18 @@ def main_callback(
         # Retrieve release version
         selected_release_version = questionary.select("Select release version:", choices=release_versions).ask()
 
+        # Retrieve state
+        selected_states = questionary.checkbox(
+            "Select states:",
+            choices=_get_state_options(),
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+            validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
+        ).ask()
+
     # Process the data
-    print(f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}")
+    print(
+        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_states}"
+    )
 
 
 app.callback(invoke_without_command=True)(main_callback)
