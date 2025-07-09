@@ -50,7 +50,11 @@ def _filter_available_releases(
     return filtered_releases
 
 
-def _get_release_years(available_releases: list[str], product_type: str) -> tuple[list[str], list[str]]:
+def _get_product_type_options() -> list[str]:
+    return ["resstock", "comstock"]
+
+
+def _get_release_years_options(available_releases: list[str], product_type: str) -> tuple[list[str], list[str]]:
     # Find available release years
     parsed_releases = _parse_buildstock_releases(available_releases)
     available_releases = _filter_available_releases(list(parsed_releases.keys()), product_type=product_type)
@@ -58,6 +62,19 @@ def _get_release_years(available_releases: list[str], product_type: str) -> tupl
     available_release_years.sort()
 
     return available_releases, available_release_years
+
+
+def _get_weather_options(
+    available_releases: list[str], product_type: str, release_year: str
+) -> tuple[list[str], list[str]]:
+    parsed_releases = _parse_buildstock_releases(available_releases)
+    available_releases = _filter_available_releases(
+        list(parsed_releases.keys()), product_type=product_type, release_year=release_year
+    )
+    available_weather_files = list({parsed_releases[release]["weather_file"] for release in available_releases})
+    available_weather_files.sort()
+
+    return available_releases, available_weather_files
 
 
 def _get_state_options() -> list[str]:
@@ -126,14 +143,6 @@ def _get_file_type_options() -> list[str]:
     ]
 
 
-def _get_weather_options() -> list[str]:
-    return ["tmy3", "amy2018"]
-
-
-def _get_product_type_options() -> list[str]:
-    return ["resstock", "comstock"]
-
-
 def _get_available_releases() -> list[str]:
     # Read the buildstock releases JSON file
     with open(BUILDSTOCK_RELEASES_FILE) as f:
@@ -195,11 +204,14 @@ def main_callback(
 
         # Release version options
         product_type = questionary.select("Select product type:", choices=_get_product_type_options()).ask()
-        _, release_years = _get_release_years(available_releases, product_type)
+        available_releases, release_years = _get_release_years_options(available_releases, product_type)
         selected_release_year = questionary.select("Select release year:", choices=release_years).ask()
-
+        available_releases, weather_files = _get_weather_options(
+            available_releases, product_type, selected_release_year
+        )
+        selected_weather_file = questionary.select("Select weather file:", choices=weather_files).ask()
     # Process the data
-    print(f"Result: {product_type}, {selected_release_year}")
+    print(f"Result: {product_type}, {selected_release_year}, {selected_weather_file}")
 
 
 app.callback(invoke_without_command=True)(main_callback)
@@ -213,10 +225,10 @@ if __name__ == "__main__":
     print(_parse_buildstock_releases(_get_available_releases()))
 
     # Print the release years
-    available_releases, available_release_years = _get_release_years(_get_available_releases(), "resstock")
+    available_releases, available_release_years = _get_release_years_options(_get_available_releases(), "resstock")
     print(available_releases)
     print(available_release_years)
-    available_releases, available_release_years = _get_release_years(_get_available_releases(), "comstock")
+    available_releases, available_release_years = _get_release_years_options(_get_available_releases(), "comstock")
     print(available_releases)
     print(available_release_years)
 

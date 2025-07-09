@@ -12,7 +12,7 @@ runner = CliRunner()
 def test_interactive_mode(mock_questionary):
     """Test interactive mode with mocked questionary."""
     # Mock the questionary responses
-    mock_questionary.return_value.ask.side_effect = ["resttock", "2022"]
+    mock_questionary.return_value.ask.side_effect = ["resttock", "2022", "tmy3"]
 
     result = runner.invoke(app, [])
 
@@ -25,4 +25,4 @@ def test_interactive_mode(mock_questionary):
     assert "BuildStock Fetch Interactive CLI" in result.stdout
     assert "Welcome to the BuildStock Fetch CLI!" in result.stdout
     assert "Please select the release information and file type you would like to fetch:" in result.stdout
-    assert "Result: resttock, 2022" in result.stdout
+    assert "Result: resttock, 2022, tmy3" in result.stdout
