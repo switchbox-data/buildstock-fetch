@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import cast
 
 import questionary
 import typer
@@ -145,24 +146,24 @@ def _get_state_options() -> list[str]:
     ]
 
 
-def _get_file_type_options() -> list[str]:
-    return [
-        "metadata",
-        "15min_load_curve",
-        "hourly_load_curve",
-        "monthly_load_curve",
-        "daily_load_curve",
-        "annual_load_curve",
-    ]
+def _get_file_type_options(release_name: str) -> list[str]:
+    available_releases = _get_all_available_releases()
+    return cast(list[str], available_releases[release_name]["available_data"])
 
 
-def _get_available_releases() -> list[str]:
+def _get_available_releases_names() -> list[str]:
     # Read the buildstock releases JSON file
     with open(BUILDSTOCK_RELEASES_FILE) as f:
         buildstock_releases = json.load(f)
 
     # Return the top-level keys as release options
     return list(buildstock_releases.keys())
+
+
+def _get_all_available_releases() -> dict[str, dict]:
+    with open(BUILDSTOCK_RELEASES_FILE) as f:
+        buildstock_releases = json.load(f)
+    return cast(dict[str, dict], buildstock_releases)
 
 
 def _parse_buildstock_releases(buildstock_releases: list[str]) -> dict[str, dict]:
@@ -196,6 +197,18 @@ def _parse_buildstock_releases(buildstock_releases: list[str]) -> dict[str, dict
     return parsed_releases
 
 
+def _validate_output_directory(output_directory: str) -> bool | str:
+    """Validate that the path format is correct for a directory"""
+    try:
+        path = Path(output_directory)
+        # Check if it's a valid path format
+        path.resolve()
+    except (OSError, ValueError):
+        return "Please enter a valid directory path"
+    else:
+        return True
+
+
 def main_callback(
     release_version: int = typer.Option(None, "--release_version", "-r"),
     state: str = typer.Option(None, "--state", "-s"),
@@ -206,7 +219,7 @@ def main_callback(
     """
 
     # Retrieve available releases
-    available_releases = _get_available_releases()
+    available_releases = _get_available_releases_names()
 
     # If no arguments provided, run interactive mode
     if not any([release_version, state, file_type]):
@@ -234,6 +247,11 @@ def main_callback(
         # Retrieve release version
         selected_release_version = questionary.select("Select release version:", choices=release_versions).ask()
 
+        product_short_name = "res" if product_type == "resstock" else "com"
+        selected_release_name = (
+            f"{product_short_name}_{selected_release_year}_{selected_weather_file}_{selected_release_version}"
+        )
+
         # Retrieve state
         selected_states = questionary.checkbox(
             "Select states:",
@@ -242,9 +260,25 @@ def main_callback(
             validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
         ).ask()
 
+        # Retrieve requested file type
+        requested_file_type = questionary.checkbox(
+            "Select file type:",
+            choices=_get_file_type_options(selected_release_name),
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+            validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
+        ).ask()
+
+        # Retrieve output directory
+        output_directory = questionary.path(
+            "Select output directory:",
+            default=str(Path.cwd()),
+            only_directories=True,
+            validate=_validate_output_directory,
+        ).ask()
+
     # Process the data
     print(
-        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_states}"
+        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_states}, {requested_file_type}, {output_directory}"
     )
 
 
@@ -253,16 +287,20 @@ app.callback(invoke_without_command=True)(main_callback)
 
 if __name__ == "__main__":
     # Print the available release options
-    print(_get_available_releases())
+    print(_get_available_releases_names())
 
     # Print the parsed release options
-    print(_parse_buildstock_releases(_get_available_releases()))
+    print(_parse_buildstock_releases(_get_available_releases_names()))
 
     # Print the release years
-    available_releases, available_release_years = _get_release_years_options(_get_available_releases(), "resstock")
+    available_releases, available_release_years = _get_release_years_options(
+        _get_available_releases_names(), "resstock"
+    )
     print(available_releases)
     print(available_release_years)
-    available_releases, available_release_years = _get_release_years_options(_get_available_releases(), "comstock")
+    available_releases, available_release_years = _get_release_years_options(
+        _get_available_releases_names(), "comstock"
+    )
     print(available_releases)
     print(available_release_years)
 
