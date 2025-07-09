@@ -77,6 +77,19 @@ def _get_weather_options(
     return available_releases, available_weather_files
 
 
+def _get_release_versions_options(
+    available_releases: list[str], product_type: str, release_year: str, weather_file: str
+) -> tuple[list[str], list[str]]:
+    parsed_releases = _parse_buildstock_releases(available_releases)
+    available_releases = _filter_available_releases(
+        list(parsed_releases.keys()), product_type=product_type, release_year=release_year, weather_file=weather_file
+    )
+    available_release_versions = list({parsed_releases[release]["release_version"] for release in available_releases})
+    available_release_versions.sort()
+
+    return available_releases, available_release_versions
+
+
 def _get_state_options() -> list[str]:
     return [
         "AL",
@@ -202,16 +215,27 @@ def main_callback(
         console.print("This tool allows you to fetch data from the NREL BuildStock API.")
         console.print("Please select the release information and file type you would like to fetch:")
 
-        # Release version options
+        # Retrieve product type and filter available release years by product type
         product_type = questionary.select("Select product type:", choices=_get_product_type_options()).ask()
         available_releases, release_years = _get_release_years_options(available_releases, product_type)
+
+        # Retrieve release year and filter available weather files by release year
         selected_release_year = questionary.select("Select release year:", choices=release_years).ask()
         available_releases, weather_files = _get_weather_options(
             available_releases, product_type, selected_release_year
         )
+
+        # Retrieve weather file and filter available release versions by weather file
         selected_weather_file = questionary.select("Select weather file:", choices=weather_files).ask()
+        available_releases, release_versions = _get_release_versions_options(
+            available_releases, product_type, selected_release_year, selected_weather_file
+        )
+
+        # Retrieve release version
+        selected_release_version = questionary.select("Select release version:", choices=release_versions).ask()
+
     # Process the data
-    print(f"Result: {product_type}, {selected_release_year}, {selected_weather_file}")
+    print(f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}")
 
 
 app.callback(invoke_without_command=True)(main_callback)
