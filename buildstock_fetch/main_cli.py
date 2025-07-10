@@ -91,6 +91,16 @@ def _get_release_versions_options(
     return available_releases, available_release_versions
 
 
+def _get_upgrade_ids_options(release_name: str) -> list[str]:
+    available_releases = _get_all_available_releases()
+    available_upgrade_ids = available_releases[release_name]["upgrade_ids"]
+    available_upgrade_ids = [int(upgrade_id) for upgrade_id in available_upgrade_ids]
+    available_upgrade_ids.sort()
+    available_upgrade_ids = [str(upgrade_id) for upgrade_id in available_upgrade_ids]
+
+    return cast(list[str], available_upgrade_ids)
+
+
 def _get_state_options() -> list[str]:
     return [
         "AL",
@@ -209,6 +219,95 @@ def _validate_output_directory(output_directory: str) -> bool | str:
         return True
 
 
+def _handle_cancellation(result: str | None, message: str = "Operation cancelled by user.") -> str:
+    """Handle user cancellation and exit cleanly"""
+    if result is None:
+        console.print(f"\n[red]{message}[/red]")
+        raise typer.Exit(0) from None
+    return result
+
+
+def _run_interactive_mode() -> None:
+    """Run the interactive CLI mode"""
+    console.print(Panel("BuildStock Fetch Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
+    console.print("Welcome to the BuildStock Fetch CLI!")
+    console.print("This tool allows you to fetch data from the NREL BuildStock API.")
+    console.print("Please select the release information and file type you would like to fetch:")
+
+    # Retrieve available releases
+    available_releases = _get_available_releases_names()
+
+    # Retrieve product type and filter available release years by product type
+    product_type = _handle_cancellation(
+        questionary.select("Select product type:", choices=_get_product_type_options()).ask()
+    )
+    available_releases, release_years = _get_release_years_options(available_releases, product_type)
+
+    # Retrieve release year and filter available weather files by release year
+    selected_release_year = _handle_cancellation(
+        questionary.select("Select release year:", choices=release_years).ask()
+    )
+    available_releases, weather_files = _get_weather_options(available_releases, product_type, selected_release_year)
+
+    # Retrieve weather file and filter available release versions by weather file
+    selected_weather_file = _handle_cancellation(
+        questionary.select("Select weather file:", choices=weather_files).ask()
+    )
+    available_releases, release_versions = _get_release_versions_options(
+        available_releases, product_type, selected_release_year, selected_weather_file
+    )
+
+    # Retrieve release version
+    selected_release_version = _handle_cancellation(
+        questionary.select("Select release version:", choices=release_versions).ask()
+    )
+
+    product_short_name = "res" if product_type == "resstock" else "com"
+    selected_release_name = (
+        f"{product_short_name}_{selected_release_year}_{selected_weather_file}_{selected_release_version}"
+    )
+
+    # Retrieve upgrade id
+    selected_upgrade_id = _handle_cancellation(
+        questionary.select("Select upgrade id:", choices=_get_upgrade_ids_options(selected_release_name)).ask()
+    )
+
+    # Retrieve state
+    selected_states = _handle_cancellation(
+        questionary.checkbox(
+            "Select states:",
+            choices=_get_state_options(),
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+            validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
+        ).ask()
+    )
+
+    # Retrieve requested file type
+    requested_file_type = _handle_cancellation(
+        questionary.checkbox(
+            "Select file type:",
+            choices=_get_file_type_options(selected_release_name),
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+            validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
+        ).ask()
+    )
+
+    # Retrieve output directory
+    output_directory = _handle_cancellation(
+        questionary.path(
+            "Select output directory:",
+            default=str(Path.cwd()),
+            only_directories=True,
+            validate=_validate_output_directory,
+        ).ask()
+    )
+
+    # Process the data
+    print(
+        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_upgrade_id}, {selected_states}, {requested_file_type}, {output_directory}"
+    )
+
+
 def main_callback(
     release_version: int = typer.Option(None, "--release_version", "-r"),
     state: str = typer.Option(None, "--state", "-s"),
@@ -218,94 +317,10 @@ def main_callback(
     DBF CLI tool. Run without arguments for interactive mode.
     """
 
-    # Retrieve available releases
-    available_releases = _get_available_releases_names()
-
     # If no arguments provided, run interactive mode
     if not any([release_version, state, file_type]):
         try:
-            console.print(Panel("BuildStock Fetch Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
-            console.print("Welcome to the BuildStock Fetch CLI!")
-            console.print("This tool allows you to fetch data from the NREL BuildStock API.")
-            console.print("Please select the release information and file type you would like to fetch:")
-
-            # Retrieve product type and filter available release years by product type
-            product_type = questionary.select("Select product type:", choices=_get_product_type_options()).ask()
-            if product_type is None:
-                console.print("\n[red]Operation cancelled by user.[/red]")
-                raise typer.Exit(0)
-
-            available_releases, release_years = _get_release_years_options(available_releases, product_type)
-
-            # Retrieve release year and filter available weather files by release year
-            selected_release_year = questionary.select("Select release year:", choices=release_years).ask()
-            if selected_release_year is None:
-                console.print("\n[red]Operation cancelled by user.[/red]")
-                raise typer.Exit(0)
-
-            available_releases, weather_files = _get_weather_options(
-                available_releases, product_type, selected_release_year
-            )
-
-            # Retrieve weather file and filter available release versions by weather file
-            selected_weather_file = questionary.select("Select weather file:", choices=weather_files).ask()
-            if selected_weather_file is None:
-                console.print("\n[red]Operation cancelled by user.[/red]")
-                raise typer.Exit(0)
-
-            available_releases, release_versions = _get_release_versions_options(
-                available_releases, product_type, selected_release_year, selected_weather_file
-            )
-
-            # Retrieve release version
-            selected_release_version = questionary.select("Select release version:", choices=release_versions).ask()
-            if selected_release_version is None:
-                console.print("\n[red]Operation cancelled by user.[/red]")
-                raise typer.Exit(0)
-
-            product_short_name = "res" if product_type == "resstock" else "com"
-            selected_release_name = (
-                f"{product_short_name}_{selected_release_year}_{selected_weather_file}_{selected_release_version}"
-            )
-
-            # Retrieve state
-            selected_states = questionary.checkbox(
-                "Select states:",
-                choices=_get_state_options(),
-                instruction="Use spacebar to select/deselect options, enter to confirm",
-                validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
-            ).ask()
-            if selected_states is None:
-                console.print("\n[red]Operation cancelled by user.[/red]")
-                raise typer.Exit(0)
-
-            # Retrieve requested file type
-            requested_file_type = questionary.checkbox(
-                "Select file type:",
-                choices=_get_file_type_options(selected_release_name),
-                instruction="Use spacebar to select/deselect options, enter to confirm",
-                validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
-            ).ask()
-            if requested_file_type is None:
-                console.print("\n[red]Operation cancelled by user.[/red]")
-                raise typer.Exit(0)
-
-            # Retrieve output directory
-            output_directory = questionary.path(
-                "Select output directory:",
-                default=str(Path.cwd()),
-                only_directories=True,
-                validate=_validate_output_directory,
-            ).ask()
-            if output_directory is None:
-                console.print("\n[red]Operation cancelled by user.[/red]")
-                raise typer.Exit(0)
-
-            # Process the data
-            print(
-                f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_states}, {requested_file_type}, {output_directory}"
-            )
-
+            _run_interactive_mode()
         except KeyboardInterrupt:
             console.print("\n[red]Operation cancelled by user.[/red]")
             raise typer.Exit(0) from None
