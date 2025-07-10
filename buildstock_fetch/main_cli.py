@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import cast
+from typing import Union, cast
 
 import questionary
 import typer
@@ -27,10 +27,10 @@ BUILDSTOCK_RELEASES_FILE = Path(__file__).parent.parent / "utils" / "buildstock_
 
 def _filter_available_releases(
     available_releases: list[str],
-    product_type: str | None = None,
-    release_year: str | None = None,
-    weather_file: str | None = None,
-    release_version: str | None = None,
+    product_type: Union[str, None] = None,
+    release_year: Union[str, None] = None,
+    weather_file: Union[str, None] = None,
+    release_version: Union[str, None] = None,
 ) -> list[str]:
     parsed_releases = _parse_buildstock_releases(available_releases)
     filtered_releases = []
@@ -221,7 +221,7 @@ def _validate_output_directory(output_directory: str) -> bool | str:
         return True
 
 
-def _handle_cancellation(result: str | None, message: str = "Operation cancelled by user.") -> str:
+def _handle_cancellation(result: Union[str, None], message: str = "Operation cancelled by user.") -> str:
     """Handle user cancellation and exit cleanly"""
     if result is None:
         console.print(f"\n[red]{message}[/red]")

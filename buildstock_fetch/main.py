@@ -1,6 +1,7 @@
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Union
 
 import pandas as pd
 import requests
@@ -170,7 +171,7 @@ def fetch_bldg_ids(
     return building_ids
 
 
-def fetch_bldg_data(bldg_ids: list[BuildingID], output_directory: Path | None = None) -> list[Path]:
+def fetch_bldg_data(bldg_ids: list[BuildingID], output_directory: Union[Path, None] = None) -> list[Path]:
     """Download building data for a given list of building ids
 
     Downloads the data for the given building ids and returns list of paths to the downloaded files.

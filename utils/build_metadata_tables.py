@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Union
 
 import boto3
 import pandas as pd
@@ -156,13 +157,13 @@ def _handle_bldg_id_column(df: pd.DataFrame, file_key: str, s3: fs.S3FileSystem,
     return df
 
 
-def _validate_bldg_id(df: pd.DataFrame, release_name: str | None) -> bool:
+def _validate_bldg_id(df: pd.DataFrame, release_name: Union[str, None]) -> bool:
     """
     Validate bldg_id column and return True if valid.
 
     Args:
         df (pd.DataFrame): DataFrame to validate
-        release_name (str | None): Name of the release for error reporting
+        release_name (Union[str, None]): Name of the release for error reporting
 
     Returns:
         bool: True if bldg_id is valid, False otherwise
@@ -199,17 +200,21 @@ def _validate_bldg_id(df: pd.DataFrame, release_name: str | None) -> bool:
 
 
 def _add_metadata_columns(
-    df: pd.DataFrame, res_com: str | None, weather: str | None, release_version: str | None, release_year: str | None
+    df: pd.DataFrame,
+    res_com: Union[str, None],
+    weather: Union[str, None],
+    release_version: Union[str, None],
+    release_year: Union[str, None],
 ) -> pd.DataFrame:
     """
     Add metadata columns to DataFrame.
 
     Args:
         df (pd.DataFrame): DataFrame to add columns to
-        res_com (str | None): The res_com value
-        weather (str | None): The weather value
-        release_version (str | None): The release number
-        release_year (str | None): The release year
+        res_com (Union[str, None]): The res_com value
+        weather (Union[str, None]): The weather value
+        release_version (Union[str, None]): The release number
+        release_year (Union[str, None]): The release year
 
     Returns:
         pd.DataFrame: DataFrame with metadata columns added
@@ -230,12 +235,12 @@ def process_parquet_file(
     file_key: str,
     s3: fs.S3FileSystem,
     bucket_name: str,
-    res_com: str | None = None,
-    weather: str | None = None,
-    release_version: str | None = None,
-    release_year: str | None = None,
-    release_name: str | None = None,
-) -> pd.DataFrame | None:
+    res_com: Union[str, None] = None,
+    weather: Union[str, None] = None,
+    release_version: Union[str, None] = None,
+    release_year: Union[str, None] = None,
+    release_name: Union[str, None] = None,
+) -> Union[pd.DataFrame, None]:
     """
     Process a parquet file from S3 and return a pandas DataFrame.
 
@@ -297,7 +302,7 @@ def find_metadata_files(base_file_key: str, file_key_suffix: str, s3_client, buc
     return download_files
 
 
-def _extract_upgrade_number(filename: str) -> str | None:
+def _extract_upgrade_number(filename: str) -> Union[str, None]:
     """
     Extract upgrade number from filename like 'AK_G0200130_upgrade01.parquet'.
 
@@ -305,7 +310,7 @@ def _extract_upgrade_number(filename: str) -> str | None:
         filename (str): The filename to parse
 
     Returns:
-        str | None: The upgrade number (e.g., '01') or None if not found
+        Union[str, None]: The upgrade number (e.g., '01') or None if not found
     """
     if "upgrade" not in filename:
         return None
