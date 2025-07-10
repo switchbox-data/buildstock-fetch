@@ -25,6 +25,7 @@ dependencies = [
     "rich>=13.9.5",
     "questionary>=1.11.0",
     "pandas>=2.0.0",
+    "pyarrow>=10.0.0",
 ]
 
 [project.urls]
@@ -48,6 +49,7 @@ dev = [
     "mkdocstrings[python]>=0.26.1",
     "types-requests>=2.31.0",
     "types-boto3",
+    "pandas-stubs>=2.0.0",
 ]
 
 [build-system]

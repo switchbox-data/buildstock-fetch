@@ -1,5 +1,4 @@
 import json
-import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -30,13 +29,55 @@ class BuildingID:
 
     def get_download_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        return (
-            "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/"
-            f"end-use-load-profiles-for-us-building-stock/{self.release_year}/"
-            f"{self.res_com}_{self.weather}_release_{self.release_number}/"
-            f"building_energy_models/upgrade={self.upgrade_id}/"
-            f"bldg{self.bldg_id:07}-up0{self.upgrade_id}.zip"
-        )
+        if (
+            self.res_com == "resstock"
+            and self.release_year == "2021"
+            and self.weather == "tmy3"
+            and self.release_number == "1"
+        ):
+            return (
+                "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/"
+                f"end-use-load-profiles-for-us-building-stock/{self.release_year}/"
+                f"{self.res_com}_{self.weather}_release_{self.release_number}/"
+                f"building_energy_models/"
+                f"bldg{self.bldg_id:07}-up0{self.upgrade_id}.osm.gz"
+            )
+        elif (
+            self.res_com == "comstock"
+            and self.release_year == "2023"
+            and self.weather == "amy2018"
+            and self.release_number == "1"
+        ):
+            upgrade_id = int(self.upgrade_id)
+            return (
+                "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/"
+                f"end-use-load-profiles-for-us-building-stock/{self.release_year}/"
+                f"{self.res_com}_{self.weather}_release_{self.release_number}/"
+                f"building_energy_model_files/upgrade={upgrade_id:02}/"
+                f"bldg{self.bldg_id}-up{upgrade_id:02}.osm.gz"
+            )
+        elif (
+            self.res_com == "comstock"
+            and self.release_year == "2024"
+            and self.weather == "amy2018"
+            and self.release_number == "1"
+        ):
+            upgrade_id = int(self.upgrade_id)
+            return (
+                "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/"
+                f"end-use-load-profiles-for-us-building-stock/{self.release_year}/"
+                f"{self.res_com}_{self.weather}_release_{self.release_number}/"
+                f"building_energy_models/upgrade={upgrade_id:02}/"
+                f"bldg{self.bldg_id:07}-up{upgrade_id:02}.osm.gz"
+            )
+        else:
+            return (
+                "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/"
+                f"end-use-load-profiles-for-us-building-stock/{self.release_year}/"
+                f"{self.res_com}_{self.weather}_release_{self.release_number}/"
+                f"building_energy_models/upgrade={self.upgrade_id}/"
+                f"bldg{self.bldg_id:07}-up0{self.upgrade_id}.zip"
+            )
 
     def to_json(self) -> str:
         """Convert the building ID object to a JSON string."""
@@ -129,7 +170,7 @@ def fetch_bldg_ids(
     return building_ids
 
 
-def fetch_bldg_data(bldg_ids: list[BuildingID]) -> list[Path]:
+def fetch_bldg_data(bldg_ids: list[BuildingID], output_directory: Path | None = None) -> list[Path]:
     """Download building data for a given list of building ids
 
     Downloads the data for the given building ids and returns list of paths to the downloaded files.
@@ -140,15 +181,15 @@ def fetch_bldg_data(bldg_ids: list[BuildingID]) -> list[Path]:
     Returns:
         A list of paths to the downloaded files.
     """
-    data_dir = Path(__file__).parent.parent / "data"
+    output_directory = Path(__file__).parent.parent / "data" if output_directory is None else Path(output_directory)
+    output_directory.mkdir(parents=True, exist_ok=True)
     downloaded_paths = []
-    os.makedirs(data_dir, exist_ok=True)
 
     for bldg_id in bldg_ids:
         response = requests.get(bldg_id.get_download_url(), timeout=30)
         response.raise_for_status()
 
-        output_path = data_dir / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
+        output_path = output_directory / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
         with open(output_path, "wb") as file:
             file.write(response.content)
 

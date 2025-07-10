@@ -7,6 +7,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
+
 # Initialize Rich console
 console = Console()
 
@@ -227,7 +229,7 @@ def _handle_cancellation(result: str | None, message: str = "Operation cancelled
     return result
 
 
-def _run_interactive_mode() -> None:
+def _run_interactive_mode() -> dict[str, str]:
     """Run the interactive CLI mode"""
     console.print(Panel("BuildStock Fetch Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
     console.print("Welcome to the BuildStock Fetch CLI!")
@@ -293,7 +295,7 @@ def _run_interactive_mode() -> None:
     )
 
     # Retrieve output directory
-    output_directory = _handle_cancellation(
+    output_directory_str = _handle_cancellation(
         questionary.path(
             "Select output directory:",
             default=str(Path.cwd()),
@@ -301,11 +303,23 @@ def _run_interactive_mode() -> None:
             validate=_validate_output_directory,
         ).ask()
     )
+    output_directory_path = Path(output_directory_str)
+    output_directory_path.mkdir(parents=True, exist_ok=True)
 
     # Process the data
     print(
-        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_upgrade_id}, {selected_states}, {requested_file_type}, {output_directory}"
+        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_upgrade_id}, {selected_states}, {requested_file_type}, {output_directory_path}"
     )
+    return {
+        "product": product_type,
+        "release_year": selected_release_year,
+        "weather_file": selected_weather_file,
+        "release_version": selected_release_version,
+        "upgrade_id": selected_upgrade_id,
+        "states": selected_states,
+        "file_type": requested_file_type,
+        "output_directory": str(output_directory_path),
+    }
 
 
 def main_callback(
@@ -320,10 +334,26 @@ def main_callback(
     # If no arguments provided, run interactive mode
     if not any([release_version, state, file_type]):
         try:
-            _run_interactive_mode()
+            inputs = _run_interactive_mode()
         except KeyboardInterrupt:
             console.print("\n[red]Operation cancelled by user.[/red]")
             raise typer.Exit(0) from None
+
+    # Fetch the building ids
+    bldg_ids = []
+    for state in inputs["states"]:
+        bldg_id = fetch_bldg_ids(
+            inputs["product"],
+            inputs["release_year"],
+            inputs["weather_file"],
+            inputs["release_version"],
+            state,
+            inputs["upgrade_id"],
+        )
+        bldg_ids.extend(bldg_id)
+
+    # Fetch the building data (Only the first 10 for now)
+    fetch_bldg_data(bldg_ids[:10], Path(inputs["output_directory"]))
 
 
 app.callback(invoke_without_command=True)(main_callback)
