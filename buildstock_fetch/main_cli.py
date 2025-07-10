@@ -209,7 +209,7 @@ def _parse_buildstock_releases(buildstock_releases: list[str]) -> dict[str, dict
     return parsed_releases
 
 
-def _validate_output_directory(output_directory: str) -> bool | str:
+def _validate_output_directory(output_directory: str) -> Union[bool, str]:
     """Validate that the path format is correct for a directory"""
     try:
         path = Path(output_directory)
