@@ -121,8 +121,8 @@ def fetch_bldg_ids(
     Returns:
         A list of building ID's for the given state.
     """
-    # Construct the absolute path to the parquet directory
-    parquet_dir = Path("/workspaces/buildstock-fetch/utils/building_data/combined_metadata.parquet")
+    # Construct the path to the parquet directory
+    parquet_dir = Path(__file__).parent.parent / "utils" / "building_data" / "combined_metadata.parquet"
 
     if product == "resstock":
         product_str = "res"
