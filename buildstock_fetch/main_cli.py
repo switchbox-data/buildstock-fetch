@@ -322,21 +322,76 @@ def _run_interactive_mode() -> dict[str, str]:
     }
 
 
+def _validate_direct_inputs(inputs: dict[str, str]) -> bool:
+    """Validate the direct inputs"""
+    if not all([
+        inputs["product"],
+        inputs["release_year"],
+        inputs["weather_file"],
+        inputs["release_version"],
+        inputs["state"],
+        inputs["file_type"],
+        inputs["upgrade_id"],
+        inputs["output_directory"],
+    ]):
+        return False
+
+    available_releases = _get_all_available_releases()
+    # Check for valid release name
+    release_name = f"{inputs['product']}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
+    if release_name not in available_releases:
+        return False
+
+    # Check for valid upgrade id
+    if inputs["upgrade_id"] not in available_releases[release_name]["upgrade_ids"]:
+        return False
+
+    # Check for valid file type
+    if inputs["file_type"] not in available_releases[release_name]["available_data"]:
+        return False
+
+    # Check for valid state
+    if inputs["state"] not in _get_state_options():
+        return False
+
+    # Check for valid output directory
+    return _validate_output_directory(inputs["output_directory"]) is True
+
+
 def main_callback(
+    product: str = typer.Option(None, "--product", "-p"),
+    release_year: str = typer.Option(None, "--release_year", "-y"),
+    weather_file: str = typer.Option(None, "--weather_file", "-w"),
     release_version: int = typer.Option(None, "--release_version", "-r"),
     state: str = typer.Option(None, "--state", "-s"),
     file_type: str = typer.Option(None, "--file_type", "-f"),
+    upgrade_id: int = typer.Option(None, "--upgrade_id", "-u"),
+    output_directory: str = typer.Option(None, "--output_directory", "-o"),
 ) -> None:
     """
     DBF CLI tool. Run without arguments for interactive mode.
     """
 
     # If no arguments provided, run interactive mode
-    if not any([release_version, state, file_type]):
+    if not any([product, release_year, weather_file, release_version, state, file_type]):
         try:
             inputs = _run_interactive_mode()
         except KeyboardInterrupt:
             console.print("\n[red]Operation cancelled by user.[/red]")
+            raise typer.Exit(0) from None
+    else:
+        inputs = {
+            "product": product,
+            "release_year": release_year,
+            "weather_file": weather_file,
+            "release_version": str(release_version),
+            "state": state,
+            "file_type": file_type,
+            "upgrade_id": str(upgrade_id),
+            "output_directory": output_directory,
+        }
+        if not _validate_direct_inputs(inputs):
+            console.print("\n[red]Invalid inputs. Please check the inputs and try again.[/red]")
             raise typer.Exit(0) from None
 
     # Fetch the building ids
@@ -356,7 +411,7 @@ def main_callback(
     fetch_bldg_data(bldg_ids[:10], Path(inputs["output_directory"]))
 
 
-app.callback(invoke_without_command=True)(main_callback)
+app.command()(main_callback)
 
 
 if __name__ == "__main__":
