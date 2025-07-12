@@ -322,81 +322,104 @@ def _run_interactive_mode() -> dict[str, str]:
     }
 
 
-def _validate_direct_inputs(inputs: dict[str, str]) -> bool:
+def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
     """Validate the direct inputs"""
     if not all([
         inputs["product"],
         inputs["release_year"],
         inputs["weather_file"],
         inputs["release_version"],
-        inputs["state"],
+        inputs["states"],
         inputs["file_type"],
         inputs["upgrade_id"],
         inputs["output_directory"],
     ]):
-        return False
+        return "Please provide all required inputs"
 
     available_releases = _get_all_available_releases()
     # Check for valid release name
-    release_name = f"{inputs['product']}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
+    product_short_name = "res" if inputs["product"] == "resstock" else "com"
+    release_name = f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
     if release_name not in available_releases:
-        return False
+        return f"Invalid release name: {release_name}"
 
     # Check for valid upgrade id
     if inputs["upgrade_id"] not in available_releases[release_name]["upgrade_ids"]:
-        return False
+        return f"Invalid upgrade id: {inputs['upgrade_id']}"
 
     # Check for valid file type
     if inputs["file_type"] not in available_releases[release_name]["available_data"]:
-        return False
+        return f"Invalid file type: {inputs['file_type']}"
 
     # Check for valid state
-    if inputs["state"] not in _get_state_options():
-        return False
+    for state in inputs["states"]:
+        if state not in _get_state_options():
+            return f"Invalid state: {state}"
 
     # Check for valid output directory
-    return _validate_output_directory(inputs["output_directory"]) is True
+    output_directory_validation = _validate_output_directory(str(inputs["output_directory"]))
+    if output_directory_validation is not True:
+        return f"Invalid output directory: {inputs['output_directory']}"
+
+    return True
+
+
+# Module-level option definitions
+PRODUCT_OPTION = typer.Option(None, "--product", "-p")
+RELEASE_YEAR_OPTION = typer.Option(None, "--release_year", "-y")
+WEATHER_FILE_OPTION = typer.Option(None, "--weather_file", "-w")
+RELEASE_VERSION_OPTION = typer.Option(None, "--release_version", "-r")
+STATES_OPTION = typer.Option(None, "--states", "-s", help="List of states (can be specified multiple times)")
+FILE_TYPE_OPTION = typer.Option(None, "--file_type", "-f")
+UPGRADE_ID_OPTION = typer.Option(None, "--upgrade_id", "-u")
+OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o")
 
 
 def main_callback(
-    product: str = typer.Option(None, "--product", "-p"),
-    release_year: str = typer.Option(None, "--release_year", "-y"),
-    weather_file: str = typer.Option(None, "--weather_file", "-w"),
-    release_version: int = typer.Option(None, "--release_version", "-r"),
-    state: str = typer.Option(None, "--state", "-s"),
-    file_type: str = typer.Option(None, "--file_type", "-f"),
-    upgrade_id: int = typer.Option(None, "--upgrade_id", "-u"),
-    output_directory: str = typer.Option(None, "--output_directory", "-o"),
+    product: str = PRODUCT_OPTION,
+    release_year: str = RELEASE_YEAR_OPTION,
+    weather_file: str = WEATHER_FILE_OPTION,
+    release_version: int = RELEASE_VERSION_OPTION,
+    states: str = STATES_OPTION,
+    file_type: str = FILE_TYPE_OPTION,
+    upgrade_id: int = UPGRADE_ID_OPTION,
+    output_directory: str = OUTPUT_DIRECTORY_OPTION,
 ) -> None:
     """
     DBF CLI tool. Run without arguments for interactive mode.
     """
 
     # If no arguments provided, run interactive mode
-    if not any([product, release_year, weather_file, release_version, state, file_type]):
+    if not any([product, release_year, weather_file, release_version, states, file_type]):
         try:
             inputs = _run_interactive_mode()
         except KeyboardInterrupt:
             console.print("\n[red]Operation cancelled by user.[/red]")
             raise typer.Exit(0) from None
     else:
+        states_list = states.split() if states else []
+
         inputs = {
             "product": product,
             "release_year": release_year,
             "weather_file": weather_file,
             "release_version": str(release_version),
-            "state": state,
+            "states": states_list,  # type: ignore[dict-item]
             "file_type": file_type,
             "upgrade_id": str(upgrade_id),
             "output_directory": output_directory,
         }
-        if not _validate_direct_inputs(inputs):
-            console.print("\n[red]Invalid inputs. Please check the inputs and try again.[/red]")
+        validation_result = _validate_direct_inputs(inputs)  # type: ignore[arg-type]
+        if validation_result is not True:
+            console.print(f"\n[red]{validation_result}[/red]")
             raise typer.Exit(0) from None
 
     # Fetch the building ids
     bldg_ids = []
     for state in inputs["states"]:
+        state = state.strip()
+        if state == "":
+            continue
         bldg_id = fetch_bldg_ids(
             inputs["product"],
             inputs["release_year"],
