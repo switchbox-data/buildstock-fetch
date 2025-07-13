@@ -46,7 +46,13 @@ class BuildingID:
 
     def get_metadata_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        return f"{self.base_url}metadata/metadata.parquet"
+        if self.res_com == "resstock" and self.weather == "tmy3" and self.release_year == "2022":
+            if self.upgrade_id == "0":
+                return f"{self.base_url}metadata/baseline.parquet"
+            else:
+                return f"{self.base_url}metadata/upgrade{int(self.upgrade_id):02}.parquet"
+        else:
+            return f"{self.base_url}metadata/metadata.parquet"
 
     def get_release_name(self) -> str:
         """Generate the release name for this building."""
