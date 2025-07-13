@@ -9,6 +9,18 @@ import requests
 
 
 @dataclass
+class FileType:
+    hpxml: bool = False
+    schedule: bool = False
+    metadata: bool = False
+    time_series_15min: bool = False
+    time_series_hourly: bool = False
+    time_series_daily: bool = False
+    time_series_weekly: bool = False
+    time_series_monthly: bool = False
+
+
+@dataclass
 class BuildingID:
     bldg_id: int
     release_number: str = "1"
@@ -31,6 +43,15 @@ class BuildingID:
             f"building_energy_models/upgrade={self.upgrade_id}/"
             f"bldg{self.bldg_id:07}-up0{self.upgrade_id}.zip"
         )
+
+    def get_metadata_url(self) -> str:
+        """Generate the S3 download URL for this building."""
+        return f"{self.base_url}metadata/metadata.parquet"
+
+    def get_release_name(self) -> str:
+        """Generate the release name for this building."""
+        res_com_str = "res" if self.res_com == "resstock" else "com"
+        return f"{res_com_str}stock_{self.weather}_release_{self.release_number}"
 
     def to_json(self) -> str:
         """Convert the building ID object to a JSON string."""
@@ -59,7 +80,7 @@ def fetch_bldg_ids(state: str) -> list[BuildingID]:
         raise NotImplementedError(f"State {state} not supported")
 
 
-def fetch_bldg_data_core(bldg_ids: list[BuildingID], file_type: list[str], output_dir: Path) -> list[Path]:
+def fetch_bldg_data_core(bldg_ids: list[BuildingID], file_type: FileType, output_dir: Path) -> list[Path]:
     """Download building data for a given list of building ids
 
     Downloads the data for the given building ids and returns list of paths to the downloaded files.
@@ -80,7 +101,7 @@ def fetch_bldg_data_core(bldg_ids: list[BuildingID], file_type: list[str], outpu
     downloaded_paths = []
 
     for bldg_id in bldg_ids:
-        if "hpxml" in file_type or "schedule" in file_type:
+        if file_type.hpxml or file_type.schedule:
             base_url = bldg_id.get_building_data_url()
             response = requests.get(base_url, timeout=30)
             response.raise_for_status()
@@ -93,7 +114,7 @@ def fetch_bldg_data_core(bldg_ids: list[BuildingID], file_type: list[str], outpu
             with zipfile.ZipFile(output_file, "r") as zip_ref:
                 zip_file_list = zip_ref.namelist()
 
-                if "hpxml" in file_type:
+                if file_type.hpxml:
                     # Find and extract the XML file
                     xml_files = [f for f in zip_file_list if f.endswith(".xml")]
                     if xml_files:
@@ -106,7 +127,7 @@ def fetch_bldg_data_core(bldg_ids: list[BuildingID], file_type: list[str], outpu
                         old_path.rename(new_path)
                         downloaded_paths.append(new_path)
 
-                if "schedule" in file_type:
+                if file_type.schedule:
                     # Find and extract the schedule CSV file
                     schedule_files = [f for f in zip_file_list if "schedule" in f.lower() and f.endswith(".csv")]
                     if schedule_files:
@@ -121,6 +142,18 @@ def fetch_bldg_data_core(bldg_ids: list[BuildingID], file_type: list[str], outpu
 
             # Remove the zip file after extraction
             output_file.unlink()
+
+    # Get metadata if requested
+    bldg = bldg_ids[0]
+    if file_type.metadata:
+        base_url = bldg.get_metadata_url()
+        response = requests.get(base_url, timeout=30)
+        response.raise_for_status()
+
+        output_file = output_dir / f"{bldg.get_release_name()}_metadata.parquet"
+        with open(output_file, "wb") as file:
+            file.write(response.content)
+        downloaded_paths.append(output_file)
 
     return downloaded_paths
 
@@ -140,7 +173,25 @@ def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_di
     Returns:
         A list of paths to the downloaded files.
     """
-    return fetch_bldg_data_core(bldg_ids, list(file_type), output_dir)
+    file_type_obj = FileType()
+    if "hpxml" in file_type:
+        file_type_obj.hpxml = True
+    if "schedule" in file_type:
+        file_type_obj.schedule = True
+    if "metadata" in file_type:
+        file_type_obj.metadata = True
+    if "time_series_15min" in file_type:
+        file_type_obj.time_series_15min = True
+    if "time_series_hourly" in file_type:
+        file_type_obj.time_series_hourly = True
+    if "time_series_daily" in file_type:
+        file_type_obj.time_series_daily = True
+    if "time_series_weekly" in file_type:
+        file_type_obj.time_series_weekly = True
+    if "time_series_monthly" in file_type:
+        file_type_obj.time_series_monthly = True
+
+    return fetch_bldg_data_core(bldg_ids, file_type_obj, output_dir)
 
 
 if __name__ == "__main__":  # pragma: no cover
