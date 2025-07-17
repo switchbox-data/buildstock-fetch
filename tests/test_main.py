@@ -6,7 +6,7 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from buildstock_fetch.main import BuildingID, FileType, download_bldg_data, fetch_bldg_ids
+from buildstock_fetch.main import BuildingID, RequestedFileTypes, download_bldg_data, fetch_bldg_ids
 
 
 @pytest.fixture(scope="function")
@@ -46,7 +46,9 @@ def test_building_id_config():
 def test_fetch_bldg_data(cleanup_downloads):
     # Test fetching HPXML files
     download_bldg_data(
-        bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)], file_type=FileType(hpxml=True), output_dir=Path("data")
+        bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)],
+        file_type=RequestedFileTypes(hpxml=True),
+        output_dir=Path("data"),
     )
     assert Path("data/bldg0000007-up00.xml").exists()
     assert Path("data/bldg0000008-up00.xml").exists()
@@ -54,7 +56,7 @@ def test_fetch_bldg_data(cleanup_downloads):
     # Test fetching schedule files
     download_bldg_data(
         bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)],
-        file_type=FileType(schedule=True),
+        file_type=RequestedFileTypes(schedule=True),
         output_dir=Path("data"),
     )
     assert Path("data/bldg0000007-up00_schedule.csv").exists()
@@ -63,7 +65,7 @@ def test_fetch_bldg_data(cleanup_downloads):
     # Test fetching both HPXML and schedule files
     download_bldg_data(
         bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)],
-        file_type=FileType(hpxml=True, schedule=True),
+        file_type=RequestedFileTypes(hpxml=True, schedule=True),
         output_dir=Path("data"),
     )
     assert Path("data/bldg0000007-up00.xml").exists()
@@ -75,7 +77,7 @@ def test_fetch_bldg_data(cleanup_downloads):
     bldg = BuildingID(bldg_id=7)
     download_bldg_data(
         bldg_ids=[bldg],
-        file_type=FileType(metadata=True),
+        file_type=RequestedFileTypes(metadata=True),
         output_dir=Path("data"),
     )
     print(bldg.get_metadata_url())

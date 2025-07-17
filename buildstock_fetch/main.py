@@ -9,7 +9,7 @@ import requests
 
 
 @dataclass
-class FileType:
+class RequestedFileTypes:
     hpxml: bool = False
     schedule: bool = False
     metadata: bool = False
@@ -86,7 +86,7 @@ def fetch_bldg_ids(state: str) -> list[BuildingID]:
         raise NotImplementedError(f"State {state} not supported")
 
 
-def download_bldg_data(bldg_ids: list[BuildingID], file_type: FileType, output_dir: Path) -> list[Path]:
+def download_bldg_data(bldg_ids: list[BuildingID], file_type: RequestedFileTypes, output_dir: Path) -> list[Path]:
     """Download building data for a given list of building ids
 
     Downloads the data for the given building ids and returns list of paths to the downloaded files.
@@ -179,7 +179,7 @@ def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_di
     Returns:
         A list of paths to the downloaded files.
     """
-    file_type_obj = FileType()
+    file_type_obj = RequestedFileTypes()
     if "hpxml" in file_type:
         file_type_obj.hpxml = True
     if "schedule" in file_type:
