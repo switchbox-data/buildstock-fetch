@@ -6,7 +6,7 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from buildstock_fetch.main import BuildingID, FileType, fetch_bldg_data_core, fetch_bldg_ids
+from buildstock_fetch.main import BuildingID, FileType, download_bldg_data, fetch_bldg_ids
 
 
 @pytest.fixture(scope="function")
@@ -45,14 +45,14 @@ def test_building_id_config():
 
 def test_fetch_bldg_data(cleanup_downloads):
     # Test fetching HPXML files
-    fetch_bldg_data_core(
+    download_bldg_data(
         bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)], file_type=FileType(hpxml=True), output_dir=Path("data")
     )
     assert Path("data/bldg0000007-up00.xml").exists()
     assert Path("data/bldg0000008-up00.xml").exists()
 
     # Test fetching schedule files
-    fetch_bldg_data_core(
+    download_bldg_data(
         bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)],
         file_type=FileType(schedule=True),
         output_dir=Path("data"),
@@ -61,7 +61,7 @@ def test_fetch_bldg_data(cleanup_downloads):
     assert Path("data/bldg0000008-up00_schedule.csv").exists()
 
     # Test fetching both HPXML and schedule files
-    fetch_bldg_data_core(
+    download_bldg_data(
         bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)],
         file_type=FileType(hpxml=True, schedule=True),
         output_dir=Path("data"),
@@ -73,7 +73,7 @@ def test_fetch_bldg_data(cleanup_downloads):
 
     # Test fetching metadata
     bldg = BuildingID(bldg_id=7)
-    fetch_bldg_data_core(
+    download_bldg_data(
         bldg_ids=[bldg],
         file_type=FileType(metadata=True),
         output_dir=Path("data"),

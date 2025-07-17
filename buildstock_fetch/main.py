@@ -86,7 +86,7 @@ def fetch_bldg_ids(state: str) -> list[BuildingID]:
         raise NotImplementedError(f"State {state} not supported")
 
 
-def fetch_bldg_data_core(bldg_ids: list[BuildingID], file_type: FileType, output_dir: Path) -> list[Path]:
+def download_bldg_data(bldg_ids: list[BuildingID], file_type: FileType, output_dir: Path) -> list[Path]:
     """Download building data for a given list of building ids
 
     Downloads the data for the given building ids and returns list of paths to the downloaded files.
@@ -197,7 +197,7 @@ def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_di
     if "time_series_monthly" in file_type:
         file_type_obj.time_series_monthly = True
 
-    return fetch_bldg_data_core(bldg_ids, file_type_obj, output_dir)
+    return download_bldg_data(bldg_ids, file_type_obj, output_dir)
 
 
 if __name__ == "__main__":  # pragma: no cover
