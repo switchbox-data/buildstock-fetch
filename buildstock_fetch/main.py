@@ -5,7 +5,6 @@ import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import click
 import requests
 
 
@@ -171,11 +170,7 @@ def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes
     return file_type_obj
 
 
-@click.command()
-@click.argument("bldg_ids", nargs=-1, required=True)
-@click.argument("file_type", nargs=-1, required=True)
-@click.argument("output_dir", default=Path(__file__).parent / "data")
-def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_dir: Path) -> list[Path]:
+def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str, ...], output_dir: Path) -> list[Path]:
     """Download building data for a given list of building ids
 
     Downloads the data for the given building ids and returns list of paths to the downloaded files.
@@ -214,6 +209,6 @@ def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_di
 
 
 if __name__ == "__main__":  # pragma: no cover
-    tmp_ids = fetch_bldg_ids("MA")
-    tmp_data = fetch_bldg_data(tmp_ids)
+    tmp_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=9)]
+    tmp_data = fetch_bldg_data(tmp_ids, ("hpxml", "schedule", "metadata"), Path(__file__).parent / "data")
     print(f"Downloaded files: {[str(path) for path in tmp_data]}")

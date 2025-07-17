@@ -98,7 +98,7 @@ def test_parse_requested_file_type():
     )
 
 
-def test_fetch_bldg_data(cleanup_downloads):
+def test_download_bldg_data(cleanup_downloads):
     # Test fetching HPXML files
     download_bldg_data(
         bldg_id=BuildingID(bldg_id=7),

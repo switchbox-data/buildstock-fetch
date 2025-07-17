@@ -29,7 +29,6 @@ name = "buildstock-fetch"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
-    { name = "click" },
     { name = "requests" },
 ]
 
@@ -48,10 +47,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "click", specifier = ">=8.1.0" },
-    { name = "requests", specifier = ">=2.32.3" },
-]
+requires-dist = [{ name = "requests", specifier = ">=2.32.3" }]
 
 [package.metadata.requires-dev]
 dev = [
