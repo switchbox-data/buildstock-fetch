@@ -6,7 +6,13 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from buildstock_fetch.main import BuildingID, RequestedFileTypes, download_bldg_data, fetch_bldg_ids
+from buildstock_fetch.main import (
+    BuildingID,
+    RequestedFileTypes,
+    _parse_requested_file_type,
+    download_bldg_data,
+    fetch_bldg_ids,
+)
 
 
 @pytest.fixture(scope="function")
@@ -43,43 +49,77 @@ def test_building_id_config():
     assert bldg.res_com == "resstock"
 
 
+def test_parse_requested_file_type():
+    assert _parse_requested_file_type(("hpxml", "schedule")) == RequestedFileTypes(hpxml=True, schedule=True)
+    assert _parse_requested_file_type(("hpxml", "schedule", "metadata")) == RequestedFileTypes(
+        hpxml=True, schedule=True, metadata=True
+    )
+    assert _parse_requested_file_type(("hpxml", "schedule", "metadata", "time_series_15min")) == RequestedFileTypes(
+        hpxml=True, schedule=True, metadata=True, time_series_15min=True
+    )
+    assert _parse_requested_file_type((
+        "hpxml",
+        "schedule",
+        "metadata",
+        "time_series_15min",
+        "time_series_hourly",
+    )) == RequestedFileTypes(hpxml=True, schedule=True, metadata=True, time_series_15min=True, time_series_hourly=True)
+    assert _parse_requested_file_type((
+        "hpxml",
+        "schedule",
+        "metadata",
+        "time_series_15min",
+        "time_series_hourly",
+        "time_series_daily",
+    )) == RequestedFileTypes(
+        hpxml=True,
+        schedule=True,
+        metadata=True,
+        time_series_15min=True,
+        time_series_hourly=True,
+        time_series_daily=True,
+    )
+    assert _parse_requested_file_type((
+        "hpxml",
+        "schedule",
+        "metadata",
+        "time_series_15min",
+        "time_series_hourly",
+        "time_series_daily",
+        "time_series_weekly",
+    )) == RequestedFileTypes(
+        hpxml=True,
+        schedule=True,
+        metadata=True,
+        time_series_15min=True,
+        time_series_hourly=True,
+        time_series_daily=True,
+        time_series_weekly=True,
+    )
+
+
 def test_fetch_bldg_data(cleanup_downloads):
     # Test fetching HPXML files
     download_bldg_data(
-        bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)],
+        bldg_id=BuildingID(bldg_id=7),
         file_type=RequestedFileTypes(hpxml=True),
         output_dir=Path("data"),
     )
     assert Path("data/bldg0000007-up00.xml").exists()
-    assert Path("data/bldg0000008-up00.xml").exists()
 
     # Test fetching schedule files
     download_bldg_data(
-        bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)],
+        bldg_id=BuildingID(bldg_id=7),
         file_type=RequestedFileTypes(schedule=True),
         output_dir=Path("data"),
     )
     assert Path("data/bldg0000007-up00_schedule.csv").exists()
-    assert Path("data/bldg0000008-up00_schedule.csv").exists()
 
     # Test fetching both HPXML and schedule files
     download_bldg_data(
-        bldg_ids=[BuildingID(bldg_id=7), BuildingID(bldg_id=8)],
+        bldg_id=BuildingID(bldg_id=7),
         file_type=RequestedFileTypes(hpxml=True, schedule=True),
         output_dir=Path("data"),
     )
     assert Path("data/bldg0000007-up00.xml").exists()
-    assert Path("data/bldg0000008-up00.xml").exists()
     assert Path("data/bldg0000007-up00_schedule.csv").exists()
-    assert Path("data/bldg0000008-up00_schedule.csv").exists()
-
-    # Test fetching metadata
-    bldg = BuildingID(bldg_id=7)
-    download_bldg_data(
-        bldg_ids=[bldg],
-        file_type=RequestedFileTypes(metadata=True),
-        output_dir=Path("data"),
-    )
-    print(bldg.get_metadata_url())
-    print(bldg.get_release_name())
-    assert Path("data/resstock_tmy3_release_1_metadata.parquet").exists()

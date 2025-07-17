@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import os
 import zipfile
@@ -86,14 +87,12 @@ def fetch_bldg_ids(state: str) -> list[BuildingID]:
         raise NotImplementedError(f"State {state} not supported")
 
 
-def download_bldg_data(bldg_ids: list[BuildingID], file_type: RequestedFileTypes, output_dir: Path) -> list[Path]:
-    """Download building data for a given list of building ids
-
-    Downloads the data for the given building ids and returns list of paths to the downloaded files.
+def download_bldg_data(bldg_id: BuildingID, file_type: RequestedFileTypes, output_dir: Path) -> list[Path]:
+    """Download and extract building data for a single building. Only HPXML and schedule files are supported.
 
     Args:
-        bldg_ids: A list of BuildingID objects to download data for.
-        file_type: Tuple of file types to extract (e.g., "hpxml", "schedule")
+        bldg_id: A BuildingID object to download data for.
+        file_type: RequestedFileTypes object to specify which files to download.
         output_dir: Directory to save the downloaded files.
 
     Returns:
@@ -105,80 +104,53 @@ def download_bldg_data(bldg_ids: list[BuildingID], file_type: RequestedFileTypes
         os.makedirs(output_dir, exist_ok=True)
 
     downloaded_paths = []
-
-    for bldg_id in bldg_ids:
-        if file_type.hpxml or file_type.schedule:
-            base_url = bldg_id.get_building_data_url()
-            response = requests.get(base_url, timeout=30)
-            response.raise_for_status()
-
-            output_file = output_dir / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
-            with open(output_file, "wb") as file:
-                file.write(response.content)
-
-            # Extract specific files based on file_type
-            with zipfile.ZipFile(output_file, "r") as zip_ref:
-                zip_file_list = zip_ref.namelist()
-
-                if file_type.hpxml:
-                    # Find and extract the XML file
-                    xml_files = [f for f in zip_file_list if f.endswith(".xml")]
-                    if xml_files:
-                        xml_file = xml_files[0]  # Take the first (and only) XML file
-                        zip_ref.extract(xml_file, output_dir)
-                        # Rename to the specified convention
-                        old_path = output_dir / xml_file
-                        new_name = f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}.xml"
-                        new_path = output_dir / new_name
-                        old_path.rename(new_path)
-                        downloaded_paths.append(new_path)
-
-                if file_type.schedule:
-                    # Find and extract the schedule CSV file
-                    schedule_files = [f for f in zip_file_list if "schedule" in f.lower() and f.endswith(".csv")]
-                    if schedule_files:
-                        schedule_file = schedule_files[0]  # Take the first (and only) schedule file
-                        zip_ref.extract(schedule_file, output_dir)
-                        # Rename to the specified convention
-                        old_path = output_dir / schedule_file
-                        new_name = f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}_schedule.csv"
-                        new_path = output_dir / new_name
-                        old_path.rename(new_path)
-                        downloaded_paths.append(new_path)
-
-            # Remove the zip file after extraction
-            output_file.unlink()
-
-    # Get metadata if requested
-    bldg = bldg_ids[0]
-    if file_type.metadata:
-        base_url = bldg.get_metadata_url()
+    if file_type.hpxml or file_type.schedule:
+        base_url = bldg_id.get_building_data_url()
         response = requests.get(base_url, timeout=30)
         response.raise_for_status()
 
-        output_file = output_dir / f"{bldg.get_release_name()}_metadata.parquet"
+        output_file = output_dir / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
         with open(output_file, "wb") as file:
             file.write(response.content)
-        downloaded_paths.append(output_file)
+
+        # Extract specific files based on file_type
+        with zipfile.ZipFile(output_file, "r") as zip_ref:
+            zip_file_list = zip_ref.namelist()
+
+            if file_type.hpxml:
+                # Find and extract the XML file
+                xml_files = [f for f in zip_file_list if f.endswith(".xml")]
+                if xml_files:
+                    xml_file = xml_files[0]  # Take the first (and only) XML file
+                    zip_ref.extract(xml_file, output_dir)
+                    # Rename to the specified convention
+                    old_path = output_dir / xml_file
+                    new_name = f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}.xml"
+                    new_path = output_dir / new_name
+                    old_path.rename(new_path)
+                    downloaded_paths.append(new_path)
+
+            if file_type.schedule:
+                # Find and extract the schedule CSV file
+                schedule_files = [f for f in zip_file_list if "schedule" in f.lower() and f.endswith(".csv")]
+                if schedule_files:
+                    schedule_file = schedule_files[0]  # Take the first (and only) schedule file
+                    zip_ref.extract(schedule_file, output_dir)
+                    # Rename to the specified convention
+                    old_path = output_dir / schedule_file
+                    new_name = f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}_schedule.csv"
+                    new_path = output_dir / new_name
+                    old_path.rename(new_path)
+                    downloaded_paths.append(new_path)
+
+        # Remove the zip file after extraction
+        output_file.unlink()
 
     return downloaded_paths
 
 
-@click.command()
-@click.argument("bldg_ids", nargs=-1, required=True)
-@click.argument("file_type", nargs=-1, required=True)
-@click.argument("output_dir", default=Path(__file__).parent / "data")
-def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_dir: Path) -> list[Path]:
-    """Download building data for a given list of building ids
-
-    Downloads the data for the given building ids and returns list of paths to the downloaded files.
-
-    Args:
-        bldg_ids: A list of BuildingID objects to download data for.
-
-    Returns:
-        A list of paths to the downloaded files.
-    """
+def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes:
+    """Parse the file type string into a RequestedFileTypes object."""
     file_type_obj = RequestedFileTypes()
     if "hpxml" in file_type:
         file_type_obj.hpxml = True
@@ -196,8 +168,49 @@ def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_di
         file_type_obj.time_series_weekly = True
     if "time_series_monthly" in file_type:
         file_type_obj.time_series_monthly = True
+    return file_type_obj
 
-    return download_bldg_data(bldg_ids, file_type_obj, output_dir)
+
+@click.command()
+@click.argument("bldg_ids", nargs=-1, required=True)
+@click.argument("file_type", nargs=-1, required=True)
+@click.argument("output_dir", default=Path(__file__).parent / "data")
+def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str], output_dir: Path) -> list[Path]:
+    """Download building data for a given list of building ids
+
+    Downloads the data for the given building ids and returns list of paths to the downloaded files.
+
+    Args:
+        bldg_ids: A list of BuildingID objects to download data for.
+
+    Returns:
+        A list of paths to the downloaded files.
+    """
+    file_type_obj = _parse_requested_file_type(file_type)
+
+    downloaded_paths = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(download_bldg_data, bldg_id, file_type_obj, output_dir) for bldg_id in bldg_ids]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                paths = future.result()
+                downloaded_paths.extend(paths)
+            except Exception as e:
+                print(f"Download failed:{e}")
+
+    # Get metadata if requested. Only one building is needed to get the metadata.
+    if file_type_obj.metadata:
+        bldg = bldg_ids[0]
+        base_url = bldg.get_metadata_url()
+        response = requests.get(base_url, timeout=30)
+        response.raise_for_status()
+
+        output_file = output_dir / f"{bldg.get_release_name()}_metadata.parquet"
+        with open(output_file, "wb") as file:
+            file.write(response.content)
+        downloaded_paths.append(output_file)
+
+    return downloaded_paths
 
 
 if __name__ == "__main__":  # pragma: no cover
