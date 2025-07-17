@@ -127,13 +127,17 @@ def test_download_bldg_data(cleanup_downloads):
 
 
 def test_fetch_bldg_data(cleanup_downloads):
-    bldg_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8)]
+    bldg_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=11)]
     file_type = ("hpxml", "schedule", "metadata")
     output_dir = Path("data")
-    downloaded_paths = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    assert len(downloaded_paths) == 5
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 7
     assert Path("data/bldg0000007-up00.xml").exists()
     assert Path("data/bldg0000007-up00_schedule.csv").exists()
     assert Path("data/bldg0000008-up00.xml").exists()
     assert Path("data/bldg0000008-up00_schedule.csv").exists()
+    assert Path("data/bldg0000011-up00.xml").exists()
+    assert Path("data/bldg0000011-up00_schedule.csv").exists()
     assert Path("data/resstock_tmy3_release_1_metadata.parquet").exists()

@@ -4,6 +4,7 @@ import os
 import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Optional
 
 import requests
 
@@ -86,7 +87,7 @@ def fetch_bldg_ids(state: str) -> list[BuildingID]:
         raise NotImplementedError(f"State {state} not supported")
 
 
-def download_bldg_data(bldg_id: BuildingID, file_type: RequestedFileTypes, output_dir: Path) -> list[Path]:
+def download_bldg_data(bldg_id: BuildingID, file_type: RequestedFileTypes, output_dir: Path) -> dict[str, Path | None]:
     """Download and extract building data for a single building. Only HPXML and schedule files are supported.
 
     Args:
@@ -102,13 +103,20 @@ def download_bldg_data(bldg_id: BuildingID, file_type: RequestedFileTypes, outpu
     if not output_dir.exists():
         os.makedirs(output_dir, exist_ok=True)
 
-    downloaded_paths = []
+    # Create a unique temporary directory for this building to avoid race conditions
+    temp_dir = output_dir / f"temp_{bldg_id.bldg_id:07}_{bldg_id.upgrade_id}"
+    temp_dir.mkdir(exist_ok=True)
+
+    downloaded_paths: dict[str, Optional[Path]] = {
+        "hpxml": None,
+        "schedule": None,
+    }
     if file_type.hpxml or file_type.schedule:
         base_url = bldg_id.get_building_data_url()
         response = requests.get(base_url, timeout=30)
         response.raise_for_status()
 
-        output_file = output_dir / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
+        output_file = temp_dir / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
         with open(output_file, "wb") as file:
             file.write(response.content)
 
@@ -121,29 +129,30 @@ def download_bldg_data(bldg_id: BuildingID, file_type: RequestedFileTypes, outpu
                 xml_files = [f for f in zip_file_list if f.endswith(".xml")]
                 if xml_files:
                     xml_file = xml_files[0]  # Take the first (and only) XML file
-                    zip_ref.extract(xml_file, output_dir)
+                    zip_ref.extract(xml_file, temp_dir)
                     # Rename to the specified convention
-                    old_path = output_dir / xml_file
+                    old_path = temp_dir / xml_file
                     new_name = f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}.xml"
                     new_path = output_dir / new_name
                     old_path.rename(new_path)
-                    downloaded_paths.append(new_path)
+                    downloaded_paths["hpxml"] = new_path
 
             if file_type.schedule:
                 # Find and extract the schedule CSV file
                 schedule_files = [f for f in zip_file_list if "schedule" in f.lower() and f.endswith(".csv")]
                 if schedule_files:
                     schedule_file = schedule_files[0]  # Take the first (and only) schedule file
-                    zip_ref.extract(schedule_file, output_dir)
+                    zip_ref.extract(schedule_file, temp_dir)
                     # Rename to the specified convention
-                    old_path = output_dir / schedule_file
+                    old_path = temp_dir / schedule_file
                     new_name = f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}_schedule.csv"
                     new_path = output_dir / new_name
                     old_path.rename(new_path)
-                    downloaded_paths.append(new_path)
+                    downloaded_paths["schedule"] = new_path
 
-        # Remove the zip file after extraction
+        # Remove the zip file and temp directory after extraction
         output_file.unlink()
+        temp_dir.rmdir()  # Remove empty temp directory
 
     return downloaded_paths
 
@@ -170,7 +179,9 @@ def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes
     return file_type_obj
 
 
-def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str, ...], output_dir: Path) -> list[Path]:
+def fetch_bldg_data(
+    bldg_ids: list[BuildingID], file_type: tuple[str, ...], output_dir: Path, max_workers: int = 5
+) -> tuple[list[Path], list[str]]:
     """Download building data for a given list of building ids
 
     Downloads the data for the given building ids and returns list of paths to the downloaded files.
@@ -184,14 +195,28 @@ def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str, ...], outp
     file_type_obj = _parse_requested_file_type(file_type)
 
     downloaded_paths = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(download_bldg_data, bldg_id, file_type_obj, output_dir) for bldg_id in bldg_ids]
-        for future in concurrent.futures.as_completed(futures):
+    failed_downloads = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks and keep track of future -> bldg_id mapping
+        future_to_bldg = {
+            executor.submit(download_bldg_data, bldg_id, file_type_obj, output_dir): bldg_id for bldg_id in bldg_ids
+        }
+
+        # Process completed futures
+        for future in concurrent.futures.as_completed(future_to_bldg):
+            bldg_id = future_to_bldg[future]  # Get the correct bldg_id for this future
             try:
-                paths = future.result()
+                paths_dict = future.result()
+                # Convert dict values to list, filtering out None values
+                paths = [path for path in paths_dict.values() if path is not None]
                 downloaded_paths.extend(paths)
+
+                if paths_dict["hpxml"] is None:
+                    failed_downloads.append(f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}.xml")
+                if paths_dict["schedule"] is None:
+                    failed_downloads.append(f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}_schedule.csv")
             except Exception as e:
-                print(f"Download failed:{e}")
+                print(f"Download failed for bldg_id {bldg_id}: {e}")
 
     # Get metadata if requested. Only one building is needed to get the metadata.
     if file_type_obj.metadata:
@@ -205,10 +230,11 @@ def fetch_bldg_data(bldg_ids: list[BuildingID], file_type: tuple[str, ...], outp
             file.write(response.content)
         downloaded_paths.append(output_file)
 
-    return downloaded_paths
+    return downloaded_paths, failed_downloads
 
 
 if __name__ == "__main__":  # pragma: no cover
     tmp_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=9)]
-    tmp_data = fetch_bldg_data(tmp_ids, ("hpxml", "schedule", "metadata"), Path(__file__).parent / "data")
+    tmp_data, tmp_failed = fetch_bldg_data(tmp_ids, ("hpxml", "schedule", "metadata"), Path(__file__).parent / "data")
     print(f"Downloaded files: {[str(path) for path in tmp_data]}")
+    print(f"Failed downloads: {tmp_failed}")
