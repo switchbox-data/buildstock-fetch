@@ -285,12 +285,12 @@ def _run_interactive_mode() -> dict[str, str]:
     )
 
     # Retrieve requested file type
-    requested_file_type = _handle_cancellation(
+    requested_file_types = _handle_cancellation(
         questionary.checkbox(
             "Select file type:",
             choices=_get_file_type_options(selected_release_name),
             instruction="Use spacebar to select/deselect options, enter to confirm",
-            validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
+            validate=lambda answer: "You must select at least one file type" if len(answer) == 0 else True,
         ).ask()
     )
 
@@ -308,7 +308,7 @@ def _run_interactive_mode() -> dict[str, str]:
 
     # Process the data
     print(
-        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_upgrade_id}, {selected_states}, {requested_file_type}, {output_directory_path}"
+        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_upgrade_id}, {selected_states}, {requested_file_types}, {output_directory_path}"
     )
     return {
         "product": product_type,
@@ -317,7 +317,7 @@ def _run_interactive_mode() -> dict[str, str]:
         "release_version": selected_release_version,
         "upgrade_id": selected_upgrade_id,
         "states": selected_states,
-        "file_type": requested_file_type,
+        "file_type": requested_file_types,
         "output_directory": str(output_directory_path),
     }
 
