@@ -159,6 +159,10 @@ def _get_state_options() -> list[str]:
 
 
 def _get_file_type_options(release_name: str) -> list[str]:
+    """Get the file type options for a given release name."""
+
+    # Each release has a different set of available data. For example, some releases don't have building data,
+    # some don't have 15 min end use load profiles, etc. This function returns the available data for a given release.
     available_releases = _get_all_available_releases()
     return cast(list[str], available_releases[release_name]["available_data"])
 
