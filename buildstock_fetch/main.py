@@ -4,7 +4,7 @@ import os
 import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import requests
 
@@ -87,7 +87,9 @@ def fetch_bldg_ids(state: str) -> list[BuildingID]:
         raise NotImplementedError(f"State {state} not supported")
 
 
-def download_bldg_data(bldg_id: BuildingID, file_type: RequestedFileTypes, output_dir: Path) -> dict[str, Path | None]:
+def download_bldg_data(
+    bldg_id: BuildingID, file_type: RequestedFileTypes, output_dir: Path
+) -> dict[str, Union[Path, None]]:
     """Download and extract building data for a single building. Only HPXML and schedule files are supported.
 
     Args:
