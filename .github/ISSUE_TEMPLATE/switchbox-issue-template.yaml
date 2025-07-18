@@ -1,0 +1,41 @@
+name: Switchbox ticket
+description: Help describe what you're building and why
+title: "Short description of the 'What' here"
+labels: []
+assignees: []
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: Describe what you're building in 1-2 clear sentences. Focus on the end result, not the implementation details.
+      placeholder: "Example: Add a --filter flag that allows users to query ResStock data by building type, vintage, or geographic region."
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: Explain the problem this solves or the value it creates. Include context about who benefits and why this matters now.
+      placeholder: "Example: Users currently have to download the entire dataset and filter locally, which is slow and wastes bandwidth. This feature will make the tool much more efficient for analysts who only need specific subsets of the data."
+    validations:
+      required: true
+
+  - type: textarea
+    id: how
+    attributes:
+      label: How
+      description: Outline your approach or key steps. This doesn't need to be exhaustive - just enough to show you have a plan.
+      placeholder: "Example:\n1. Add argparse options for filter parameters\n2. Build query string construction logic\n3. Update API client to handle filtered requests\n4. Add unit tests for new functionality"
+    validations:
+      required: false
+
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: Deliverables
+      description: List the specific outputs others can expect. Be concrete about what will be delivered.
+      placeholder: "- Updated CLI with --filter flag\n- Documentation for new filter options\n- Unit tests covering filter functionality\n- Updated help text and examples"
+    validations:
+      required: true

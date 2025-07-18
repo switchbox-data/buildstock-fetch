@@ -10,36 +10,113 @@ This library simplifies downloading building characteristics and load curve data
 - **Github repository**: <https://github.com/switchbox-data/buildstock-fetch/>
 - **Documentation** <https://switchbox-data.github.io/buildstock-fetch/>
 
-## Getting start with the project
+## Using the library
 
-### 1. Set Up Your Development Environment
+`buildstock-fetch` is currently in pre-release, so it can't be installed and used yet. Our alpha release will be made available on PyPI.
 
-The easiest way to set up the library's dev environment is to use devcontainers. To do so, open up the repo in VSCode or a VSCode fork like Cursor or Positron. The editor will auto-detect the presence of the repo's devcontainer (configured in `.devcontainer/devcontainer.json`). Click "Reopen in Container" to launch the devcontainer.
+## Developing the library
 
-Alternatively, you can install the environment and the pre-commit hooks on your laptop with
+To simplify development, this library uses [devcontainers](https://containers.dev/) for reproducible development environments and the [just](https://github.com/casey/just) command runner for all major tasks.
+
+Available commands are defined in [Justfile](Justile). To view available them:
 
 ```bash
-make install
+just --list
 ```
 
-You are now ready to start development on the library!
-The github action CI/CD pipeline will be triggered when you open a pull request, merge to main, or when you create a new release.
+### Setting up development environment
 
-### 2. Set up PyPI publishing
+This library uses [uv](https://docs.astral.sh/uv/) for managing python versions, virtual environments, and packages.
 
-To finalize the set-up for publishing to PyPI, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/publishing/#set-up-for-pypi).
+However, given the presence of system dependencies, the easiest way to set up the library's develop environment is to use devcontainers. To do so, open up the repo in VSCode, or a VSCode fork like Cursor or Positron.
 
-### 3. Activate automatic documentation
-For activating the automatic documentation with MkDocs, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/mkdocs/#enabling-the-documentation-on-github).
+The editor will auto-detect the presence of the repo's devcontainer (configured in [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json)). Click "Reopen in Container" to launch the devcontainer.
 
-## Releasing a new version
+If you prefer not to use a devcontainer, you can install uv, install the pre-commit hooks, launch the virtualenv, and download the packages (pinned in [uv.lock](uv.lock)) by running:
 
-- Create an API Token on [PyPI](https://pypi.org/).
-- Add the API Token to your projects secrets with the name `PYPI_TOKEN` by visiting [this page](https://github.com/switchbox-data/buildstock-fetch/settings/secrets/actions/new).
-- Create a [new release](https://github.com/switchbox-data/buildstock-fetch/releases/new) on Github.
-- Create a new tag in the form `*.*.*`.
+```bash
+./devcontainer/postCreateCommand.sh
+just install
+```
 
-For more details, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/cicd/#how-to-trigger-a-release).
+Using a system package manager (like `brew` or `apt`), you'll also need to manually install `just` and `quarto`.
+
+### Adding a package
+To add a python package to the project:
+
+```bash
+uv add <package-name>
+```
+
+This replaces `pip install <package-name>`, and has the effect of adding the package to [pyproject.toml](pyproject.toml), as well as pinning the package version in [uv.lock](uv.lock).
+
+To add a package that will only be used as a development tool:
+
+```bash
+uv add --dev <package-name>
+```
+
+This will update the dev `dependency-groups` in [pyproject.toml](pyproject.toml), and ensure that the package isn't declared as a run-time dependency of the library itself.
+
+### Running code quality checks
+
+We use [ruff](https://github.com/astral-sh/ruff) for linting and code formatting, [mypy](https://mypy.readthedocs.io/en/stable/running_mypy.html) for type checking, and a series of [post-commit hooks](pre-commit-config.yaml) for validating YAML, JSON, whitespaces, and so on.
+
+To run code quality checks:
+
+```bash
+just check
+```
+
+The checks will also be run automatically by Github Actions when opening PRs, merging to main, or creating a new release.
+
+### Running tests
+
+Our test are written using `pytest` and live in [tests/](tests/). They are checked against multiple python versions using `tox`.
+
+To run the tests:
+
+```bash
+just test
+```
+
+### Rendering docs
+
+We use `mkdocs` and [mkdocs-material](https://squidfunk.github.io/mkdocs-material/) for writing and rendering docs. The docs are written in markdown and live in [docs/](docs/).
+
+To dynamically render the docs as you develop them:
+
+```bash
+just docs
+```
+
+To statically render the docs into HTML:
+
+```bash
+just docs-test
+```
+
+The docs are served by Github Pages out of the `gh-pages` branch. We do not publish them manually: they are automatically rendered and published by the Github Actions workflow when merging to `main`.
+
+### Releasing the library
+
+To build the package into a wheel file, type:
+
+```bash
+just build
+```
+
+To publish a release to PyPI using [twine](https://pypi.org/project/twine/):
+
+```bash
+just publish
+```
+
+To do both in one go:
+
+```bash
+just build-and-publish
+```
 
 ---
 
