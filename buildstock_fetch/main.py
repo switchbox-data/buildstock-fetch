@@ -42,7 +42,7 @@ class BuildingID:
         return (
             f"{self.base_url}"
             f"building_energy_models/upgrade={self.upgrade_id}/"
-            f"bldg{self.bldg_id:07}-up0{self.upgrade_id}.zip"
+            f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
         )
 
     def get_metadata_url(self) -> str:
@@ -51,7 +51,7 @@ class BuildingID:
             if self.upgrade_id == "0":
                 return f"{self.base_url}metadata/baseline.parquet"
             else:
-                return f"{self.base_url}metadata/upgrade{int(self.upgrade_id):02}.parquet"
+                return f"{self.base_url}metadata/upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
         else:
             return f"{self.base_url}metadata/metadata.parquet"
 
@@ -106,7 +106,7 @@ def download_bldg_data(
         os.makedirs(output_dir, exist_ok=True)
 
     # Create a unique temporary directory for this building to avoid race conditions
-    temp_dir = output_dir / f"temp_{bldg_id.bldg_id:07}_{bldg_id.upgrade_id}"
+    temp_dir = output_dir / f"temp_{str(bldg_id.bldg_id).zfill(7)}_{bldg_id.upgrade_id}"
     temp_dir.mkdir(exist_ok=True)
 
     downloaded_paths: dict[str, Optional[Path]] = {
@@ -118,7 +118,7 @@ def download_bldg_data(
         response = requests.get(base_url, timeout=30)
         response.raise_for_status()
 
-        output_file = temp_dir / f"{bldg_id.bldg_id:07}_upgrade{bldg_id.upgrade_id}.zip"
+        output_file = temp_dir / f"{str(bldg_id.bldg_id).zfill(7)}_upgrade{bldg_id.upgrade_id}.zip"
         with open(output_file, "wb") as file:
             file.write(response.content)
 
@@ -134,7 +134,7 @@ def download_bldg_data(
                     zip_ref.extract(xml_file, temp_dir)
                     # Rename to the specified convention
                     old_path = temp_dir / xml_file
-                    new_name = f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}.xml"
+                    new_name = f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml"
                     new_path = output_dir / new_name
                     old_path.rename(new_path)
                     downloaded_paths["hpxml"] = new_path
@@ -147,7 +147,7 @@ def download_bldg_data(
                     zip_ref.extract(schedule_file, temp_dir)
                     # Rename to the specified convention
                     old_path = temp_dir / schedule_file
-                    new_name = f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}_schedule.csv"
+                    new_name = f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
                     new_path = output_dir / new_name
                     old_path.rename(new_path)
                     downloaded_paths["schedule"] = new_path
@@ -214,9 +214,11 @@ def fetch_bldg_data(
                 downloaded_paths.extend(paths)
 
                 if paths_dict["hpxml"] is None:
-                    failed_downloads.append(f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}.xml")
+                    failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml")
                 if paths_dict["schedule"] is None:
-                    failed_downloads.append(f"bldg{bldg_id.bldg_id:07}-up{bldg_id.upgrade_id:02}_schedule.csv")
+                    failed_downloads.append(
+                        f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
+                    )
             except Exception as e:
                 print(f"Download failed for bldg_id {bldg_id}: {e}")
 
