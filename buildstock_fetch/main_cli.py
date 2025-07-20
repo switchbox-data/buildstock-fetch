@@ -307,7 +307,7 @@ def _run_interactive_mode() -> dict[str, str]:
     output_directory_str = _handle_cancellation(
         questionary.path(
             "Select output directory:",
-            default=str(Path.cwd()),
+            default=str(Path.cwd() / "data"),
             only_directories=True,
             validate=_validate_output_directory,
         ).ask()
