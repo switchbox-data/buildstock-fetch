@@ -75,7 +75,10 @@ def _get_weather_options(
         list(parsed_releases.keys()), product_type=product_type, release_year=release_year
     )
     available_weather_files = list({parsed_releases[release]["weather_file"] for release in available_releases})
-    available_weather_files.sort()
+
+    # Sort weather files in specific order: tmy3, amy2018, amy2012
+    weather_order = ["tmy3", "amy2018", "amy2012"]
+    available_weather_files.sort(key=lambda x: weather_order.index(x) if x in weather_order else len(weather_order))
 
     return available_releases, available_weather_files
 
