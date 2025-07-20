@@ -1,9 +1,32 @@
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from buildstock_fetch.main_cli import app
+
+
+@pytest.fixture(scope="function")
+def cleanup_downloads():
+    # Setup - clean up any existing files before test
+    data_dir = Path("data")
+    test_output_dir = Path("test_output")
+
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    if test_output_dir.exists():
+        shutil.rmtree(test_output_dir)
+
+    yield
+
+    # Teardown - clean up downloaded files after test
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    if test_output_dir.exists():
+        shutil.rmtree(test_output_dir)
+
 
 # Create a test runner
 runner = CliRunner()
@@ -12,7 +35,7 @@ runner = CliRunner()
 @patch("questionary.path")
 @patch("questionary.select")
 @patch("questionary.checkbox")
-def test_interactive_mode(mock_checkbox, mock_select, mock_path):
+def test_interactive_mode(mock_checkbox, mock_select, mock_path, cleanup_downloads):
     """Test interactive mode with mocked questionary."""
     # Mock the questionary responses
     mock_select.return_value.ask.side_effect = ["resstock", "2021", "tmy3", "1"]
