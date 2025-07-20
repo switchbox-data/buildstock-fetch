@@ -273,9 +273,14 @@ def _run_interactive_mode() -> dict[str, str]:
         f"{product_short_name}_{selected_release_year}_{selected_weather_file}_{selected_release_version}"
     )
 
-    # Retrieve upgrade id
-    selected_upgrade_id = _handle_cancellation(
-        questionary.select("Select upgrade id:", choices=_get_upgrade_ids_options(selected_release_name)).ask()
+    # Retrieve upgrade ids
+    selected_upgrade_ids = _handle_cancellation(
+        questionary.checkbox(
+            "Select upgrade ids:",
+            choices=_get_upgrade_ids_options(selected_release_name),
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+            validate=lambda answer: "You must select at least one upgrade id" if len(answer) == 0 else True,
+        ).ask()
     )
 
     # Retrieve state
@@ -312,14 +317,14 @@ def _run_interactive_mode() -> dict[str, str]:
 
     # Process the data
     print(
-        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_upgrade_id}, {selected_states}, {requested_file_types}, {output_directory_path}"
+        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_upgrade_ids}, {selected_states}, {requested_file_types}, {output_directory_path}"
     )
     return {
         "product": product_type,
         "release_year": selected_release_year,
         "weather_file": selected_weather_file,
         "release_version": selected_release_version,
-        "upgrade_id": selected_upgrade_id,
+        "upgrade_ids": selected_upgrade_ids,
         "states": selected_states,
         "file_type": requested_file_types,
         "output_directory": str(output_directory_path),
@@ -335,7 +340,7 @@ def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[s
         inputs["release_version"],
         inputs["states"],
         inputs["file_type"],
-        inputs["upgrade_id"],
+        inputs["upgrade_ids"],
         inputs["output_directory"],
     ]):
         return "Please provide all required inputs"
@@ -347,9 +352,10 @@ def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[s
     if release_name not in available_releases:
         return f"Invalid release name: {release_name}"
 
-    # Check for valid upgrade id
-    if inputs["upgrade_id"] not in available_releases[release_name]["upgrade_ids"]:
-        return f"Invalid upgrade id: {inputs['upgrade_id']}"
+    # Check for valid upgrade ids
+    for upgrade_id in inputs["upgrade_ids"]:
+        if upgrade_id not in available_releases[release_name]["upgrade_ids"]:
+            return f"Invalid upgrade id: {upgrade_id}"
 
     # Check for valid file type
     if inputs["file_type"] not in available_releases[release_name]["available_data"]:
@@ -375,7 +381,7 @@ WEATHER_FILE_OPTION = typer.Option(None, "--weather_file", "-w")
 RELEASE_VERSION_OPTION = typer.Option(None, "--release_version", "-r")
 STATES_OPTION = typer.Option(None, "--states", "-s", help="List of states (can be specified multiple times)")
 FILE_TYPE_OPTION = typer.Option(None, "--file_type", "-f")
-UPGRADE_ID_OPTION = typer.Option(None, "--upgrade_id", "-u")
+UPGRADE_ID_OPTION = typer.Option(None, "--upgrade_id", "-u", help="Upgrade IDs (space-separated, e.g., '0 1 2')")
 OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o")
 
 
@@ -386,7 +392,7 @@ def main_callback(
     release_version: int = RELEASE_VERSION_OPTION,
     states: str = STATES_OPTION,
     file_type: str = FILE_TYPE_OPTION,
-    upgrade_id: int = UPGRADE_ID_OPTION,
+    upgrade_id: str = UPGRADE_ID_OPTION,
     output_directory: str = OUTPUT_DIRECTORY_OPTION,
 ) -> None:
     """
@@ -402,6 +408,7 @@ def main_callback(
             raise typer.Exit(0) from None
     else:
         states_list = states.split() if states else []
+        upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
 
         inputs = {
             "product": product,
@@ -410,7 +417,7 @@ def main_callback(
             "release_version": str(release_version),
             "states": states_list,  # type: ignore[dict-item]
             "file_type": file_type,
-            "upgrade_id": str(upgrade_id),
+            "upgrade_ids": upgrade_ids_list,  # type: ignore[dict-item]
             "output_directory": output_directory,
         }
         validation_result = _validate_direct_inputs(inputs)  # type: ignore[arg-type]
@@ -424,15 +431,16 @@ def main_callback(
         state = state.strip()
         if state == "":
             continue
-        bldg_id = fetch_bldg_ids(
-            inputs["product"],
-            inputs["release_year"],
-            inputs["weather_file"],
-            inputs["release_version"],
-            state,
-            inputs["upgrade_id"],
-        )
-        bldg_ids.extend(bldg_id)
+        for upgrade_id in inputs["upgrade_ids"]:
+            bldg_id = fetch_bldg_ids(
+                inputs["product"],
+                inputs["release_year"],
+                inputs["weather_file"],
+                inputs["release_version"],
+                state,
+                upgrade_id,
+            )
+            bldg_ids.extend(bldg_id)
 
     # Fetch the building data (Only the first 10 for now)
     fetch_bldg_data(bldg_ids[:10], Path(inputs["output_directory"]))
