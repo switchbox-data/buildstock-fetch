@@ -319,11 +319,6 @@ def _run_interactive_mode() -> dict[str, str]:
     )
     output_directory_path = Path(output_directory_str)
     output_directory_path.mkdir(parents=True, exist_ok=True)
-
-    # Process the data
-    print(
-        f"Result: {product_type}, {selected_release_year}, {selected_weather_file}, {selected_release_version}, {selected_upgrade_ids}, {selected_states}, {requested_file_types}, {output_directory_path}"
-    )
     return {
         "product": product_type,
         "release_year": selected_release_year,
@@ -347,7 +342,16 @@ def _verify_interactive_inputs(inputs: dict) -> bool:
         table.add_row(str(k), pprint.pformat(v))
     console.print(Panel(table, border_style="green"))
 
-    result = questionary.confirm("Are these selections correct?", default=True).ask()
+    try:
+        result = questionary.confirm("Are these selections correct?", default=True).ask()
+    except KeyboardInterrupt:
+        console.print("\n[red]Operation cancelled by user.[/red]")
+        raise typer.Exit(0) from None
+
+    if result is None:
+        console.print("\n[red]Operation cancelled by user.[/red]")
+        raise typer.Exit(0) from None
+
     return bool(result)
 
 
@@ -448,6 +452,17 @@ def main_callback(
         if validation_result is not True:
             console.print(f"\n[red]{validation_result}[/red]")
             raise typer.Exit(0) from None
+
+    # Process the data
+    print("Downloading data for:")
+    print(f"Product: {inputs['product']}")
+    print(f"Release year: {inputs['release_year']}")
+    print(f"Weather file: {inputs['weather_file']}")
+    print(f"Release version: {inputs['release_version']}")
+    print(f"States: {inputs['states']}")
+    print(f"File type: {inputs['file_type']}")
+    print(f"Upgrade ids: {inputs['upgrade_ids']}")
+    print(f"Output directory: {inputs['output_directory']}")
 
     # Fetch the building ids
     bldg_ids = []
