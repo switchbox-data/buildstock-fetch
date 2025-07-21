@@ -32,15 +32,17 @@ def cleanup_downloads():
 runner = CliRunner()
 
 
+@patch("questionary.confirm")
 @patch("questionary.path")
 @patch("questionary.select")
 @patch("questionary.checkbox")
-def test_interactive_mode(mock_checkbox, mock_select, mock_path, cleanup_downloads):
+def test_interactive_mode(mock_checkbox, mock_select, mock_path, mock_confirm, cleanup_downloads):
     """Test interactive mode with mocked questionary."""
     # Mock the questionary responses
     mock_select.return_value.ask.side_effect = ["resstock", "2021", "tmy3", "1"]
     mock_checkbox.return_value.ask.side_effect = [["0"], ["CA", "MA"], ["metadata"]]
     mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
+    mock_confirm.return_value.ask.return_value = True
 
     result = runner.invoke(app, [])
 
@@ -57,23 +59,25 @@ def test_interactive_mode(mock_checkbox, mock_select, mock_path, cleanup_downloa
     assert "Result: resstock, 2021, tmy3, 1, ['0'], ['CA', 'MA'], ['metadata']," in result.stdout
     assert "test_output" in result.stdout
 
-    # Mock the questionary responses. Check for error message when no states are selected
+    # Test abort path: confirmation returns False
     mock_select.return_value.ask.side_effect = ["resstock", "2021", "tmy3", "1"]
-    mock_checkbox.return_value.ask.side_effect = [["0"], []]
+    mock_checkbox.return_value.ask.side_effect = [["0"], ["CA", "MA"], ["metadata"]]
+    mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
+    mock_confirm.return_value.ask.return_value = False
 
     result = runner.invoke(app, [])
 
-    # Debug output
     print(f"Exit code: {result.exit_code}")
     print(f"Output: {result.output}")
     print(f"Exception: {result.exception}")
 
     assert result.exit_code == 1
 
-    # Mock the questionary responses
+    # Mock the questionary responses for another valid run
     mock_select.return_value.ask.side_effect = ["comstock", "2024", "amy2018", "1"]
     mock_checkbox.return_value.ask.side_effect = [["7"], ["CA", "TX"], ["15min_load_curve", "metadata"]]
     mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
+    mock_confirm.return_value.ask.return_value = True
     result = runner.invoke(app, [])
 
     # Debug output

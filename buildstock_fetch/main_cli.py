@@ -1,4 +1,5 @@
 import json
+import pprint
 from pathlib import Path
 from typing import Union, cast
 
@@ -6,6 +7,7 @@ import questionary
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
 
@@ -334,6 +336,21 @@ def _run_interactive_mode() -> dict[str, str]:
     }
 
 
+def _verify_interactive_inputs(inputs: dict) -> bool:
+    """Display the inputs and ask the user to verify them."""
+    console = Console()
+
+    table = Table(title="Please verify your selections:")
+    table.add_column("Field", style="cyan", no_wrap=True)
+    table.add_column("Value", style="magenta")
+    for k, v in inputs.items():
+        table.add_row(str(k), pprint.pformat(v))
+    console.print(Panel(table, border_style="green"))
+
+    result = questionary.confirm("Are these selections correct?", default=True).ask()
+    return bool(result)
+
+
 def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
     """Validate the direct inputs"""
     if not all([
@@ -405,7 +422,11 @@ def main_callback(
     # If no arguments provided, run interactive mode
     if not any([product, release_year, weather_file, release_version, states, file_type]):
         try:
-            inputs = _run_interactive_mode()
+            while True:
+                inputs = _run_interactive_mode()
+                if _verify_interactive_inputs(inputs):
+                    break
+                console.print("[yellow]Let's try again...[/yellow]")
         except KeyboardInterrupt:
             console.print("\n[red]Operation cancelled by user.[/red]")
             raise typer.Exit(0) from None
