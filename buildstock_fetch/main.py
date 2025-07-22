@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional, Union
 
-import pandas as pd
+import polars as pl
 import requests
 
 
@@ -143,14 +143,14 @@ def fetch_bldg_ids(
         return []
 
     # Read the parquet files in the specific partition
-    df = pd.read_parquet(partition_path)
+    df = pl.read_parquet(partition_path)
 
     # No need to filter since we're already reading the specific partition
     filtered_df = df
 
     # Convert the filtered data to BuildingID objects
     building_ids = []
-    for _, row in filtered_df.iterrows():
+    for row in filtered_df.iter_rows(named=True):
         building_id = BuildingID(
             bldg_id=int(row["bldg_id"]),
             release_number=release_version,
