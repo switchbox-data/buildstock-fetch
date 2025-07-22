@@ -508,7 +508,19 @@ if __name__ == "__main__":
     # Combine all DataFrames and save as partitioned parquet
     if all_dataframes:
         logger.info(f"Combining {len(all_dataframes)} DataFrames...")
-        final_df = pl.concat(all_dataframes)
+
+        # Ensure consistent schema across all DataFrames
+        logger.info("Ensuring consistent schema across DataFrames...")
+        normalized_dataframes = []
+        for i, df in enumerate(all_dataframes):
+            # Convert categorical columns to string to ensure compatibility
+            df_normalized = df.with_columns([
+                pl.col(col).cast(pl.Utf8) for col in df.columns if df.schema[col] == pl.Categorical
+            ])
+            normalized_dataframes.append(df_normalized)
+            logger.info(f"Normalized DataFrame {i + 1} schema: {df_normalized.schema}")
+
+        final_df = pl.concat(normalized_dataframes)
         logger.info(f"Final DataFrame has {final_df.height} rows and {len(final_df.columns)} columns")
 
         # Sort by county
