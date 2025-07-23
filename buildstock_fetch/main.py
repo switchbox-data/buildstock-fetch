@@ -6,7 +6,20 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional, Union
 
+import polars as pl
 import requests
+
+
+class InvalidProductError(ValueError):
+    """Raised when an invalid product is provided."""
+
+    pass
+
+
+class InvalidReleaseNameError(ValueError):
+    """Raised when an invalid release name is provided."""
+
+    pass
 
 
 @dataclass
@@ -65,26 +78,90 @@ class BuildingID:
         return json.dumps(asdict(self))
 
 
-def fetch_bldg_ids(state: str) -> list[BuildingID]:
+def _validate_release_name(release_name: str) -> bool:
+    """Validate the release name.
+
+    Args:
+        release_name: The release name to validate.
+
+    Returns:
+        True if the release name is valid, False otherwise.
+    """
+    # Read the valid release names from the JSON file
+    releases_file = Path(__file__).parent.parent / "utils" / "buildstock_releases.json"
+    with open(releases_file) as f:
+        releases_data = json.load(f)
+
+    # Get the top-level keys as valid release names
+    valid_release_names = list(releases_data.keys())
+    return release_name in valid_release_names
+
+
+def fetch_bldg_ids(
+    product: str, release_year: str, weather_file: str, release_version: str, state: str, upgrade_id: str
+) -> list[BuildingID]:
     """Fetch a list of Building ID's
 
     Provided a state, returns a list of building ID's for that state.
 
     Args:
+        product: The product type (e.g., 'resstock', 'comstock')
+        release_year: The release year (e.g., '2021', '2022')
+        weather_file: The weather file type (e.g., 'tmy3')
+        release_version: The release version number (e.g., '1')
         state: The state to fetch building ID's for.
 
     Returns:
         A list of building ID's for the given state.
     """
-    if state == "MA":
-        return [
-            BuildingID(bldg_id=7),
-            BuildingID(bldg_id=8),
-            BuildingID(bldg_id=9),
-        ]
+    # Construct the absolute path to the parquet directory
+    parquet_dir = Path(__file__).parent.parent / "utils" / "building_data" / "combined_metadata.parquet"
 
+    if product == "resstock":
+        product_str = "res"
+    elif product == "comstock":
+        product_str = "com"
     else:
-        raise NotImplementedError(f"State {state} not supported")
+        raise InvalidProductError(product)
+
+    release_name = f"{product_str}_{release_year}_{weather_file}_{release_version}"
+    if not _validate_release_name(release_name):
+        raise InvalidReleaseNameError(release_name)
+
+    # Read the specific partition that matches our criteria
+    partition_path = (
+        parquet_dir
+        / f"product={product}"
+        / f"release_year={release_year}"
+        / f"weather_file={weather_file}"
+        / f"release_version={release_version}"
+        / f"state={state}"
+    )
+
+    # Check if the partition exists
+    if not partition_path.exists():
+        return []
+
+    # Read the parquet files in the specific partition
+    df = pl.read_parquet(partition_path)
+
+    # No need to filter since we're already reading the specific partition
+    filtered_df = df
+
+    # Convert the filtered data to BuildingID objects
+    building_ids = []
+    for row in filtered_df.iter_rows(named=True):
+        building_id = BuildingID(
+            bldg_id=int(row["bldg_id"]),
+            release_number=release_version,
+            release_year=release_year,
+            res_com=product,
+            weather=weather_file,
+            upgrade_id=upgrade_id,
+        )
+        building_ids.append(building_id)
+
+    return building_ids
 
 
 def download_bldg_data(
