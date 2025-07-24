@@ -132,6 +132,46 @@ class BuildingID:
         else:
             return ""
 
+    def get_15min_timeseries_url(self) -> str:
+        """Generate the S3 download URL for this building."""
+        if self.release_year == "2021":
+            if self.upgrade_id != "0":
+                return ""  # This release only has baseline timeseries
+            else:
+                return (
+                    f"{self.base_url}timeseries_individual_buildings/"
+                    f"by_state/upgrade={self.upgrade_id}/"
+                    f"state={self.state}/"
+                    f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+                )
+
+        elif self.release_year == "2022" or self.release_year == "2023":
+            return (
+                f"{self.base_url}timeseries_individual_buildings/"
+                f"by_state/upgrade={self.upgrade_id}/"
+                f"state={self.state}/"
+                f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+            )
+        elif self.release_year == "2024":
+            if self.res_com == "resstock" and self.weather == "tmy3" and self.release_number == "1":
+                return ""
+            else:
+                return (
+                    f"{self.base_url}timeseries_individual_buildings/"
+                    f"by_state/upgrade={self.upgrade_id}/"
+                    f"state={self.state}/"
+                    f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+                )
+        elif self.release_year == "2025":
+            return (
+                f"{self.base_url}timeseries_individual_buildings/"
+                f"by_state/upgrade={self.upgrade_id}/"
+                f"state={self.state}/"
+                f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+            )
+        else:
+            return ""
+
     def get_release_name(self) -> str:
         """Generate the release name for this building."""
         res_com_str = "res" if self.res_com == "resstock" else "com"
