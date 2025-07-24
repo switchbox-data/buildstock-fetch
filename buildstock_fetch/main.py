@@ -22,6 +22,12 @@ class InvalidReleaseNameError(ValueError):
     pass
 
 
+class NoBuildingDataError(ValueError):
+    """Raised when no building data is available for a given release."""
+
+    pass
+
+
 @dataclass
 class RequestedFileTypes:
     hpxml: bool = False
@@ -53,11 +59,35 @@ class BuildingID:
 
     def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        return (
-            f"{self.base_url}"
-            f"building_energy_models/upgrade={self.upgrade_id}/"
-            f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
-        )
+        if self.release_year == "2021":
+            return ""
+        elif self.release_year == "2022":
+            return (
+                f"{self.base_url}"
+                f"building_energy_models/upgrade={self.upgrade_id}/"
+                f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
+            )
+        elif self.release_year == "2023":
+            return ""
+        elif self.release_year == "2024":
+            if self.res_com == "comstock":
+                return ""
+            elif (self.weather == "amy2018" or self.weather == "tmy3") and self.release_number == "2":
+                return (
+                    f"{self.base_url}"
+                    f"model_and_schedule_files/building_energy_models/upgrade={self.upgrade_id}/"
+                    f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
+                )
+            else:
+                return ""
+        elif self.release_year == "2025":
+            return (
+                f"{self.base_url}"
+                f"building_energy_models/upgrade={str(int(self.upgrade_id)).zfill(2)}/"
+                f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
+            )
+        else:
+            return ""
 
     def get_metadata_url(self) -> str:
         """Generate the S3 download URL for this building."""
@@ -193,8 +223,11 @@ def download_bldg_data(
         "schedule": None,
     }
     if file_type.hpxml or file_type.schedule:
-        base_url = bldg_id.get_building_data_url()
-        response = requests.get(base_url, timeout=30)
+        download_url = bldg_id.get_building_data_url()
+        if download_url == "":
+            message = f"Building data is not available for {bldg_id.get_release_name()}"
+            raise NoBuildingDataError(message)
+        response = requests.get(download_url, timeout=30)
         response.raise_for_status()
 
         output_file = temp_dir / f"{str(bldg_id.bldg_id).zfill(7)}_upgrade{bldg_id.upgrade_id}.zip"
