@@ -28,6 +28,12 @@ class NoBuildingDataError(ValueError):
     pass
 
 
+class NoMetadataError(ValueError):
+    """Raised when no metadata is available for a given release."""
+
+    pass
+
+
 @dataclass
 class RequestedFileTypes:
     hpxml: bool = False
@@ -129,7 +135,7 @@ class BuildingID:
     def get_release_name(self) -> str:
         """Generate the release name for this building."""
         res_com_str = "res" if self.res_com == "resstock" else "com"
-        return f"{res_com_str}stock_{self.weather}_release_{self.release_number}"
+        return f"{res_com_str}_{self.release_year}_{self.weather}_{self.release_number}"
 
     def to_json(self) -> str:
         """Convert the building ID object to a JSON string."""
@@ -354,9 +360,9 @@ def fetch_bldg_data(
                 paths = [path for path in paths_dict.values() if path is not None]
                 downloaded_paths.extend(paths)
 
-                if paths_dict["hpxml"] is None:
+                if file_type_obj.hpxml and paths_dict["hpxml"] is None:
                     failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml")
-                if paths_dict["schedule"] is None:
+                if file_type_obj.schedule and paths_dict["schedule"] is None:
                     failed_downloads.append(
                         f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
                     )
@@ -368,8 +374,11 @@ def fetch_bldg_data(
     # Get metadata if requested. Only one building is needed to get the metadata.
     if file_type_obj.metadata:
         bldg = bldg_ids[0]
-        base_url = bldg.get_metadata_url()
-        response = requests.get(base_url, timeout=30)
+        download_url = bldg.get_metadata_url()
+        if download_url == "":
+            message = f"Metadata is not available for {bldg.get_release_name()}"
+            raise NoMetadataError(message)
+        response = requests.get(download_url, timeout=30)
         response.raise_for_status()
 
         output_file = output_dir / bldg.get_release_name() / "metadata" / bldg.state / "metadata.parquet"
