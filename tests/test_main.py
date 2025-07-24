@@ -8,6 +8,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from buildstock_fetch.main import (
     BuildingID,
+    NoBuildingDataError,
     RequestedFileTypes,
     _parse_requested_file_type,
     download_bldg_data,
@@ -155,3 +156,45 @@ def test_fetch_bldg_data(cleanup_downloads):
         f"data/{bldg_ids[2].get_release_name()}/schedule/{bldg_ids[2].state}/bldg0000011-up00_schedule.csv"
     ).exists()
     assert Path(f"data/{bldg_ids[0].get_release_name()}/metadata/{bldg_ids[0].state}/metadata.parquet").exists()
+
+    # Test 2021 release - should raise NoBuildingDataError
+    bldg_ids = [BuildingID(bldg_id=7, release_year="2021", res_com="resstock", weather="tmy3", upgrade_id="1")]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+
+    with pytest.raises(NoBuildingDataError, match="Building data is not available for resstock_tmy3_release_1"):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
+
+    # Test 2023 release - should raise NoBuildingDataError
+    bldg_ids = [BuildingID(bldg_id=7, release_year="2023", res_com="comstock", weather="amy2018", upgrade_id="1")]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+
+    with pytest.raises(NoBuildingDataError, match="Building data is not available for comstock_amy2018_release_1"):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
+
+    # Test 2024 comstock release - should raise NoBuildingDataError
+    bldg_ids = [BuildingID(bldg_id=7, release_year="2024", res_com="comstock", weather="amy2018", upgrade_id="1")]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+
+    with pytest.raises(NoBuildingDataError, match="Building data is not available for comstock_amy2018_release_1"):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
+
+    # Test 2024 resstock release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=7, release_year="2024", res_com="resstock", weather="tmy3", upgrade_id="1", release_number="2"
+        )
+    ]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    assert Path(f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/bldg0000007-up01.xml").exists()
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/bldg0000007-up01_schedule.csv"
+    ).exists()

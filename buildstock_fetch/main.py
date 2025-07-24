@@ -49,13 +49,16 @@ class BuildingID:
     weather: str = "tmy3"
     upgrade_id: str = "0"
     state: str = "NY"
-    base_url: str = (
-        f"https://oedi-data-lake.s3.amazonaws.com/"
-        "nrel-pds-building-stock/"
-        "end-use-load-profiles-for-us-building-stock/"
-        f"{release_year}/"
-        f"{res_com}_{weather}_release_{release_number}/"
-    )
+
+    @property
+    def base_url(self) -> str:
+        return (
+            f"https://oedi-data-lake.s3.amazonaws.com/"
+            "nrel-pds-building-stock/"
+            "end-use-load-profiles-for-us-building-stock/"
+            f"{self.release_year}/"
+            f"{self.res_com}_{self.weather}_release_{self.release_number}/"
+        )
 
     def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""
@@ -333,6 +336,8 @@ def fetch_bldg_data(
                     failed_downloads.append(
                         f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
                     )
+            except NoBuildingDataError:
+                raise
             except Exception as e:
                 print(f"Download failed for bldg_id {bldg_id}: {e}")
 
