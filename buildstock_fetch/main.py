@@ -94,13 +94,37 @@ class BuildingID:
 
     def get_metadata_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        if self.res_com == "resstock" and self.weather == "tmy3" and self.release_year == "2022":
+
+        if self.release_year == "2021":
+            return f"{self.base_url}metadata/metadata.parquet"
+        elif self.release_year == "2022" or self.release_year == "2023":
             if self.upgrade_id == "0":
                 return f"{self.base_url}metadata/baseline.parquet"
             else:
                 return f"{self.base_url}metadata/upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
+        elif self.release_year == "2024":
+            if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "2":
+                return ""
+                # This release does not have a single national metadata file.
+                # Instead, it has a metadata file for each county.
+                # We need a way to download them all and combine based on the state
+            else:
+                if self.upgrade_id == "0":
+                    return f"{self.base_url}metadata/baseline.parquet"
+                else:
+                    return f"{self.base_url}metadata/upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
+        elif (
+            self.release_year == "2025"
+            and self.res_com == "comstock"
+            and self.weather == "amy2018"
+            and self.release_number == "1"
+        ):
+            return ""
+            # This release does not have a single national metadata file.
+            # Instead, it has a metadata file for each county.
+            # We need a way to download them all and combine based on the state
         else:
-            return f"{self.base_url}metadata/metadata.parquet"
+            return ""
 
     def get_release_name(self) -> str:
         """Generate the release name for this building."""
