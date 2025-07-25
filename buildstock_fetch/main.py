@@ -34,16 +34,22 @@ class NoMetadataError(ValueError):
     pass
 
 
+class No15minLoadCurveError(ValueError):
+    """Raised when no 15 min load profile timeseries is available for a given release."""
+
+    pass
+
+
 @dataclass
 class RequestedFileTypes:
     hpxml: bool = False
     schedule: bool = False
     metadata: bool = False
-    time_series_15min: bool = False
-    time_series_hourly: bool = False
-    time_series_daily: bool = False
-    time_series_weekly: bool = False
-    time_series_monthly: bool = False
+    load_curve_15min: bool = False
+    load_curve_hourly: bool = False
+    load_curve_daily: bool = False
+    load_curve_weekly: bool = False
+    load_curve_monthly: bool = False
 
 
 @dataclass
@@ -132,7 +138,7 @@ class BuildingID:
         else:
             return ""
 
-    def get_15min_timeseries_url(self) -> str:
+    def get_15min_load_curve_url(self) -> str:
         """Generate the S3 download URL for this building."""
         if self.release_year == "2021":
             if self.upgrade_id != "0":
@@ -142,7 +148,7 @@ class BuildingID:
                     f"{self.base_url}timeseries_individual_buildings/"
                     f"by_state/upgrade={self.upgrade_id}/"
                     f"state={self.state}/"
-                    f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+                    f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
                 )
 
         elif self.release_year == "2022" or self.release_year == "2023":
@@ -150,7 +156,7 @@ class BuildingID:
                 f"{self.base_url}timeseries_individual_buildings/"
                 f"by_state/upgrade={self.upgrade_id}/"
                 f"state={self.state}/"
-                f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+                f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
             )
         elif self.release_year == "2024":
             if self.res_com == "resstock" and self.weather == "tmy3" and self.release_number == "1":
@@ -160,14 +166,14 @@ class BuildingID:
                     f"{self.base_url}timeseries_individual_buildings/"
                     f"by_state/upgrade={self.upgrade_id}/"
                     f"state={self.state}/"
-                    f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+                    f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
                 )
         elif self.release_year == "2025":
             return (
                 f"{self.base_url}timeseries_individual_buildings/"
                 f"by_state/upgrade={self.upgrade_id}/"
                 f"state={self.state}/"
-                f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+                f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
             )
         else:
             return ""
@@ -367,6 +373,29 @@ def download_metadata(bldg_id: BuildingID, output_dir: Path) -> Path:
     return output_file
 
 
+def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
+    """Download the 15 min load profile timeseries for a given building.
+
+    Args:
+        bldg_id: A BuildingID object to download 15 min load profile timeseries for.
+        output_dir: Directory to save the downloaded 15 min load profile timeseries.
+    """
+
+    download_url = bldg_id.get_15min_load_curve_url()
+    if download_url == "":
+        message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}"
+        raise No15minLoadCurveError(message)
+    response = requests.get(download_url, timeout=30)
+    response.raise_for_status()
+    output_file = (
+        output_dir / bldg_id.get_release_name() / "load_curve_15min" / bldg_id.state / "load_curve_15min.parquet"
+    )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, "wb") as file:
+        file.write(response.content)
+    return output_file
+
+
 def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes:
     """Parse the file type string into a RequestedFileTypes object."""
     file_type_obj = RequestedFileTypes()
@@ -376,17 +405,115 @@ def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes
         file_type_obj.schedule = True
     if "metadata" in file_type:
         file_type_obj.metadata = True
-    if "time_series_15min" in file_type:
-        file_type_obj.time_series_15min = True
-    if "time_series_hourly" in file_type:
-        file_type_obj.time_series_hourly = True
-    if "time_series_daily" in file_type:
-        file_type_obj.time_series_daily = True
-    if "time_series_weekly" in file_type:
-        file_type_obj.time_series_weekly = True
-    if "time_series_monthly" in file_type:
-        file_type_obj.time_series_monthly = True
+    if "load_curve_15min" in file_type:
+        file_type_obj.load_curve_15min = True
+    if "load_curve_hourly" in file_type:
+        file_type_obj.load_curve_hourly = True
+    if "load_curve_daily" in file_type:
+        file_type_obj.load_curve_daily = True
+    if "load_curve_weekly" in file_type:
+        file_type_obj.load_curve_weekly = True
+    if "load_curve_monthly" in file_type:
+        file_type_obj.load_curve_monthly = True
     return file_type_obj
+
+
+def _download_building_data_parallel(
+    bldg_ids: list[BuildingID], file_type_obj: RequestedFileTypes, output_dir: Path, max_workers: int
+) -> tuple[list[Path], list[str]]:
+    """Download building data (HPXML and schedule files) in parallel."""
+    downloaded_paths = []
+    failed_downloads = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_bldg = {
+            executor.submit(download_bldg_data, bldg_id, file_type_obj, output_dir): bldg_id for bldg_id in bldg_ids
+        }
+
+        for future in concurrent.futures.as_completed(future_to_bldg):
+            bldg_id = future_to_bldg[future]
+            try:
+                paths_dict = future.result()
+                paths = [path for path in paths_dict.values() if path is not None]
+                downloaded_paths.extend(paths)
+
+                if file_type_obj.hpxml and paths_dict["hpxml"] is None:
+                    failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml")
+                if file_type_obj.schedule and paths_dict["schedule"] is None:
+                    failed_downloads.append(
+                        f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
+                    )
+            except NoBuildingDataError:
+                failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml")
+                failed_downloads.append(
+                    f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
+                )
+                raise
+            except Exception as e:
+                print(f"Download failed for bldg_id {bldg_id}: {e}")
+
+    return downloaded_paths, failed_downloads
+
+
+def _download_metadata_single(bldg_ids: list[BuildingID], output_dir: Path) -> tuple[list[Path], list[str]]:
+    """Download metadata for a single building (only one needed)."""
+    downloaded_paths = []
+    failed_downloads = []
+
+    bldg = bldg_ids[0]
+    try:
+        output_file = download_metadata(bldg, output_dir)
+        downloaded_paths.append(output_file)
+    except NoMetadataError:
+        output_file = output_dir / bldg.get_release_name() / "metadata" / bldg.state / "metadata.parquet"
+        failed_downloads.append(str(output_file))
+        raise
+    except Exception as e:
+        print(f"Download failed for metadata for {bldg.get_release_name()}: {e}")
+
+    return downloaded_paths, failed_downloads
+
+
+def _download_15min_load_curves_parallel(
+    bldg_ids: list[BuildingID], output_dir: Path, max_workers: int
+) -> tuple[list[Path], list[str]]:
+    """Download 15-minute load curves in parallel."""
+    downloaded_paths = []
+    failed_downloads = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_bldg = {
+            executor.submit(download_15min_load_curve, bldg_id, output_dir): bldg_id for bldg_id in bldg_ids
+        }
+
+        for future in concurrent.futures.as_completed(future_to_bldg):
+            bldg_id = future_to_bldg[future]
+            try:
+                output_file = future.result()
+                downloaded_paths.append(output_file)
+            except No15minLoadCurveError:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "load_curve_15min"
+                    / bldg_id.state
+                    / "load_curve_15min.parquet"
+                )
+                failed_downloads.append(str(output_file))
+                raise
+            except Exception as e:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "load_curve_15min"
+                    / bldg_id.state
+                    / "load_curve_15min.parquet"
+                )
+                failed_downloads.append(str(output_file))
+                print(f"Download failed for 15 min load profile timeseries for {bldg_id.get_release_name()}: {e}")
+                raise
+
+    return downloaded_paths, failed_downloads
 
 
 def fetch_bldg_data(
@@ -406,54 +533,34 @@ def fetch_bldg_data(
 
     downloaded_paths = []
     failed_downloads = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks and keep track of future -> bldg_id mapping
-        future_to_bldg = {
-            executor.submit(download_bldg_data, bldg_id, file_type_obj, output_dir): bldg_id for bldg_id in bldg_ids
-        }
 
-        # Process completed futures
-        for future in concurrent.futures.as_completed(future_to_bldg):
-            bldg_id = future_to_bldg[future]  # Get the correct bldg_id for this future
-            try:
-                paths_dict = future.result()
-                # Convert dict values to list, filtering out None values
-                paths = [path for path in paths_dict.values() if path is not None]
-                downloaded_paths.extend(paths)
+    # Download building data if requested.
+    if file_type_obj.hpxml or file_type_obj.schedule:
+        paths, failures = _download_building_data_parallel(bldg_ids, file_type_obj, output_dir, max_workers)
+        downloaded_paths.extend(paths)
+        failed_downloads.extend(failures)
 
-                if file_type_obj.hpxml and paths_dict["hpxml"] is None:
-                    failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml")
-                if file_type_obj.schedule and paths_dict["schedule"] is None:
-                    failed_downloads.append(
-                        f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
-                    )
-            except NoBuildingDataError:
-                failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml")
-                failed_downloads.append(
-                    f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
-                )
-                raise
-            except Exception as e:
-                print(f"Download failed for bldg_id {bldg_id}: {e}")
-
-    # Get metadata if requested. Only one building is needed to get the metadata.
+    # Get metadata if requested.
     if file_type_obj.metadata:
-        bldg = bldg_ids[0]
-        try:
-            output_file = download_metadata(bldg, output_dir)
-            downloaded_paths.append(output_file)
-        except NoMetadataError:
-            output_file = output_dir / bldg.get_release_name() / "metadata" / bldg.state / "metadata.parquet"
-            failed_downloads.append(str(output_file))
-            raise
-        except Exception as e:
-            print(f"Download failed for metadata for {bldg.get_release_name()}: {e}")
+        paths, failures = _download_metadata_single(bldg_ids, output_dir)
+        downloaded_paths.extend(paths)
+        failed_downloads.extend(failures)
+
+    # Get 15 min load profile timeseries if requested.
+    if file_type_obj.load_curve_15min:
+        paths, failures = _download_15min_load_curves_parallel(bldg_ids, output_dir, max_workers)
+        downloaded_paths.extend(paths)
+        failed_downloads.extend(failures)
 
     return downloaded_paths, failed_downloads
 
 
 if __name__ == "__main__":  # pragma: no cover
-    tmp_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=9)]
-    tmp_data, tmp_failed = fetch_bldg_data(tmp_ids, ("hpxml", "schedule", "metadata"), Path(__file__).parent / "data")
+    tmp_ids = [
+        BuildingID(
+            bldg_id=10, release_year="2022", res_com="resstock", weather="amy2018", release_number="1", upgrade_id="1"
+        )
+    ]
+    tmp_data, tmp_failed = fetch_bldg_data(tmp_ids, ("load_curve_15min"), Path(__file__).parent / "data")
     print(f"Downloaded files: {[str(path) for path in tmp_data]}")
     print(f"Failed downloads: {tmp_failed}")
