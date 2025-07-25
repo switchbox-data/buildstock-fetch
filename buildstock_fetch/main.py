@@ -346,6 +346,27 @@ def download_bldg_data(
     return downloaded_paths
 
 
+def download_metadata(bldg_id: BuildingID, output_dir: Path) -> Path:
+    """Download the metadata for a given building.
+
+    Args:
+        bldg_id: A BuildingID object to download metadata for.
+        output_dir: Directory to save the downloaded metadata.
+    """
+
+    download_url = bldg_id.get_metadata_url()
+    if download_url == "":
+        message = f"Metadata is not available for {bldg_id.get_release_name()}"
+        raise NoMetadataError(message)
+    response = requests.get(download_url, timeout=30)
+    response.raise_for_status()
+    output_file = output_dir / bldg_id.get_release_name() / "metadata" / bldg_id.state / "metadata.parquet"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, "wb") as file:
+        file.write(response.content)
+    return output_file
+
+
 def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes:
     """Parse the file type string into a RequestedFileTypes object."""
     file_type_obj = RequestedFileTypes()
@@ -407,6 +428,10 @@ def fetch_bldg_data(
                         f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
                     )
             except NoBuildingDataError:
+                failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml")
+                failed_downloads.append(
+                    f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
+                )
                 raise
             except Exception as e:
                 print(f"Download failed for bldg_id {bldg_id}: {e}")
@@ -414,18 +439,15 @@ def fetch_bldg_data(
     # Get metadata if requested. Only one building is needed to get the metadata.
     if file_type_obj.metadata:
         bldg = bldg_ids[0]
-        download_url = bldg.get_metadata_url()
-        if download_url == "":
-            message = f"Metadata is not available for {bldg.get_release_name()}"
-            raise NoMetadataError(message)
-        response = requests.get(download_url, timeout=30)
-        response.raise_for_status()
-
-        output_file = output_dir / bldg.get_release_name() / "metadata" / bldg.state / "metadata.parquet"
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_file, "wb") as file:
-            file.write(response.content)
-        downloaded_paths.append(output_file)
+        try:
+            output_file = download_metadata(bldg, output_dir)
+            downloaded_paths.append(output_file)
+        except NoMetadataError:
+            output_file = output_dir / bldg.get_release_name() / "metadata" / bldg.state / "metadata.parquet"
+            failed_downloads.append(str(output_file))
+            raise
+        except Exception as e:
+            print(f"Download failed for metadata for {bldg.get_release_name()}: {e}")
 
     return downloaded_paths, failed_downloads
 
