@@ -561,6 +561,6 @@ if __name__ == "__main__":  # pragma: no cover
             bldg_id=10, release_year="2022", res_com="resstock", weather="amy2018", release_number="1", upgrade_id="1"
         )
     ]
-    tmp_data, tmp_failed = fetch_bldg_data(tmp_ids, ("load_curve_15min"), Path(__file__).parent / "data")
+    tmp_data, tmp_failed = fetch_bldg_data(tmp_ids, ("load_curve_15min",), Path(__file__).parent / "data")
     print(f"Downloaded files: {[str(path) for path in tmp_data]}")
     print(f"Failed downloads: {tmp_failed}")
