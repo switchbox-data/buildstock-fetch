@@ -1,3 +1,4 @@
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -383,3 +384,44 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert Path(
         f"data/{bldg_ids[1].get_release_name()}/load_curve_15min/{bldg_ids[1].state}/load_curve_15min.parquet"
     ).exists()
+
+
+def test_load_curve_column_renaming(cleanup_downloads):
+    releases_file = Path(__file__).parent.parent / "utils" / "buildstock_releases.json"
+    with open(releases_file) as f:
+        all_releases = json.load(f)
+
+    available_releases = [
+        release_name
+        for release_name, release_info in all_releases.items()
+        if "15min_load_curve" in release_info["available_data"]
+    ]
+
+    assert len(available_releases) > 0, "No available releases found with 15min_load_curve data"
+
+    for release in available_releases:
+        if release == "com_2021_amy2018_1" or release == "com_2021_tmy3_1":
+            continue
+        res_com = all_releases[release]["res_com"]
+        release_year = all_releases[release]["release_year"]
+        weather = all_releases[release]["weather"]
+        release_number = all_releases[release]["release_number"]
+        upgrade_id = all_releases[release]["upgrade_ids"][0]
+
+        # Get building IDs for NY state (same as in main)
+        bldg_ids = fetch_bldg_ids(res_com, release_year, weather, release_number, "NY", upgrade_id)
+        assert len(bldg_ids) > 0, f"No building IDs found for release {release}"
+
+        # Take the first building ID (same as in main)
+        bldg_id = [bldg_ids[0]]
+        file_type = ("load_curve_15min",)
+        output_dir = Path("data")
+
+        # This should not raise any exceptions
+        downloaded_paths, failed_downloads = fetch_bldg_data(bldg_id, file_type, output_dir)
+
+        assert len(downloaded_paths) == 1, f"Expected 1 downloaded path, got {len(downloaded_paths)}"
+        assert len(failed_downloads) == 0, f"Expected 0 failed downloads, got {len(failed_downloads)}"
+        assert Path(
+            f"data/{bldg_ids[0].get_release_name()}/load_curve_15min/{bldg_ids[0].state}/load_curve_15min.parquet"
+        ).exists(), f"Load curve file not found for release {release}"

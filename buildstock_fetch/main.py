@@ -166,10 +166,17 @@ class BuildingID:
                     f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
                 )
 
-        elif self.release_year == "2022" or self.release_year == "2023":
+        elif self.release_year == "2022":
             return (
                 f"{self.base_url}timeseries_individual_buildings/"
                 f"by_state/upgrade={self.upgrade_id}/"
+                f"state={self.state}/"
+                f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
+            )
+        elif self.release_year == "2023":
+            return (
+                f"{self.base_url}timeseries_individual_buildings/"
+                f"by_state/upgrade={int(self.upgrade_id)!s}/"
                 f"state={self.state}/"
                 f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
             )
@@ -179,14 +186,14 @@ class BuildingID:
             else:
                 return (
                     f"{self.base_url}timeseries_individual_buildings/"
-                    f"by_state/upgrade={self.upgrade_id}/"
+                    f"by_state/upgrade={int(self.upgrade_id)!s}/"
                     f"state={self.state}/"
                     f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
                 )
         elif self.release_year == "2025":
             return (
                 f"{self.base_url}timeseries_individual_buildings/"
-                f"by_state/upgrade={self.upgrade_id}/"
+                f"by_state/upgrade={int(self.upgrade_id)!s}/"
                 f"state={self.state}/"
                 f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
             )
@@ -596,11 +603,14 @@ def fetch_bldg_data(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    tmp_ids = [
-        BuildingID(
-            bldg_id=10, release_year="2022", res_com="resstock", weather="amy2018", release_number="1", upgrade_id="1"
-        )
+    releases_file = Path(__file__).parent.parent / "utils" / "buildstock_releases.json"
+    with open(releases_file) as f:
+        all_releases = json.load(f)
+
+    available_releases = [
+        release_name
+        for release_name, release_info in all_releases.items()
+        if "15min_load_curve" in release_info["available_data"]
     ]
-    tmp_data, tmp_failed = fetch_bldg_data(tmp_ids, ("load_curve_15min",), Path(__file__).parent / "data")
-    print(f"Downloaded files: {[str(path) for path in tmp_data]}")
-    print(f"Failed downloads: {tmp_failed}")
+
+    print(available_releases)
