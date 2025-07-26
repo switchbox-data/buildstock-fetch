@@ -44,12 +44,12 @@ COLUMN_RENAMES = {
     "out.electricity.cooling.energy_consumption": ["out.electricity.cooling.energy_consumption"],
     "out.electricity.heating.energy_consumption": ["out.electricity.heating.energy_consumption"],
     "out.natural_gas.heating.energy_consumption": ["out.natural_gas.heating.energy_consumption"],
-    "out.natural_gas.water_systems.energy_consumption": ["out.natural_gas.water_systems.energy_consumption"],
+    "out.natural_gas.water_systems.energy_consumption": [
+        "out.natural_gas.water_systems.energy_consumption",
+        "out.natural_gas.hot_water.energy_consumption",
+    ],
     "out.electricity.total.energy_consumption": ["out.electricity.total.energy_consumption"],
     "out.natural_gas.total.energy_consumption": ["out.natural_gas.total.energy_consumption"],
-    "out.other_fuel.heating.energy_consumption": ["out.other_fuel.heating.energy_consumption"],
-    "out.other_fuel.water_systems.energy_consumption": ["out.other_fuel.water_systems.energy_consumption"],
-    "out.other_fuel.total.energy_consumption": ["out.other_fuel.total.energy_consumption"],
     "out.site_energy.total.energy_consumption": ["out.site_energy.total.energy_consumption"],
     "bldg_id": ["bldg_id"],
 }
@@ -220,6 +220,24 @@ def _validate_release_name(release_name: str) -> bool:
     # Get the top-level keys as valid release names
     valid_release_names = list(releases_data.keys())
     return release_name in valid_release_names
+
+
+def _rename_column_names(output_file: Path) -> None:
+    """Rename the column names in the metadata file."""
+    if not output_file.exists() or output_file.stat().st_size == 0:
+        message = f"File {output_file} is empty or doesn't exist"
+        raise ValueError(message)
+
+    df = pl.read_parquet(output_file)
+    for new_name, old_names in COLUMN_RENAMES.items():
+        for old_name in old_names:
+            if old_name in df.columns:
+                df = df.rename({old_name: new_name})
+                break
+        if not any(old_name in df.columns for old_name in old_names):
+            message = f"Column {new_name} not found in {output_file}"
+            raise ValueError(message)
+    df.write_parquet(output_file)
 
 
 def fetch_bldg_ids(
@@ -527,6 +545,13 @@ def _download_15min_load_curves_parallel(
                 failed_downloads.append(str(output_file))
                 print(f"Download failed for 15 min load profile timeseries for {bldg_id.get_release_name()}: {e}")
                 raise
+
+    # Rename columns after all downloads are complete
+    for output_file in downloaded_paths:
+        try:
+            _rename_column_names(output_file)
+        except Exception as e:
+            print(f"Failed to rename columns in {output_file}: {e}")
 
     return downloaded_paths, failed_downloads
 
