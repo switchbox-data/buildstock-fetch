@@ -40,6 +40,21 @@ class No15minLoadCurveError(ValueError):
     pass
 
 
+COLUMN_RENAMES = {
+    "out.electricity.cooling.energy_consumption": ["out.electricity.cooling.energy_consumption"],
+    "out.electricity.heating.energy_consumption": ["out.electricity.heating.energy_consumption"],
+    "out.natural_gas.heating.energy_consumption": ["out.natural_gas.heating.energy_consumption"],
+    "out.natural_gas.water_systems.energy_consumption": ["out.natural_gas.water_systems.energy_consumption"],
+    "out.electricity.total.energy_consumption": ["out.electricity.total.energy_consumption"],
+    "out.natural_gas.total.energy_consumption": ["out.natural_gas.total.energy_consumption"],
+    "out.other_fuel.heating.energy_consumption": ["out.other_fuel.heating.energy_consumption"],
+    "out.other_fuel.water_systems.energy_consumption": ["out.other_fuel.water_systems.energy_consumption"],
+    "out.other_fuel.total.energy_consumption": ["out.other_fuel.total.energy_consumption"],
+    "out.site_energy.total.energy_consumption": ["out.site_energy.total.energy_consumption"],
+    "bldg_id": ["bldg_id"],
+}
+
+
 @dataclass
 class RequestedFileTypes:
     hpxml: bool = False
