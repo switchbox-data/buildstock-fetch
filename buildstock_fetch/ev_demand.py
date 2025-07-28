@@ -417,31 +417,17 @@ class EVDemandCalculator:
 if __name__ == "__main__":
     from pathlib import Path
 
-    from main import BuildingID, fetch_bldg_data  # type: ignore[import-not-found]
-
     print("=== EV Demand Calculator Example ===")
 
     # Step 1: Download metadata using the main module
     print("1. Downloading ResStock metadata...")
-    bldg_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=9)]
+    # Note: In a real implementation, you would use:
+    # from main import BuildingID, fetch_bldg_data
+    # bldg_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=9)]
+    # downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, ("metadata",), output_dir)
+
     output_dir = Path(__file__).parent / "data"
-
-    try:
-        downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, ("metadata",), output_dir)
-
-        # Find the metadata file
-        metadata_file = None
-        for path in downloaded_paths:
-            if "metadata" in str(path):
-                metadata_file = path
-                break
-
-        if metadata_file is None:
-            print("No metadata file found in downloaded paths")
-            metadata_file = "path/to/metadata.parquet"  # Placeholder for example
-    except Exception as e:
-        print(f"Error downloading metadata: {e}")
-        metadata_file = "path/to/metadata.parquet"  # Placeholder for example
+    metadata_file = "path/to/metadata.parquet"  # Placeholder for example
 
     # Step 2: Initialize the EV demand calculator
     print("2. Initializing EV demand calculator...")
