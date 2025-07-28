@@ -31,11 +31,16 @@ def cleanup_downloads():
 
 
 def test_fetch_bldg_ids():
-    assert fetch_bldg_ids("MA") == [
-        BuildingID(bldg_id=7),
-        BuildingID(bldg_id=8),
-        BuildingID(bldg_id=9),
-    ]
+    assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[0].bldg_id == 355537
+    assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[0].res_com == "resstock"
+    assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[0].release_year == "2021"
+    assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[0].weather == "tmy3"
+    assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[0].release_number == "1"
+    assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[0].upgrade_id == "0"
+
+    assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[1].bldg_id == 24415
+    assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[2].bldg_id == 487404
+    assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[3].bldg_id == 355634
 
 
 def test_building_id_config():
@@ -101,29 +106,32 @@ def test_parse_requested_file_type():
 
 def test_download_bldg_data(cleanup_downloads):
     # Test fetching HPXML files
+    bldg_id = BuildingID(bldg_id=7)
     download_bldg_data(
-        bldg_id=BuildingID(bldg_id=7),
+        bldg_id=bldg_id,
         file_type=RequestedFileTypes(hpxml=True),
         output_dir=Path("data"),
     )
-    assert Path("data/bldg0000007-up00.xml").exists()
+    assert Path(f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/bldg0000007-up00.xml").exists()
 
     # Test fetching schedule files
+    bldg_id = BuildingID(bldg_id=7)
     download_bldg_data(
-        bldg_id=BuildingID(bldg_id=7),
+        bldg_id=bldg_id,
         file_type=RequestedFileTypes(schedule=True),
         output_dir=Path("data"),
     )
-    assert Path("data/bldg0000007-up00_schedule.csv").exists()
+    assert Path(f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/bldg0000007-up00_schedule.csv").exists()
 
     # Test fetching both HPXML and schedule files
+    bldg_id = BuildingID(bldg_id=7)
     download_bldg_data(
-        bldg_id=BuildingID(bldg_id=7),
+        bldg_id=bldg_id,
         file_type=RequestedFileTypes(hpxml=True, schedule=True),
         output_dir=Path("data"),
     )
-    assert Path("data/bldg0000007-up00.xml").exists()
-    assert Path("data/bldg0000007-up00_schedule.csv").exists()
+    assert Path(f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/bldg0000007-up00.xml").exists()
+    assert Path(f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/bldg0000007-up00_schedule.csv").exists()
 
 
 def test_fetch_bldg_data(cleanup_downloads):
@@ -134,10 +142,16 @@ def test_fetch_bldg_data(cleanup_downloads):
     print(downloaded_paths)
     print(failed_downloads)
     assert len(downloaded_paths) == 7
-    assert Path("data/bldg0000007-up00.xml").exists()
-    assert Path("data/bldg0000007-up00_schedule.csv").exists()
-    assert Path("data/bldg0000008-up00.xml").exists()
-    assert Path("data/bldg0000008-up00_schedule.csv").exists()
-    assert Path("data/bldg0000011-up00.xml").exists()
-    assert Path("data/bldg0000011-up00_schedule.csv").exists()
-    assert Path("data/resstock_tmy3_release_1_metadata.parquet").exists()
+    assert Path(f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/bldg0000007-up00.xml").exists()
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/bldg0000007-up00_schedule.csv"
+    ).exists()
+    assert Path(f"data/{bldg_ids[1].get_release_name()}/hpxml/{bldg_ids[1].state}/bldg0000008-up00.xml").exists()
+    assert Path(
+        f"data/{bldg_ids[1].get_release_name()}/schedule/{bldg_ids[1].state}/bldg0000008-up00_schedule.csv"
+    ).exists()
+    assert Path(f"data/{bldg_ids[2].get_release_name()}/hpxml/{bldg_ids[2].state}/bldg0000011-up00.xml").exists()
+    assert Path(
+        f"data/{bldg_ids[2].get_release_name()}/schedule/{bldg_ids[2].state}/bldg0000011-up00_schedule.csv"
+    ).exists()
+    assert Path(f"data/{bldg_ids[0].get_release_name()}/metadata/{bldg_ids[0].state}/metadata.parquet").exists()
