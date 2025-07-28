@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
@@ -56,7 +57,7 @@ class TripSchedule:
 
     building_id: int
     vehicle_id: int
-    date: pl.Datetime
+    date: datetime
     departure_hour: int
     arrival_hour: int
     miles_driven: float
@@ -229,7 +230,7 @@ class EVDemandCalculator:
 
         return profiles
 
-    def get_avg_temp_while_away(self, departure_hour: int, arrival_hour: int, date: pl.Datetime) -> float:
+    def get_avg_temp_while_away(self, departure_hour: int, arrival_hour: int, date: datetime) -> float:
         """
         Calculate the average outdoor temperature during the hours the vehicle is away from home.
 
@@ -301,17 +302,20 @@ class EVDemandCalculator:
         # This is a placeholder - replace with actual schedule generation logic
         schedules = []
 
+        # Parse start date once
+        start_datetime = datetime(2022, 1, 1)  # Fixed date for placeholder
+
         for (building_id, vehicle_id), profile in profile_params.items():
             # Placeholder: generate one day of data
             schedule = TripSchedule(
                 building_id=building_id,
                 vehicle_id=vehicle_id,
-                date=pl.datetime(start_date),
+                date=start_datetime,
                 departure_hour=profile.weekday_departure_hour,
                 arrival_hour=profile.weekday_arrival_hour,
                 miles_driven=profile.weekday_miles,
                 avg_temp_while_away=self.get_avg_temp_while_away(
-                    profile.weekday_departure_hour, profile.weekday_arrival_hour, pl.datetime(start_date)
+                    profile.weekday_departure_hour, profile.weekday_arrival_hour, start_datetime
                 ),
                 kwh_consumed=0.0,  # Will be calculated below
             )
@@ -350,7 +354,7 @@ class EVDemandCalculator:
                 # If no battery is large enough, assign the largest available
                 assigned_capacities.append(int(battery_capacities[-1]))
 
-        return pl.Series(assigned_capacities, name=daily_kwh.name)
+        return pl.Series(assigned_capacities)
 
     def run_complete_workflow(
         self, pums_path: str, nhts_path: str, weather_path: str, output_dir: Optional[Path] = None
