@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 class MetadataPathError(Exception):
@@ -56,7 +56,7 @@ class TripSchedule:
 
     building_id: int
     vehicle_id: int
-    date: pd.Timestamp
+    date: pl.Datetime
     departure_hour: int
     arrival_hour: int
     miles_driven: float
@@ -86,10 +86,10 @@ class EVDemandCalculator:
             metadata_path: Path to the ResStock metadata parquet file
         """
         self.metadata_path = metadata_path
-        self.metadata_df: Optional[pd.DataFrame] = None
+        self.metadata_df: Optional[pl.DataFrame] = None
         self.vehicle_ownership_model: Optional[object] = None
-        self.nhts_df: Optional[pd.DataFrame] = None
-        self.weather_df: Optional[pd.DataFrame] = None
+        self.nhts_df: Optional[pl.DataFrame] = None
+        self.weather_df: Optional[pl.DataFrame] = None
 
         # Available battery capacities in kWh
         self.battery_capacities = [12, 40, 60, 90, 120]
@@ -105,7 +105,7 @@ class EVDemandCalculator:
             -2.0659e-10,  # a_5 (quintic term)
         ])
 
-    def load_metadata(self, metadata_path: Optional[str] = None) -> pd.DataFrame:
+    def load_metadata(self, metadata_path: Optional[str] = None) -> pl.DataFrame:
         """
         Load and parse the ResStock metadata parquet file.
 
@@ -119,10 +119,10 @@ class EVDemandCalculator:
         if path is None:
             raise MetadataPathError()
 
-        self.metadata_df = pd.read_parquet(path)
+        self.metadata_df = pl.read_parquet(path)
         return self.metadata_df
 
-    def fit_vehicle_ownership_model(self, pums_df: pd.DataFrame) -> object:
+    def fit_vehicle_ownership_model(self, pums_df: pl.DataFrame) -> object:
         """
         Fit a model to predict number of vehicles per household using PUMS data.
 
@@ -137,7 +137,7 @@ class EVDemandCalculator:
         self.vehicle_ownership_model = "placeholder_model"
         return self.vehicle_ownership_model
 
-    def predict_num_vehicles(self, metadata_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    def predict_num_vehicles(self, metadata_df: Optional[pl.DataFrame] = None) -> pl.DataFrame:
         """
         Predict number of vehicles for each household in the metadata using the fitted model.
 
@@ -156,11 +156,10 @@ class EVDemandCalculator:
 
         # TODO: Implement actual prediction logic
         # This is a placeholder - replace with actual model prediction
-        df = df.copy()
-        df["num_vehicles"] = 1  # Placeholder: assume 1 vehicle per household
+        df = df.with_columns(pl.lit(1).alias("num_vehicles"))  # Placeholder: assume 1 vehicle per household
         return df
 
-    def load_nhts_data(self, nhts_path: str) -> pd.DataFrame:
+    def load_nhts_data(self, nhts_path: str) -> pl.DataFrame:
         """
         Load and preprocess the NHTS trip data.
 
@@ -172,10 +171,10 @@ class EVDemandCalculator:
         """
         # TODO: Implement NHTS data loading and preprocessing
         # This is a placeholder - replace with actual NHTS loading logic
-        self.nhts_df = pd.DataFrame()  # Placeholder
+        self.nhts_df = pl.DataFrame()  # Placeholder
         return self.nhts_df
 
-    def load_weather_data(self, weather_path: str) -> pd.DataFrame:
+    def load_weather_data(self, weather_path: str) -> pl.DataFrame:
         """
         Load hourly weather data (e.g., temperature) for a given location.
 
@@ -187,11 +186,11 @@ class EVDemandCalculator:
         """
         # TODO: Implement weather data loading
         # This is a placeholder - replace with actual weather loading logic
-        self.weather_df = pd.DataFrame()  # Placeholder
+        self.weather_df = pl.DataFrame()  # Placeholder
         return self.weather_df
 
     def sample_vehicle_profiles(
-        self, metadata_df: Optional[pd.DataFrame] = None
+        self, metadata_df: Optional[pl.DataFrame] = None
     ) -> dict[tuple[int, int], VehicleProfile]:
         """
         For each household and vehicle, sample weekday and weekend trip profiles from NHTS.
@@ -212,7 +211,7 @@ class EVDemandCalculator:
         # TODO: Implement NHTS sampling logic
         # This is a placeholder - replace with actual sampling logic
         profiles = {}
-        for _, row in df.iterrows():
+        for row in df.iter_rows(named=True):
             building_id = row["building_id"]
             num_vehicles = row.get("num_vehicles", 1)
 
@@ -230,7 +229,7 @@ class EVDemandCalculator:
 
         return profiles
 
-    def get_avg_temp_while_away(self, departure_hour: int, arrival_hour: int, date: pd.Timestamp) -> float:
+    def get_avg_temp_while_away(self, departure_hour: int, arrival_hour: int, date: pl.Datetime) -> float:
         """
         Calculate the average outdoor temperature during the hours the vehicle is away from home.
 
@@ -286,7 +285,7 @@ class EVDemandCalculator:
         profile_params: dict[tuple[int, int], VehicleProfile],
         start_date: str = "2022-01-01",
         end_date: str = "2022-12-31",
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """
         Generate an annual trip schedule for each vehicle based on sampled parameters.
 
@@ -307,12 +306,12 @@ class EVDemandCalculator:
             schedule = TripSchedule(
                 building_id=building_id,
                 vehicle_id=vehicle_id,
-                date=pd.Timestamp(start_date),
+                date=pl.datetime(start_date),
                 departure_hour=profile.weekday_departure_hour,
                 arrival_hour=profile.weekday_arrival_hour,
                 miles_driven=profile.weekday_miles,
                 avg_temp_while_away=self.get_avg_temp_while_away(
-                    profile.weekday_departure_hour, profile.weekday_arrival_hour, pd.Timestamp(start_date)
+                    profile.weekday_departure_hour, profile.weekday_arrival_hour, pl.datetime(start_date)
                 ),
                 kwh_consumed=0.0,  # Will be calculated below
             )
@@ -323,9 +322,9 @@ class EVDemandCalculator:
             schedules.append(schedule)
 
         # Convert to DataFrame
-        return pd.DataFrame([vars(schedule) for schedule in schedules])
+        return pl.DataFrame([vars(schedule) for schedule in schedules])
 
-    def assign_battery_capacity(self, daily_kwh: pd.Series) -> pd.Series:
+    def assign_battery_capacity(self, daily_kwh: pl.Series) -> pl.Series:
         """
         Assign the minimum EV battery capacity that covers the max daily kWh plus a 20% buffer.
 
@@ -339,23 +338,23 @@ class EVDemandCalculator:
         required_capacity = daily_kwh * 1.2
 
         # Find the minimum battery capacity that meets the requirement
-        battery_capacities = pd.Series(self.battery_capacities)
+        battery_capacities = pl.Series(self.battery_capacities)
         assigned_capacities: list[int] = []
 
         for required in required_capacity:
             # Find the smallest battery that can handle the required capacity
-            suitable_batteries = battery_capacities[battery_capacities >= required]
+            suitable_batteries = battery_capacities.filter(battery_capacities >= required)
             if len(suitable_batteries) > 0:
-                assigned_capacities.append(int(suitable_batteries.iloc[0]))
+                assigned_capacities.append(int(suitable_batteries[0]))
             else:
                 # If no battery is large enough, assign the largest available
-                assigned_capacities.append(int(battery_capacities.iloc[-1]))
+                assigned_capacities.append(int(battery_capacities[-1]))
 
-        return pd.Series(assigned_capacities, index=daily_kwh.index)
+        return pl.Series(assigned_capacities, name=daily_kwh.name)
 
     def run_complete_workflow(
         self, pums_path: str, nhts_path: str, weather_path: str, output_dir: Optional[Path] = None
-    ) -> dict[str, Union[pd.DataFrame, pd.Series]]:
+    ) -> dict[str, Union[pl.DataFrame, pl.Series]]:
         """
         Run the complete EV demand workflow.
 
@@ -372,7 +371,7 @@ class EVDemandCalculator:
         metadata_df = self.load_metadata()
 
         # Step 2: Load PUMS data and fit vehicle ownership model
-        pums_df = pd.read_csv(pums_path)  # TODO: Adjust based on actual PUMS format
+        pums_df = pl.read_csv(pums_path)  # TODO: Adjust based on actual PUMS format
         self.fit_vehicle_ownership_model(pums_df)
 
         # Step 3: Predict number of vehicles
@@ -391,17 +390,17 @@ class EVDemandCalculator:
         trip_schedules = self.generate_annual_trip_schedule(vehicle_profiles)
 
         # Step 8: Assign battery capacities
-        max_daily_kwh = trip_schedules.groupby(["building_id", "vehicle_id"])["kwh_consumed"].max()
-        battery_capacities = self.assign_battery_capacity(max_daily_kwh)
+        max_daily_kwh = trip_schedules.group_by(["building_id", "vehicle_id"]).agg(pl.col("kwh_consumed").max())
+        battery_capacities = self.assign_battery_capacity(max_daily_kwh.get_column("kwh_consumed"))
 
         # Save outputs if output_dir is provided
         if output_dir:
             output_dir = Path(output_dir)
             output_dir.mkdir(exist_ok=True)
 
-            metadata_with_vehicles.to_csv(output_dir / "metadata_with_vehicles.csv", index=False)
-            trip_schedules.to_csv(output_dir / "trip_schedules.csv", index=False)
-            battery_capacities.to_csv(output_dir / "battery_capacities.csv")
+            metadata_with_vehicles.write_csv(output_dir / "metadata_with_vehicles.csv")
+            trip_schedules.write_csv(output_dir / "trip_schedules.csv")
+            battery_capacities.to_frame().write_csv(output_dir / "battery_capacities.csv")
 
         return {
             "metadata_with_vehicles": metadata_with_vehicles,
