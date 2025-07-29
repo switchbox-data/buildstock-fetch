@@ -23,6 +23,7 @@ dependencies = [
     "botocore>=1.33.0",
     "pyarrow>=14.0.1",
     "polars>=0.20.0",
+    "numpy>=1.26.4",
 ]
 
 [project.urls]
