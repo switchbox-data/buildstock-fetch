@@ -108,6 +108,7 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.33.0" },
     { name = "botocore", specifier = ">=1.33.0" },
+    { name = "numpy", specifier = ">=1.26.4" },
     { name = "polars", specifier = ">=0.20.0" },
     { name = "pyarrow", specifier = ">=14.0.1" },
     { name = "requests", specifier = ">=2.32.3" },
