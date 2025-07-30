@@ -7,15 +7,13 @@ This module contains:
 """
 
 from pathlib import Path
-from typing import Final
+from typing import Any
 
 import polars as pl
 
-BASEPATH: Final[Path] = Path(__file__).resolve().parents[1]
-
 __all__ = [
-    "BASEPATH",
     "get_census_division_for_state",
+    "load_all_input_data",
     "load_metadata",
     "load_metro_puma_map",
     "load_nhts_data",
@@ -257,7 +255,7 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
     return metro_lookup_df
 
 
-def load_all_input_data(ev_demand_config) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def load_all_input_data(ev_demand_config: Any) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """
     Load all input data for the EV demand calculator.
 
