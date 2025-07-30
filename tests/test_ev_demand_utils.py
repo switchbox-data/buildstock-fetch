@@ -2,7 +2,11 @@ import pytest
 
 from buildstock_fetch.ev_demand import EVDemandConfig
 from buildstock_fetch.utils import (
-    get_census_division_for_state,
+    get_census_division_for_state, 
+    load_metadata,
+    load_nhts_data,
+    load_pums_data,
+    load_metro_puma_map
 )
 
 
@@ -20,10 +24,10 @@ def test_get_census_division_for_state():
     assert get_census_division_for_state("OH") == 3
 
 
-# THESE ARE COMMENTED OUT BECAUSE I HAVE NOT SET UP TESTING DATA YET - TESTS ARE HELPING WITH DEV
+# # THESE ARE COMMENTED OUT BECAUSE I HAVE NOT SET UP TESTING DATA YET - TESTS ARE HELPING WITH DEV
 # def test_load_metadata(test_config):
 #     metadata_df = load_metadata(test_config.metadata_path)
-#     assert isinstance(metadata_df, pl.DataFrame)
+
 #     assert len(metadata_df) > 0
 #     assert "bldg_id" in metadata_df.columns
 #     assert "weight" in metadata_df.columns
@@ -37,7 +41,7 @@ def test_get_census_division_for_state():
 # def test_load_nhts_data(test_config):
 #     print(test_config.nhts_path)
 #     nhts_df = load_nhts_data(test_config.nhts_path, test_config.state)
-#     assert isinstance(nhts_df, pl.DataFrame)
+
 #     assert len(nhts_df) > 0
 #     assert "vehicle_id" in nhts_df.columns
 #     assert "start_time" in nhts_df.columns
@@ -52,7 +56,7 @@ def test_get_census_division_for_state():
 
 # def test_load_pums_data(test_config):
 #     pums_df = load_pums_data(test_config.pums_path, test_config.metadata_path)
-#     assert isinstance(pums_df, pl.DataFrame)
+
 #     assert len(pums_df) > 0
 #     assert "income" in pums_df.columns
 #     assert "occupants" in pums_df.columns
@@ -64,7 +68,7 @@ def test_get_census_division_for_state():
 
 # def test_load_metro_puma_map(test_config):
 #     metro_pums_df = load_metro_puma_map(test_config.metadata_path)
-#     assert isinstance(metro_pums_df, pl.DataFrame)
+
 #     assert len(metro_pums_df) > 0
 #     assert "metro" in metro_pums_df.columns
 #     assert "puma" in metro_pums_df.columns
