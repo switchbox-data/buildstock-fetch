@@ -24,6 +24,7 @@ dependencies = [
     "pyarrow>=14.0.1",
     "polars>=0.20.0",
     "numpy>=1.26.4",
+    "scikit-learn>=1.6.1",
 ]
 
 [project.urls]
@@ -46,6 +47,7 @@ dev = [
     "types-boto3>=1.33.0",
     "pandas-stubs>=2.2.0",
     "types-boto3>=1.33.0",
+    "scikit-learn>=1.6.1",
 ]
 
 [build-system]
