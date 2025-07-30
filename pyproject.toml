@@ -53,7 +53,10 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["buildstock_fetch", "buildstock_fetch.utils"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
 
 [tool.setuptools.package-data]
 "buildstock_fetch.utils" = ["*.json", "building_data/*.parquet"]
