@@ -202,7 +202,7 @@ def load_pums_data(pums_path: str, metadata_path: str) -> pl.DataFrame:
         "PUMA": "puma",
         "WGTP": "hh_weight",
     })
-    
+
     pums_df = pums_df.filter(pl.col("income") > 0)
 
     # Convert vehicles to numeric (Int64)
@@ -260,7 +260,7 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
 def load_all_input_data(ev_demand_config) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """
     Load all input data for the EV demand calculator.
-    
+
     Returns:
         Tuple of (metadata_df, nhts_df, pums_df, weather_df)
     """
@@ -268,5 +268,5 @@ def load_all_input_data(ev_demand_config) -> tuple[pl.DataFrame, pl.DataFrame, p
     nhts_df = load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state)
     pums_df = load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path)
     weather_df = load_weather_data(ev_demand_config.weather_path)
-    
+
     return metadata_df, nhts_df, pums_df, weather_df

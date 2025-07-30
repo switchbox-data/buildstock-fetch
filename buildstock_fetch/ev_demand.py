@@ -396,9 +396,7 @@ class EVDemandCalculator:
 # Example usage
 if __name__ == "__main__":
     # Step 1: Create configuration
-    config = EVDemandConfig(
-        state="NY", release="resstock_tmy3_release_1"
-    )
+    config = EVDemandConfig(state="NY", release="resstock_tmy3_release_1")
 
     # Step 2: Load all data
     metadata_df, nhts_df, pums_df, weather_df = util.load_all_input_data(config)

@@ -2,11 +2,7 @@ import pytest
 
 from buildstock_fetch.ev_demand import EVDemandConfig
 from buildstock_fetch.utils import (
-    get_census_division_for_state, 
-    load_metadata,
-    load_nhts_data,
-    load_pums_data,
-    load_metro_puma_map
+    get_census_division_for_state,
 )
 
 
