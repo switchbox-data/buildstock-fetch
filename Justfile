@@ -66,3 +66,22 @@ install:
     echo "🚀 Creating virtual environment using uv"
     uv sync
     uv run pre-commit install
+
+# =============================================================================
+# 📊 DATA DOWNLOAD
+# =============================================================================
+# These commands help you download and prepare data files
+
+# Download NHTS (National Household Travel Survey) data
+download-nhts:
+    echo "🚀 Downloading NHTS data from https://nhts.ornl.gov/media/2022/download/csv.zip"
+    uv run python utils/ev_data/download_nhts_data.py
+
+# Download PUMS (Public Use Microdata Sample) data for EV demand calculations
+download-pums:
+    echo "🚀 Downloading PUMS data from https://buildstock-fetch.s3.amazonaws.com/ev_demand/pums/NY_2021_pums_PUMA_HINCP_VEH_NP.csv"
+    mkdir -p utils/ev_data/inputs
+    curl -L -o utils/ev_data/inputs/NY_2021_pums_PUMA_HINCP_VEH_NP.csv \
+        https://buildstock-fetch.s3.amazonaws.com/ev_demand/pums/NY_2021_pums_PUMA_HINCP_VEH_NP.csv
+    echo "✅ PUMS data downloaded successfully"
+    
