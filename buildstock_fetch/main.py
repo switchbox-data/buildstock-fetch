@@ -23,6 +23,18 @@ class InvalidReleaseNameError(ValueError):
     pass
 
 
+class NoBuildingDataError(ValueError):
+    """Raised when no building data is available for a given release."""
+
+    pass
+
+
+class NoMetadataError(ValueError):
+    """Raised when no metadata is available for a given release."""
+
+    pass
+
+
 @dataclass
 class RequestedFileTypes:
     hpxml: bool = False
@@ -44,36 +56,127 @@ class BuildingID:
     weather: str = "tmy3"
     upgrade_id: str = "0"
     state: str = "NY"
-    base_url: str = (
-        f"https://oedi-data-lake.s3.amazonaws.com/"
-        "nrel-pds-building-stock/"
-        "end-use-load-profiles-for-us-building-stock/"
-        f"{release_year}/"
-        f"{res_com}_{weather}_release_{release_number}/"
-    )
+
+    @property
+    def base_url(self) -> str:
+        return (
+            f"https://oedi-data-lake.s3.amazonaws.com/"
+            "nrel-pds-building-stock/"
+            "end-use-load-profiles-for-us-building-stock/"
+            f"{self.release_year}/"
+            f"{self.res_com}_{self.weather}_release_{self.release_number}/"
+        )
 
     def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        return (
-            f"{self.base_url}"
-            f"building_energy_models/upgrade={self.upgrade_id}/"
-            f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
-        )
+        if self.release_year == "2021":
+            return ""
+        elif self.release_year == "2022":
+            return (
+                f"{self.base_url}"
+                f"building_energy_models/upgrade={self.upgrade_id}/"
+                f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
+            )
+        elif self.release_year == "2023":
+            return ""
+        elif self.release_year == "2024":
+            if self.res_com == "comstock":
+                return ""
+            elif (self.weather == "amy2018" or self.weather == "tmy3") and self.release_number == "2":
+                return (
+                    f"{self.base_url}"
+                    f"model_and_schedule_files/building_energy_models/upgrade={self.upgrade_id}/"
+                    f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
+                )
+            else:
+                return ""
+        elif self.release_year == "2025":
+            return (
+                f"{self.base_url}"
+                f"building_energy_models/upgrade={str(int(self.upgrade_id)).zfill(2)}/"
+                f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
+            )
+        else:
+            return ""
 
     def get_metadata_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        if self.res_com == "resstock" and self.weather == "tmy3" and self.release_year == "2022":
+
+        if self.release_year == "2021":
+            return f"{self.base_url}metadata/metadata.parquet"
+        elif self.release_year == "2022" or self.release_year == "2023":
             if self.upgrade_id == "0":
                 return f"{self.base_url}metadata/baseline.parquet"
             else:
                 return f"{self.base_url}metadata/upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
+        elif self.release_year == "2024":
+            if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "2":
+                return ""
+                # This release does not have a single national metadata file.
+                # Instead, it has a metadata file for each county.
+                # We need a way to download them all and combine based on the state
+            else:
+                if self.upgrade_id == "0":
+                    return f"{self.base_url}metadata/baseline.parquet"
+                else:
+                    return f"{self.base_url}metadata/upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
+        elif (
+            self.release_year == "2025"
+            and self.res_com == "comstock"
+            and self.weather == "amy2018"
+            and self.release_number == "1"
+        ):
+            return ""
+            # This release does not have a single national metadata file.
+            # Instead, it has a metadata file for each county.
+            # We need a way to download them all and combine based on the state
         else:
-            return f"{self.base_url}metadata/metadata.parquet"
+            return ""
+
+    def get_15min_timeseries_url(self) -> str:
+        """Generate the S3 download URL for this building."""
+        if self.release_year == "2021":
+            if self.upgrade_id != "0":
+                return ""  # This release only has baseline timeseries
+            else:
+                return (
+                    f"{self.base_url}timeseries_individual_buildings/"
+                    f"by_state/upgrade={self.upgrade_id}/"
+                    f"state={self.state}/"
+                    f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+                )
+
+        elif self.release_year == "2022" or self.release_year == "2023":
+            return (
+                f"{self.base_url}timeseries_individual_buildings/"
+                f"by_state/upgrade={self.upgrade_id}/"
+                f"state={self.state}/"
+                f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+            )
+        elif self.release_year == "2024":
+            if self.res_com == "resstock" and self.weather == "tmy3" and self.release_number == "1":
+                return ""
+            else:
+                return (
+                    f"{self.base_url}timeseries_individual_buildings/"
+                    f"by_state/upgrade={self.upgrade_id}/"
+                    f"state={self.state}/"
+                    f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+                )
+        elif self.release_year == "2025":
+            return (
+                f"{self.base_url}timeseries_individual_buildings/"
+                f"by_state/upgrade={self.upgrade_id}/"
+                f"state={self.state}/"
+                f"bldg{self.bldg_id!s}-up{int(self.upgrade_id)!s}.parquet"
+            )
+        else:
+            return ""
 
     def get_release_name(self) -> str:
         """Generate the release name for this building."""
         res_com_str = "res" if self.res_com == "resstock" else "com"
-        return f"{res_com_str}stock_{self.weather}_release_{self.release_number}"
+        return f"{res_com_str}_{self.release_year}_{self.weather}_{self.release_number}"
 
     def to_json(self) -> str:
         """Convert the building ID object to a JSON string."""
@@ -196,8 +299,11 @@ def download_bldg_data(
         "schedule": None,
     }
     if file_type.hpxml or file_type.schedule:
-        base_url = bldg_id.get_building_data_url()
-        response = requests.get(base_url, timeout=30)
+        download_url = bldg_id.get_building_data_url()
+        if download_url == "":
+            message = f"Building data is not available for {bldg_id.get_release_name()}"
+            raise NoBuildingDataError(message)
+        response = requests.get(download_url, timeout=30)
         response.raise_for_status()
 
         output_file = temp_dir / f"{str(bldg_id.bldg_id).zfill(7)}_upgrade{bldg_id.upgrade_id}.zip"
@@ -297,20 +403,25 @@ def fetch_bldg_data(
                 paths = [path for path in paths_dict.values() if path is not None]
                 downloaded_paths.extend(paths)
 
-                if paths_dict["hpxml"] is None:
+                if file_type_obj.hpxml and paths_dict["hpxml"] is None:
                     failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml")
-                if paths_dict["schedule"] is None:
+                if file_type_obj.schedule and paths_dict["schedule"] is None:
                     failed_downloads.append(
                         f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
                     )
+            except NoBuildingDataError:
+                raise
             except Exception as e:
                 print(f"Download failed for bldg_id {bldg_id}: {e}")
 
     # Get metadata if requested. Only one building is needed to get the metadata.
     if file_type_obj.metadata:
         bldg = bldg_ids[0]
-        base_url = bldg.get_metadata_url()
-        response = requests.get(base_url, timeout=30)
+        download_url = bldg.get_metadata_url()
+        if download_url == "":
+            message = f"Metadata is not available for {bldg.get_release_name()}"
+            raise NoMetadataError(message)
+        response = requests.get(download_url, timeout=30)
         response.raise_for_status()
 
         output_file = output_dir / bldg.get_release_name() / "metadata" / bldg.state / "metadata.parquet"
