@@ -57,6 +57,7 @@ where = ["."]
 
 [tool.setuptools.package-data]
 "buildstock_fetch.utils" = ["*.json", "building_data/*"]
+"buildstock_fetch.utils.building_data" = ["combined_metadata.parquet"]
 
 
 [tool.mypy]
