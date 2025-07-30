@@ -3,6 +3,7 @@ import json
 import os
 import zipfile
 from dataclasses import asdict, dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Optional, Union
 
@@ -89,8 +90,8 @@ def _validate_release_name(release_name: str) -> bool:
         True if the release name is valid, False otherwise.
     """
     # Read the valid release names from the JSON file
-    releases_file = Path(__file__).parent.parent / "utils" / "buildstock_releases.json"
-    with open(releases_file) as f:
+    releases_file = files("utils").joinpath("buildstock_releases.json")
+    with open(str(releases_file)) as f:
         releases_data = json.load(f)
 
     # Get the top-level keys as valid release names
@@ -116,7 +117,7 @@ def fetch_bldg_ids(
         A list of building ID's for the given state.
     """
     # Construct the absolute path to the parquet directory
-    parquet_dir = Path(__file__).parent.parent / "utils" / "building_data" / "combined_metadata.parquet"
+    parquet_dir = Path(str(files("utils").joinpath("building_data", "combined_metadata.parquet")))
 
     if product == "resstock":
         product_str = "res"
@@ -144,7 +145,7 @@ def fetch_bldg_ids(
         return []
 
     # Read the parquet files in the specific partition
-    df = pl.read_parquet(partition_path)
+    df = pl.read_parquet(str(partition_path))
 
     # No need to filter since we're already reading the specific partition
     filtered_df = df
