@@ -6,7 +6,7 @@ from typing import Final, Optional
 import numpy as np
 import polars as pl
 
-import buildstock_fetch.utils as util
+from buildstock_fetch.utils import ev_utils
 
 BASEPATH: Final[Path] = Path(__file__).resolve().parents[1]
 
@@ -401,7 +401,7 @@ if __name__ == "__main__":
     config = EVDemandConfig(state="NY", release="resstock_tmy3_release_1")
 
     # Step 2: Load all data
-    metadata_df, nhts_df, pums_df, weather_df = util.load_all_input_data(config)
+    metadata_df, nhts_df, pums_df, weather_df = ev_utils.load_all_input_data(config)
     print(f"✓ Loaded metadata: {len(metadata_df)} rows")
     print(f"✓ Loaded NHTS data: {len(nhts_df)} rows")
     print(f"✓ Loaded weather data: {len(weather_df)} rows")
