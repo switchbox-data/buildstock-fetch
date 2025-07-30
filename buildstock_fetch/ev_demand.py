@@ -5,6 +5,8 @@ from typing import Final, Optional
 
 import numpy as np
 import polars as pl
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 
 from buildstock_fetch.utils import ev_utils
 
@@ -105,7 +107,8 @@ class EVDemandCalculator:
     def __init__(
         self,
         metadata_df: pl.DataFrame,
-        nhts_df: Optional[pl.DataFrame] = None,
+        nhts_df: pl.DataFrame = None,
+        pums_df: pl.DataFrame = None,
         weather_df: Optional[pl.DataFrame] = None,
     ):
         """
@@ -137,22 +140,50 @@ class EVDemandCalculator:
 
     def fit_vehicle_ownership_model(self, pums_df: pl.DataFrame) -> object:
         """
-        Fit a model to predict number of vehicles per household using PUMS data.
+        Fit a multinomial logistic regression model to predict number of vehicles per household using PUMS data.
+        Results limited to 0, 1, or 2 vehicles.
 
         Args:
-            pums_df: DataFrame with PUMS household data, including 'occupants', 'inc', 'metro_area', 'num_vehicles'
+            pums_df: DataFrame with PUMS household data, including 'occupants', 'income', 'metro', 'vehicles'
 
         Returns:
             Trained model object
         """
-        # TODO: Implement multinomial logistic regression or similar
-        # This is a placeholder - replace with actual model fitting
-        self.vehicle_ownership_model = "placeholder_model"
+        # Preprocess data: replace vehicles > 2 with 2, drop nulls, encode categorical
+        pums_df = (pums_df
+            .with_columns(pl.when(pl.col("vehicles") > 2).then(2).otherwise(pl.col("vehicles")).alias("vehicles"))
+        )
+        
+        # Prepare features and encode categorical
+        feature_columns = ["occupants", "income", "metro"]
+        X = pums_df.select(feature_columns)
+        y = pums_df.select("vehicles")
+        
+        # Encode metro (only categorical feature)
+        self.label_encoders = {}
+        le = LabelEncoder()
+        metro_encoded = le.fit_transform(X.get_column("metro").to_numpy())
+        X_encoded = X.with_columns(pl.Series(metro_encoded).alias("metro"))
+        self.label_encoders["metro"] = le
+        
+        # Encode target and scale features
+        self.target_encoder = LabelEncoder()
+        y_encoded = self.target_encoder.fit_transform(y.get_column("vehicles").to_numpy())
+        
+        self.scaler = StandardScaler()
+        X_scaled = self.scaler.fit_transform(X_encoded.to_numpy())
+        
+        # Fit model with sample weights
+        self.vehicle_ownership_model = LogisticRegression(
+            multi_class='multinomial', solver='lbfgs', max_iter=1000, random_state=42
+        )
+        self.vehicle_ownership_model.fit(X_scaled, y_encoded, sample_weight=pums_df.get_column("hh_weight").to_numpy())
+
         return self.vehicle_ownership_model
 
     def predict_num_vehicles(self, metadata_df: Optional[pl.DataFrame] = None) -> pl.DataFrame:
         """
-        Predict number of vehicles for each household in the metadata using the fitted model.
+        Predict number of vehicles for each household in the metadata using the fitted model. 
 
         Args:
             metadata_df: DataFrame with ResStock metadata. If None, uses self.metadata_df
@@ -395,7 +426,7 @@ class EVDemandCalculator:
     #     }
 
 
-# Example usage
+# # Example usage
 if __name__ == "__main__":
     # Step 1: Create configuration
     config = EVDemandConfig(state="NY", release="resstock_tmy3_release_1")
@@ -406,17 +437,17 @@ if __name__ == "__main__":
     print(f"✓ Loaded NHTS data: {len(nhts_df)} rows")
     print(f"✓ Loaded weather data: {len(weather_df)} rows")
 
-    # # Step 3: Initialize calculator with data
-    # calculator = EVDemandCalculator(
-    #     metadata_df=metadata_df,
-    #     nhts_df=nhts_df,
-    #     weather_df=weather_df
-    # )
+    # Test the multinomial model
+    calculator = EVDemandCalculator(
+        metadata_df=metadata_df,
+        nhts_df=nhts_df,
+        pums_df=pums_df,
+        weather_df=weather_df
+    )
 
-    # print(f"✓ Initialized calculator")
-    # print(f"  - Battery capacities: {calculator.battery_capacities}")
-    # print(
-    #     f"  - Efficiency coefficients: {len(calculator.efficiency_coefficients)} terms")
+    # Fit the vehicle ownership model
+    calculator.fit_vehicle_ownership_model(pums_df)
 
-    # # Step 4: Run calculations (placeholder for now)
-    # print("Ready to run EV demand calculations!")
+    # Test predictions on a small sample
+sample_metadata = metadata_df.head(10)
+predictions_df = calculator.predict_num_vehicles(sample_metadata)
