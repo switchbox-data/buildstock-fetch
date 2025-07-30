@@ -323,7 +323,7 @@ def fetch_bldg_data(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    tmp_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=9)]
-    tmp_data, tmp_failed = fetch_bldg_data(tmp_ids, ("hpxml", "schedule", "metadata"), Path(__file__).parent / "data")
-    print(f"Downloaded files: {[str(path) for path in tmp_data]}")
-    print(f"Failed downloads: {tmp_failed}")
+    bldg_ids = fetch_bldg_ids(
+        product="resstock", release_year="2024", weather_file="amy2018", release_version="2", upgrade_id="0", state="NY"
+    )
+    print(bldg_ids[:10])

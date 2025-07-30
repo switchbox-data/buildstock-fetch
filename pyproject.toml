@@ -52,14 +52,12 @@ dev = [
 requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-include-package-data = true
-
 [tool.setuptools.packages.find]
 where = ["."]
 
 [tool.setuptools.package-data]
-"buildstock_fetch.utils" = ["*.json", "building_data/*.parquet"]
+"buildstock_fetch.utils" = ["*.json", "building_data/*"]
+
 
 [tool.mypy]
 files = ["buildstock_fetch"]
