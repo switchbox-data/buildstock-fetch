@@ -144,3 +144,4 @@ cython_debug/
 
 # Data folder
 data/
+utils/ev_data/inputs/*.csv
