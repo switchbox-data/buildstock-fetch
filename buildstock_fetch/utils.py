@@ -191,6 +191,7 @@ def load_pums_data(pums_path: str, metadata_path: str) -> pl.DataFrame:
     if not Path(pums_path).exists():
         msg = f"PUMS file not found: {pums_path}. Please run `just download-pums` to download the data."
         raise FileNotFoundError(msg)
+
     # Read CSV with "b" as null value and PUMA as string
     pums_df = pl.read_csv(pums_path, null_values=["b"], schema_overrides={"PUMA": pl.Utf8})
 
@@ -201,6 +202,8 @@ def load_pums_data(pums_path: str, metadata_path: str) -> pl.DataFrame:
         "PUMA": "puma",
         "WGTP": "hh_weight",
     })
+    
+    pums_df = pums_df.filter(pl.col("income") > 0)
 
     # Convert vehicles to numeric (Int64)
     pums_df = pums_df.with_columns([pl.col("vehicles").cast(pl.Int64)])
