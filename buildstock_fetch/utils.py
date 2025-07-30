@@ -252,3 +252,15 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
     metro_lookup_df = metro_lookup_df.with_columns([pl.col("puma").str.slice(-5).alias("puma")]).unique()
 
     return metro_lookup_df
+
+
+def load_all_input_data(ev_demand_config) -> dict[str, pl.DataFrame]:
+    """
+    Load all input data for the EV demand calculator.
+    """
+    return {
+        "metadata": load_metadata(ev_demand_config.metadata_path),
+        "nhts": load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state),
+        "pums": load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path),
+        "weather": load_weather_data(ev_demand_config.weather_path),
+    }
