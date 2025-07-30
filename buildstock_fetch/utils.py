@@ -7,10 +7,11 @@ This module contains:
 """
 
 from pathlib import Path
+from typing import Final
 
 import polars as pl
 
-BASEPATH = Path(__file__).resolve().parents[1]
+BASEPATH: Final[Path] = Path(__file__).resolve().parents[1]
 
 
 def get_census_division_for_state(state: str) -> int:
