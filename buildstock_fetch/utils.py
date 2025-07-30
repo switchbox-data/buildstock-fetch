@@ -223,9 +223,9 @@ def load_weather_data(weather_path: str) -> pl.DataFrame:
     Returns:
         DataFrame with at least columns ['datetime', 'temperature']
     """
-    if not Path(weather_path).exists():
-        msg = f"Weather file not found: {weather_path}"
-        raise FileNotFoundError(msg)
+    # if not Path(weather_path).exists():
+    #     msg = f"Weather file not found: {weather_path}"
+    #     raise FileNotFoundError(msg)
 
     # TODO: Implement weather data loading
     # This is a placeholder - replace with actual weather loading logic
@@ -254,13 +254,16 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
     return metro_lookup_df
 
 
-def load_all_input_data(ev_demand_config) -> dict[str, pl.DataFrame]:
+def load_all_input_data(ev_demand_config) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """
     Load all input data for the EV demand calculator.
+    
+    Returns:
+        Tuple of (metadata_df, nhts_df, pums_df, weather_df)
     """
-    return {
-        "metadata": load_metadata(ev_demand_config.metadata_path),
-        "nhts": load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state),
-        "pums": load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path),
-        "weather": load_weather_data(ev_demand_config.weather_path),
-    }
+    metadata_df = load_metadata(ev_demand_config.metadata_path)
+    nhts_df = load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state)
+    pums_df = load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path)
+    weather_df = load_weather_data(ev_demand_config.weather_path)
+    
+    return metadata_df, nhts_df, pums_df, weather_df

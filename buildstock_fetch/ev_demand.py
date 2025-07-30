@@ -6,7 +6,7 @@ from typing import Optional
 import numpy as np
 import polars as pl
 
-from buildstock_fetch.utils import BASEPATH
+import buildstock_fetch.utils as util
 
 
 class MetadataPathError(Exception):
@@ -45,7 +45,7 @@ class EVDemandConfig:
     release: str
     metadata_path: Optional[str] = None
     pums_path: Optional[str] = None
-    nhts_path: str = f"{BASEPATH}/utils/ev_data/inputs/NHTS_v2_1_trip_surveys.csv"
+    nhts_path: str = f"{util.BASEPATH}/utils/ev_data/inputs/NHTS_v2_1_trip_surveys.csv"
     weather_path: Optional[str] = None
     output_dir: Optional[Path] = None
 
@@ -53,7 +53,9 @@ class EVDemandConfig:
         if self.metadata_path is None:
             self.metadata_path = f"{Path(__file__).parent}/data/{self.release}/metadata/{self.state}/metadata.parquet"
         if self.pums_path is None:
-            self.pums_path = f"{BASEPATH}/utils/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
+            self.pums_path = f"{util.BASEPATH}/utils/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
+        if self.weather_path is None:
+            self.weather_path = f"{util.BASEPATH}//data/{self.release}/weather.csv"
 
 
 @dataclass
@@ -395,22 +397,14 @@ class EVDemandCalculator:
 if __name__ == "__main__":
     # Step 1: Create configuration
     config = EVDemandConfig(
-        state="NY", release="resstock_tmy3_release_1", nhts_path="utils/ev_data/NHTS_v2_1_trip_surveys.csv"
+        state="NY", release="resstock_tmy3_release_1"
     )
 
-    print(f"Loading data for {config.state}...")
-    print(f"Metadata path: {config.metadata_path}")
-    print(f"NHTS path: {config.nhts_path}")
-
-    # # Step 2: Load all data
-    # try:
-    #     metadata_df, nhts_df, weather_df = config.load_all_data()
-    #     print(f"✓ Loaded metadata: {len(metadata_df)} rows")
-    #     print(f"✓ Loaded NHTS data: {len(nhts_df)} rows")
-    #     print(f"✓ Loaded weather data: {len(weather_df)} rows")
-    # except Exception as e:
-    #     print(f"✗ Error loading data: {e}")
-    #     return 1
+    # Step 2: Load all data
+    metadata_df, nhts_df, pums_df, weather_df = util.load_all_input_data(config)
+    print(f"✓ Loaded metadata: {len(metadata_df)} rows")
+    print(f"✓ Loaded NHTS data: {len(nhts_df)} rows")
+    print(f"✓ Loaded weather data: {len(weather_df)} rows")
 
     # # Step 3: Initialize calculator with data
     # calculator = EVDemandCalculator(
