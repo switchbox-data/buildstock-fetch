@@ -9,7 +9,6 @@ Cleans up temporary files after extraction.
 
 import argparse
 import logging
-import sys
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -136,18 +135,13 @@ def download_nhts_data(output_dir: Optional[str] = None) -> str:
 
 def main():
     """Main function to run the download process."""
-    parser = argparse.ArgumentParser(
-        description="Download NHTS (National Household Travel Survey) data"
-    )
+    parser = argparse.ArgumentParser(description="Download NHTS (National Household Travel Survey) data")
     parser.add_argument(
-        "--output-dir",
-        "-o",
-        type=str,
-        help="Output directory for the downloaded file (default: script directory)"
+        "--output-dir", "-o", type=str, help="Output directory for the downloaded file (default: script directory)"
     )
-    
+
     args = parser.parse_args()
-    
+
     try:
         output_file = download_nhts_data(output_dir=args.output_dir)
         print(f"Successfully downloaded NHTS data to: {output_file}")
