@@ -5,7 +5,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import boto3
 from botocore import UNSIGNED
@@ -25,7 +25,7 @@ class CommonPrefix(TypedDict):
     Prefix: str
 
 
-def _find_model_directory(s3_client, bucket_name: str, prefix: str) -> str:
+def _find_model_directory(s3_client: Any, bucket_name: str, prefix: str) -> str:
     """
     Find the building_energy_model directory path using breadth-first search.
     """
@@ -48,7 +48,7 @@ def _find_model_directory(s3_client, bucket_name: str, prefix: str) -> str:
             # First check directories at this level
             if "CommonPrefixes" in page:
                 for prefix_obj in page["CommonPrefixes"]:
-                    dir_path = prefix_obj["Prefix"]  # Keep the trailing slash for next level search
+                    dir_path = str(prefix_obj["Prefix"])  # Keep the trailing slash for next level search
                     dir_name = dir_path.rstrip("/").split("/")[-1]
 
                     # If we found the building_energy_model directory, return its path
@@ -61,7 +61,7 @@ def _find_model_directory(s3_client, bucket_name: str, prefix: str) -> str:
     return ""
 
 
-def _get_upgrade_ids(s3_client, bucket_name: str, model_path: str) -> list[str]:
+def _get_upgrade_ids(s3_client: Any, bucket_name: str, model_path: str) -> list[str]:
     """
     Get the list of upgrade IDs from the building_energy_model directory.
     Extracts the integer from upgrade=## format.
@@ -87,7 +87,7 @@ def _get_upgrade_ids(s3_client, bucket_name: str, model_path: str) -> list[str]:
 
 
 def _process_zip_file(
-    s3_client, bucket_name: str, key: str, zip_files_found: int, unique_files: set[str]
+    s3_client: Any, bucket_name: str, key: str, zip_files_found: int, unique_files: set[str]
 ) -> tuple[int, set[str]]:
     """Process a single zip file and return updated count of files found and available data types."""
     available_data = set()
@@ -107,7 +107,7 @@ def _process_zip_file(
 
 
 def _check_directory_contents(
-    s3_client, bucket_name: str, current_prefix: str, zip_files_found: int, unique_files: set[str]
+    s3_client: Any, bucket_name: str, current_prefix: str, zip_files_found: int, unique_files: set[str]
 ) -> tuple[int, bool, set[str]]:
     """Check directory contents for zip files and process them."""
     response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=current_prefix)
@@ -116,7 +116,7 @@ def _check_directory_contents(
 
     available_data = set()
     for obj in response["Contents"]:
-        key = obj["Key"]  # type: ignore[attr-defined]
+        key = obj["Key"]
         if key.endswith(".osm.gz"):
             return zip_files_found, True, set()
         if key.endswith(".zip") and zip_files_found < 5:
@@ -130,7 +130,7 @@ def _check_directory_contents(
     return zip_files_found, False, available_data
 
 
-def _find_and_process_model_file(s3_client, bucket_name: str, prefix: str) -> set[str]:
+def _find_and_process_model_file(s3_client: Any, bucket_name: str, prefix: str) -> set[str]:
     """
     Breadth-first search for the first 5 .zip files in building_energy_model directories.
     Collects unique filenames from all zip files found.
@@ -163,7 +163,7 @@ def _find_and_process_model_file(s3_client, bucket_name: str, prefix: str) -> se
         for page in pages:
             if "CommonPrefixes" in page:
                 for prefix_obj in page["CommonPrefixes"]:
-                    dir_path = prefix_obj["Prefix"]  # type: ignore[attr-defined]
+                    dir_path = prefix_obj["Prefix"]
                     dir_name = dir_path.rstrip("/").split("/")[-1]
 
                     # Only queue directories that might contain building_energy_model
@@ -174,7 +174,7 @@ def _find_and_process_model_file(s3_client, bucket_name: str, prefix: str) -> se
 
 
 def _process_directory_match(
-    s3_client, bucket_name: str, current_prefix: str, expected: str, found_dirs: set[str]
+    s3_client: Any, bucket_name: str, current_prefix: str, expected: str, found_dirs: set[str]
 ) -> None:
     """Process a matched directory and update found_dirs accordingly."""
     if expected == "building_energy_model":
@@ -189,7 +189,7 @@ def _process_directory_match(
 
 
 def _check_directory_matches(
-    s3_client,
+    s3_client: Any,
     bucket_name: str,
     current_prefix: str,
     prefix: CommonPrefix,
@@ -204,12 +204,12 @@ def _check_directory_matches(
             _process_directory_match(s3_client, bucket_name, current_prefix, expected, found_dirs)
 
 
-def _find_available_data(s3_client, bucket_name: str, prefix: str) -> list[str]:
+def _find_available_data(s3_client: Any, bucket_name: str, prefix: str) -> list[str]:
     """
     Find the available data directories (building_energy_model, metadata, timeseries_individual_buildings).
     Returns a list of directories that exist, searching up to depth 3.
     """
-    found_dirs = set()
+    found_dirs: set[str] = set()
     expected_dirs = ["building_energy_model", "metadata", "timeseries_individual_buildings"]
     paginator = s3_client.get_paginator("list_objects_v2")
 
@@ -242,7 +242,7 @@ def _find_available_data(s3_client, bucket_name: str, prefix: str) -> list[str]:
     return list(found_dirs)
 
 
-def _find_upgrade_ids(s3_client, bucket_name: str, prefix: str) -> list[str]:
+def _find_upgrade_ids(s3_client: Any, bucket_name: str, prefix: str) -> list[str]:
     """
     Find the unique building_energy_model directory and its upgrade IDs.
     For 2021 releases, returns ['0'] as the only upgrade ID.
@@ -265,14 +265,14 @@ def _find_upgrade_ids(s3_client, bucket_name: str, prefix: str) -> list[str]:
 
 
 def _process_release(
-    s3_client,
+    s3_client: Any,
     bucket_name: str,
     release_path: str,
     match: re.Match[str],
     seen_combinations: set[tuple[str, str, str, str]],
     releases: dict[str, BuildStockRelease],
     available_data: list[str],
-):
+) -> None:
     """
     Process a release directory and extract its metadata.
     """
@@ -291,7 +291,7 @@ def _process_release(
     # Find the building_energy_model directory and its upgrade IDs
     upgrade_ids = _find_upgrade_ids(s3_client, bucket_name, release_path)
 
-    release_data = {
+    release_data: BuildStockRelease = {
         "release_year": release_year,
         "res_com": f"{res_com_type}stock",
         "weather": weather,
@@ -301,7 +301,7 @@ def _process_release(
     }
     # Create key following the pattern: {res/com}_{release_year}_{weather}_{release_number}
     key = f"{res_com_type}_{release_year}_{weather}_{release_number}"
-    releases[key] = BuildStockRelease(**release_data)  # Cast to BuildStockRelease type
+    releases[key] = release_data
 
 
 def resolve_bldgid_sets(
@@ -331,7 +331,7 @@ def resolve_bldgid_sets(
     # Dictionary to store releases
     releases: dict[str, BuildStockRelease] = {}
     # Set to track unique combinations
-    seen_combinations = set()
+    seen_combinations: set[tuple[str, str, str, str]] = set()
 
     # Regex pattern to extract components from full release path
     pattern = r"(\d{4})/(res|com)stock_(\w+)_release_(\d+(?:\.\d+)?)"

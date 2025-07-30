@@ -3,6 +3,7 @@ import json
 import os
 import zipfile
 from dataclasses import asdict, dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Optional, Union
 
@@ -89,8 +90,8 @@ def _validate_release_name(release_name: str) -> bool:
         True if the release name is valid, False otherwise.
     """
     # Read the valid release names from the JSON file
-    releases_file = Path(__file__).parent.parent / "utils" / "buildstock_releases.json"
-    with open(releases_file) as f:
+    releases_file = files("buildstock_fetch.utils").joinpath("buildstock_releases.json")
+    with open(str(releases_file)) as f:
         releases_data = json.load(f)
 
     # Get the top-level keys as valid release names
@@ -116,7 +117,9 @@ def fetch_bldg_ids(
         A list of building ID's for the given state.
     """
     # Construct the absolute path to the parquet directory
-    parquet_dir = Path(__file__).parent.parent / "utils" / "building_data" / "combined_metadata.parquet"
+    parquet_dir = Path(
+        str(files("buildstock_fetch.utils").joinpath("building_data").joinpath("combined_metadata.parquet"))
+    )
 
     if product == "resstock":
         product_str = "res"
@@ -144,7 +147,7 @@ def fetch_bldg_ids(
         return []
 
     # Read the parquet files in the specific partition
-    df = pl.read_parquet(partition_path)
+    df = pl.read_parquet(str(partition_path))
 
     # No need to filter since we're already reading the specific partition
     filtered_df = df
@@ -320,7 +323,7 @@ def fetch_bldg_data(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    tmp_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=9)]
-    tmp_data, tmp_failed = fetch_bldg_data(tmp_ids, ("hpxml", "schedule", "metadata"), Path(__file__).parent / "data")
-    print(f"Downloaded files: {[str(path) for path in tmp_data]}")
-    print(f"Failed downloads: {tmp_failed}")
+    bldg_ids = fetch_bldg_ids(
+        product="resstock", release_year="2024", weather_file="amy2018", release_version="2", upgrade_id="0", state="NY"
+    )
+    print(bldg_ids[:10])

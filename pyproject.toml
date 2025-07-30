@@ -49,11 +49,19 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["buildstock_fetch"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+"buildstock_fetch.utils" = ["*.json", "building_data/*"]
+"buildstock_fetch.utils.building_data" = ["combined_metadata.parquet"]
+
 
 [tool.mypy]
 files = ["buildstock_fetch"]
