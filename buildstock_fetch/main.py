@@ -117,7 +117,7 @@ def fetch_bldg_ids(
         A list of building ID's for the given state.
     """
     # Construct the absolute path to the parquet directory
-    parquet_dir = Path(str(files("utils").joinpath("building_data", "combined_metadata.parquet")))
+    parquet_dir = Path(str(files("utils").joinpath("building_data").joinpath("combined_metadata.parquet")))
 
     if product == "resstock":
         product_str = "res"
