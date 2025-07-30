@@ -84,4 +84,3 @@ download-pums:
     curl -L -o utils/ev_data/inputs/NY_2021_pums_PUMA_HINCP_VEH_NP.csv \
         https://buildstock-fetch.s3.amazonaws.com/ev_demand/pums/NY_2021_pums_PUMA_HINCP_VEH_NP.csv
     echo "✅ PUMS data downloaded successfully"
-    

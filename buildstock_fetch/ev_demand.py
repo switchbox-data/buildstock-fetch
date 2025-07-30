@@ -1,4 +1,3 @@
-from buildstock_fetch.ev_demand import EVDemandConfig, EVDemandCalculator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -7,7 +6,7 @@ from typing import Optional, Union
 import numpy as np
 import polars as pl
 
-from .utils import BASEPATH, get_census_division_for_state, load_metadata, load_nhts_data, load_weather_data
+from .utils import BASEPATH
 
 
 class MetadataPathError(Exception):
@@ -49,7 +48,7 @@ class EVDemandConfig:
     nhts_path: str = f"{BASEPATH}/utils/ev_data/inputs/NHTS_v2_1_trip_surveys.csv"
     weather_path: Optional[str] = None
     output_dir: Optional[Path] = None
-    
+
     def __post_init__(self):
         if self.metadata_path is None:
             self.metadata_path = f"{Path(__file__).parent}/data/{self.release}/metadata/{self.state}/metadata.parquet"
@@ -99,7 +98,9 @@ class EVDemandCalculator:
     7. Assign battery capacities
     """
 
-    def __init__(self, metadata_df: pl.DataFrame, nhts_df: pl.DataFrame = None, weather_df: Optional[pl.DataFrame] = None):
+    def __init__(
+        self, metadata_df: pl.DataFrame, nhts_df: pl.DataFrame = None, weather_df: Optional[pl.DataFrame] = None
+    ):
         """
         Initialize the EV demand calculator.
 
@@ -126,8 +127,6 @@ class EVDemandCalculator:
             5.2918e-8,  # a_4 (quartic term)
             -2.0659e-10,  # a_5 (quintic term)
         ])
-
-
 
     def fit_vehicle_ownership_model(self, pums_df: pl.DataFrame) -> object:
         """
@@ -165,10 +164,6 @@ class EVDemandCalculator:
         # This is a placeholder - replace with actual model prediction
         df = df.with_columns(pl.lit(1).alias("num_vehicles"))  # Placeholder: assume 1 vehicle per household
         return df
-
-
-
-
 
     def sample_vehicle_profiles(
         self, metadata_df: Optional[pl.DataFrame] = None
@@ -395,13 +390,9 @@ class EVDemandCalculator:
 
 # Example usage
 if __name__ == "__main__":
-
-
     # Step 1: Create configuration
     config = EVDemandConfig(
-        state="NY",
-        release="resstock_tmy3_release_1",
-        nhts_path="utils/ev_data/NHTS_v2_1_trip_surveys.csv"
+        state="NY", release="resstock_tmy3_release_1", nhts_path="utils/ev_data/NHTS_v2_1_trip_surveys.csv"
     )
 
     print(f"Loading data for {config.state}...")
@@ -432,8 +423,3 @@ if __name__ == "__main__":
 
     # # Step 4: Run calculations (placeholder for now)
     # print("Ready to run EV demand calculations!")
-
-
-
-if __name__ == "__main__":
-    exit(main())
