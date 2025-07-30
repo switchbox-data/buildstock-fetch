@@ -1,15 +1,8 @@
-from pathlib import Path
-
-import polars as pl
 import pytest
 
 from buildstock_fetch.ev_demand import EVDemandConfig
 from buildstock_fetch.utils import (
     get_census_division_for_state,
-    load_metadata,
-    load_metro_puma_map,
-    load_nhts_data,
-    load_pums_data,
 )
 
 
@@ -25,7 +18,6 @@ def test_get_census_division_for_state():
     assert get_census_division_for_state("FL") == 5
     assert get_census_division_for_state("IL") == 3
     assert get_census_division_for_state("OH") == 3
-
 
 
 # THESE ARE COMMENTED OUT BECAUSE I HAVE NOT SET UP TESTING DATA YET - TESTS ARE HELPING WITH DEV
