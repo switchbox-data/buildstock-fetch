@@ -4,7 +4,7 @@ import os
 import sys
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 import boto3
 import polars as pl
@@ -163,7 +163,7 @@ def _handle_bldg_id_column(df: pl.DataFrame, file_key: str, s3: Any, bucket_name
     return df
 
 
-def _validate_bldg_id(df: pl.DataFrame, release_name: str | None) -> bool:
+def _validate_bldg_id(df: pl.DataFrame, release_name: Union[str, None]) -> bool:
     """
     Validate bldg_id column and return True if valid.
 
@@ -206,7 +206,11 @@ def _validate_bldg_id(df: pl.DataFrame, release_name: str | None) -> bool:
 
 
 def _add_metadata_columns(
-    df: pl.DataFrame, res_com: str | None, weather: str | None, release_version: str | None, release_year: str | None
+    df: pl.DataFrame,
+    res_com: Union[str, None],
+    weather: Union[str, None],
+    release_version: Union[str, None],
+    release_year: Union[str, None],
 ) -> pl.DataFrame:
     """
     Add metadata columns to DataFrame.
@@ -242,12 +246,12 @@ def process_parquet_file(
     file_key: str,
     s3: Any,
     bucket_name: str,
-    res_com: str | None = None,
-    weather: str | None = None,
-    release_version: str | None = None,
-    release_year: str | None = None,
-    release_name: str | None = None,
-) -> pl.DataFrame | None:
+    res_com: Union[str, None] = None,
+    weather: Union[str, None] = None,
+    release_version: Union[str, None] = None,
+    release_year: Union[str, None] = None,
+    release_name: Union[str, None] = None,
+) -> Union[pl.DataFrame, None]:
     """
     Process a parquet file from S3 and return a polars DataFrame.
 
@@ -309,7 +313,7 @@ def find_metadata_files(base_file_key: str, file_key_suffix: str, s3_client: Any
     return download_files
 
 
-def _extract_upgrade_number(filename: str) -> str | None:
+def _extract_upgrade_number(filename: str) -> Union[str, None]:
     """
     Extract upgrade number from filename like 'AK_G0200130_upgrade01.parquet'.
 
