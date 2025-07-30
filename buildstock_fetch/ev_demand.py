@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
 import numpy as np
 import polars as pl
@@ -49,7 +49,7 @@ class EVDemandConfig:
     weather_path: Optional[str] = None
     output_dir: Optional[Path] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.metadata_path is None:
             self.metadata_path = f"{Path(__file__).parent}/data/{self.release}/metadata/{self.state}/metadata.parquet"
         if self.pums_path is None:
@@ -99,7 +99,10 @@ class EVDemandCalculator:
     """
 
     def __init__(
-        self, metadata_df: pl.DataFrame, nhts_df: pl.DataFrame = None, weather_df: Optional[pl.DataFrame] = None
+        self,
+        metadata_df: pl.DataFrame,
+        nhts_df: Optional[pl.DataFrame] = None,
+        weather_df: Optional[pl.DataFrame] = None,
     ):
         """
         Initialize the EV demand calculator.
@@ -331,61 +334,61 @@ class EVDemandCalculator:
 
         return pl.Series(assigned_capacities)
 
-    def run_complete_workflow(
-        self, pums_path: str, nhts_path: str, weather_path: str, output_dir: Optional[Path] = None
-    ) -> dict[str, Union[pl.DataFrame, pl.Series]]:
-        """
-        Run the complete EV demand workflow.
+    # def run_complete_workflow(
+    #     self, pums_path: str, nhts_path: str, weather_path: str, output_dir: Optional[Path] = None
+    # ) -> dict[str, Union[pl.DataFrame, pl.Series]]:
+    #     """
+    #     Run the complete EV demand workflow.
 
-        Args:
-            pums_path: Path to PUMS data file
-            nhts_path: Path to NHTS data file
-            weather_path: Path to weather data file
-            output_dir: Directory to save output files
+    #     Args:
+    #         pums_path: Path to PUMS data file
+    #         nhts_path: Path to NHTS data file
+    #         weather_path: Path to weather data file
+    #         output_dir: Directory to save output files
 
-        Returns:
-            Dictionary containing all output DataFrames and Series
-        """
-        # Step 1: Load metadata
-        metadata_df = self.load_metadata()
+    #     Returns:
+    #         Dictionary containing all output DataFrames and Series
+    #     """
+    #     # Step 1: Load metadata
+    #     metadata_df = self.load_metadata()
 
-        # Step 2: Load PUMS data and fit vehicle ownership model
-        pums_df = pl.read_csv(pums_path)  # TODO: Adjust based on actual PUMS format
-        self.fit_vehicle_ownership_model(pums_df)
+    #     # Step 2: Load PUMS data and fit vehicle ownership model
+    #     pums_df = pl.read_csv(pums_path)  # TODO: Adjust based on actual PUMS format
+    #     self.fit_vehicle_ownership_model(pums_df)
 
-        # Step 3: Predict number of vehicles
-        metadata_with_vehicles = self.predict_num_vehicles(metadata_df)
+    #     # Step 3: Predict number of vehicles
+    #     metadata_with_vehicles = self.predict_num_vehicles(metadata_df)
 
-        # Step 4: Load NHTS data
-        self.load_nhts_data(nhts_path)
+    #     # Step 4: Load NHTS data
+    #     self.load_nhts_data(nhts_path)
 
-        # Step 5: Load weather data
-        self.load_weather_data(weather_path)
+    #     # Step 5: Load weather data
+    #     self.load_weather_data(weather_path)
 
-        # Step 6: Sample vehicle profiles
-        vehicle_profiles = self.sample_vehicle_profiles(metadata_with_vehicles)
+    #     # Step 6: Sample vehicle profiles
+    #     vehicle_profiles = self.sample_vehicle_profiles(metadata_with_vehicles)
 
-        # Step 7: Generate annual trip schedules
-        trip_schedules = self.generate_annual_trip_schedule(vehicle_profiles)
+    #     # Step 7: Generate annual trip schedules
+    #     trip_schedules = self.generate_annual_trip_schedule(vehicle_profiles)
 
-        # Step 8: Assign battery capacities
-        max_daily_kwh = trip_schedules.group_by(["building_id", "vehicle_id"]).agg(pl.col("kwh_consumed").max())
-        battery_capacities = self.assign_battery_capacity(max_daily_kwh.get_column("kwh_consumed"))
+    #     # Step 8: Assign battery capacities
+    #     max_daily_kwh = trip_schedules.group_by(["building_id", "vehicle_id"]).agg(pl.col("kwh_consumed").max())
+    #     battery_capacities = self.assign_battery_capacity(max_daily_kwh.get_column("kwh_consumed"))
 
-        # Save outputs if output_dir is provided
-        if output_dir:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(exist_ok=True)
+    #     # Save outputs if output_dir is provided
+    #     if output_dir:
+    #         output_dir = Path(output_dir)
+    #         output_dir.mkdir(exist_ok=True)
 
-            metadata_with_vehicles.write_csv(output_dir / "metadata_with_vehicles.csv")
-            trip_schedules.write_csv(output_dir / "trip_schedules.csv")
-            battery_capacities.to_frame().write_csv(output_dir / "battery_capacities.csv")
+    #         metadata_with_vehicles.write_csv(output_dir / "metadata_with_vehicles.csv")
+    #         trip_schedules.write_csv(output_dir / "trip_schedules.csv")
+    #         battery_capacities.to_frame().write_csv(output_dir / "battery_capacities.csv")
 
-        return {
-            "metadata_with_vehicles": metadata_with_vehicles,
-            "trip_schedules": trip_schedules,
-            "battery_capacities": battery_capacities,
-        }
+    #     return {
+    #         "metadata_with_vehicles": metadata_with_vehicles,
+    #         "trip_schedules": trip_schedules,
+    #         "battery_capacities": battery_capacities,
+    #     }
 
 
 # Example usage
