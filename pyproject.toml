@@ -55,6 +55,9 @@ build-backend = "hatchling.build"
 [tool.setuptools]
 py-modules = ["buildstock_fetch"]
 
+[tool.setuptools.package-data]
+buildstock_fetch = ["utils/*.json", "utils/building_data/*.parquet"]
+
 [tool.mypy]
 files = ["buildstock_fetch"]
 disallow_untyped_defs = true
