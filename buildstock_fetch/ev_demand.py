@@ -6,7 +6,7 @@ from typing import Optional
 import numpy as np
 import polars as pl
 
-from .utils import BASEPATH
+from buildstock_fetch.utils import BASEPATH
 
 
 class MetadataPathError(Exception):
