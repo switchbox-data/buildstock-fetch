@@ -90,7 +90,7 @@ def _validate_release_name(release_name: str) -> bool:
         True if the release name is valid, False otherwise.
     """
     # Read the valid release names from the JSON file
-    releases_file = files("utils").joinpath("buildstock_releases.json")
+    releases_file = files("buildstock_fetch.utils").joinpath("buildstock_releases.json")
     with open(str(releases_file)) as f:
         releases_data = json.load(f)
 
@@ -117,7 +117,9 @@ def fetch_bldg_ids(
         A list of building ID's for the given state.
     """
     # Construct the absolute path to the parquet directory
-    parquet_dir = Path(str(files("utils").joinpath("building_data").joinpath("combined_metadata.parquet")))
+    parquet_dir = Path(
+        str(files("buildstock_fetch.utils").joinpath("building_data").joinpath("combined_metadata.parquet"))
+    )
 
     if product == "resstock":
         product_str = "res"

@@ -2,11 +2,13 @@ import json
 import logging
 import os
 import sys
+from importlib.resources import files
 from pathlib import Path
+from typing import Any
 
 import boto3
 import polars as pl
-import pyarrow.fs as fs
+import pyarrow.fs as fs  # type: ignore[import-untyped]
 from botocore import UNSIGNED
 from botocore.config import Config
 
@@ -89,7 +91,7 @@ def rename_columns(df: pl.DataFrame) -> pl.DataFrame:
     return df.rename(column_mapping)
 
 
-def _read_parquet_with_columns(file_key: str, s3: fs.S3FileSystem, bucket_name: str) -> tuple[pl.DataFrame, list]:
+def _read_parquet_with_columns(file_key: str, s3: Any, bucket_name: str) -> tuple[pl.DataFrame, list]:
     """
     Read parquet file and return Polars DataFrame with selected columns.
 
@@ -120,7 +122,7 @@ def _read_parquet_with_columns(file_key: str, s3: fs.S3FileSystem, bucket_name: 
     return df, available_columns
 
 
-def _handle_bldg_id_column(df: pl.DataFrame, file_key: str, s3: fs.S3FileSystem, bucket_name: str) -> pl.DataFrame:
+def _handle_bldg_id_column(df: pl.DataFrame, file_key: str, s3: Any, bucket_name: str) -> pl.DataFrame:
     """
     Handle bldg_id column extraction and validation.
 
@@ -238,7 +240,7 @@ def _add_metadata_columns(
 
 def process_parquet_file(
     file_key: str,
-    s3: fs.S3FileSystem,
+    s3: Any,
     bucket_name: str,
     res_com: str | None = None,
     weather: str | None = None,
@@ -289,7 +291,7 @@ def process_parquet_file(
         return df
 
 
-def find_metadata_files(base_file_key: str, file_key_suffix: str, s3_client, bucket_name: str) -> list:
+def find_metadata_files(base_file_key: str, file_key_suffix: str, s3_client: Any, bucket_name: str) -> list:
     """
     Find all metadata files in the S3 bucket.
     """
@@ -335,14 +337,14 @@ def _extract_upgrade_number(filename: str) -> str | None:
     return upgrade_part[:dot_index]
 
 
-def find_all_parquet_files(base_file_key: str, s3_client, bucket_name: str) -> dict:
+def find_all_parquet_files(base_file_key: str, s3_client: Any, bucket_name: str) -> dict:
     """
     Find all parquet files in the S3 bucket and organize them by upgrade type.
 
     Returns:
         dict: Dictionary with keys 'baseline' and 'upgrade_XX' containing lists of file paths
     """
-    all_files = {}
+    all_files: dict[str, list[str]] = {}
     paginator = s3_client.get_paginator("list_objects_v2")
     pages = paginator.paginate(Bucket=bucket_name, Prefix=base_file_key)
 
@@ -376,12 +378,13 @@ def find_all_parquet_files(base_file_key: str, s3_client, bucket_name: str) -> d
 
 if __name__ == "__main__":
     # Load the release data
-    with open("/workspaces/buildstock-fetch/utils/buildstock_releases.json") as file:
+    releases_file = files("buildstock_fetch.utils").joinpath("buildstock_releases.json")
+    with open(str(releases_file)) as file:
         data = json.load(file)
 
     # Directory to save the data
     data_dir = Path(__file__).parent.parent / "data"
-    downloaded_paths = []
+    downloaded_paths: list[str] = []
     os.makedirs(data_dir, exist_ok=True)
 
     # List to collect all DataFrames
@@ -532,7 +535,7 @@ if __name__ == "__main__":
         final_df.write_parquet(
             output_file,
             use_pyarrow=True,
-            partition_cols=["product", "release_year", "weather_file", "release_version", "state"],
+            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
         )
         logger.info(f"Successfully saved combined DataFrame to {output_file}")
     else:
