@@ -55,6 +55,30 @@ def get_census_division_for_state(state: str) -> int:
     raise ValueError(msg)
 
 
+def assign_income_midpoints(income_str: str) -> int:
+    """
+    Convert income range strings to numeric midpoints using string parsing.
+
+    Args:
+        income_str: Income range string (e.g., "60000-69999", "0-10000")
+
+    Returns:
+        Numeric midpoint of the income range
+    """
+    if income_str is None:
+        return None
+
+    # Handle ranges like "60000-69999"
+    if "-" in income_str:
+        parts = income_str.split("-")
+        min_val = int(parts[0])
+        max_val = int(parts[1])
+        return (min_val + max_val) // 2
+
+    # If it's not a range, return the value as-is
+    return int(income_str)
+
+
 def load_metadata(metadata_path: str) -> pl.DataFrame:
     """
     Load and parse the ResStock metadata parquet file.
@@ -94,27 +118,30 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
         "occupants_temp"
     )
 
-    # Create household size bins
-    metadata_df = metadata_df.with_columns([
-        pl.when(pl.col("occupants") > 1)
-        .then(pl.lit("2+ ppl"))
-        .when(pl.col("occupants") == 1)
-        .then(pl.lit("1 person"))
-        .otherwise(pl.lit(None))
-        .alias("hhsize_bins")
-    ])
+    # # Create household size bins
+    # metadata_df = metadata_df.with_columns([
+    #     pl.when(pl.col("occupants") > 1)
+    #     .then(pl.lit("2+ ppl"))
+    #     .when(pl.col("occupants") == 1)
+    #     .then(pl.lit("1 person"))
+    #     .otherwise(pl.lit(None))
+    #     .alias("hhsize_bins")
+    # ])
 
-    # Process income categories
+    # Process income categories - convert to standard ranges first
     metadata_df = metadata_df.with_columns([
         pl.when(pl.col("income") == "<10000")
         .then(pl.lit("0-10000"))
         .when(pl.col("income") == "200000+")
-        .then(pl.lit("200000-500000"))
+        .then(pl.lit("200000-400000"))
         .when(pl.col("income") == "Not Available")
         .then(pl.lit(None))
         .otherwise(pl.col("income"))
         .alias("income")
     ])
+
+    # Convert income ranges to numeric midpoints
+    metadata_df = metadata_df.with_columns([pl.col("income").map_elements(assign_income_midpoints).alias("income")])
 
     # Extract last 5 characters from PUMA
     metadata_df = metadata_df.with_columns([pl.col("puma").str.slice(-5).alias("puma")])
