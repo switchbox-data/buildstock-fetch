@@ -3,6 +3,7 @@ import json
 import os
 import zipfile
 from dataclasses import asdict, dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Optional, Union
 
@@ -89,7 +90,7 @@ def _validate_release_name(release_name: str) -> bool:
         True if the release name is valid, False otherwise.
     """
     # Read the valid release names from the JSON file
-    releases_file = Path(__file__).parent.parent / "utils" / "buildstock_releases.json"
+    releases_file = files("utils").joinpath("buildstock_releases.json")
     with open(releases_file) as f:
         releases_data = json.load(f)
 
