@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -160,8 +161,18 @@ class EVDemandCalculator:
             pl.when(pl.col("vehicles") > 2).then(2).otherwise(pl.col("vehicles")).alias("vehicles")
         )
 
-        # Prepare features and encode categorical
+        # Drop rows with missing values in required features
         feature_columns = ["occupants", "income", "metro"]
+
+        # Drop rows with missing values in required features and target variable
+        initial_count = len(pums_df)
+        pums_df = pums_df.drop_nulls(subset=[*feature_columns, "vehicles"])
+        dropped_count = initial_count - len(pums_df)
+
+        if dropped_count > 0:
+            logging.warning(f"Dropped {dropped_count} records with missing values in vehicle ownership model features")
+
+        # Prepare features and encode categorical
         X = pums_df.select(feature_columns)
         y = pums_df.select("vehicles")
 
@@ -180,9 +191,7 @@ class EVDemandCalculator:
         X_scaled = self.scaler.fit_transform(X_encoded.to_numpy())
 
         # Fit model with sample weights
-        self.vehicle_ownership_model = LogisticRegression(
-            multi_class="multinomial", solver="lbfgs", max_iter=1000, random_state=self.random_state
-        )
+        self.vehicle_ownership_model = LogisticRegression(solver="lbfgs", max_iter=1000, random_state=self.random_state)
         self.vehicle_ownership_model.fit(X_scaled, y_encoded, sample_weight=pums_df.get_column("hh_weight").to_numpy())
 
         return self.vehicle_ownership_model
