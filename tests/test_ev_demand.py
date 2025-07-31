@@ -1,12 +1,11 @@
-import pytest
-import polars as pl
 import numpy as np
-from unittest.mock import Mock, patch
+import polars as pl
+import pytest
 
 from buildstock_fetch.ev_demand import (
     EVDemandCalculator,
-    VehicleOwnershipModelError,
     MetadataDataFrameError,
+    VehicleOwnershipModelError,
 )
 
 
@@ -18,7 +17,7 @@ def sample_pums_data():
         "income": [30000, 50000, 75000, 100000, 25000, 45000, 80000, 120000],
         "metro": ["urban", "urban", "suburban", "suburban", "rural", "rural", "urban", "urban"],
         "vehicles": [0, 1, 2, 2, 1, 2, 1, 2],
-        "hh_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        "hh_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
     })
 
 
@@ -30,7 +29,7 @@ def sample_metadata():
         "occupants": [1, 2, 3, 4, 2],
         "income": [30000, 50000, 75000, 100000, 45000],
         "metro": ["urban", "urban", "suburban", "suburban", "rural"],
-        "weight": [1.0, 1.0, 1.0, 1.0, 1.0]
+        "weight": [1.0, 1.0, 1.0, 1.0, 1.0],
     })
 
 
@@ -41,7 +40,7 @@ def mock_nhts_data():
         "vehicle_id": [1, 2, 3],
         "start_time": ["08:00", "09:00", "10:00"],
         "end_time": ["18:00", "19:00", "20:00"],
-        "miles_driven": [30.0, 25.0, 35.0]
+        "miles_driven": [30.0, 25.0, 35.0],
     })
 
 
@@ -52,25 +51,25 @@ def calculator(sample_metadata, mock_nhts_data):
         metadata_df=sample_metadata,
         nhts_df=mock_nhts_data,
         pums_df=pl.DataFrame(),  # Will be overridden in tests
-        random_state=42
+        random_state=42,
     )
 
 
 def test_fit_vehicle_ownership_model_success(calculator, sample_pums_data):
     """Test successful model fitting."""
     model = calculator.fit_vehicle_ownership_model(sample_pums_data)
-    
+
     # Check that model was fitted
     assert model is not None
     assert calculator.vehicle_ownership_model is not None
-    
+
     # Check that encoders and scaler were created
-    assert hasattr(calculator, 'label_encoders')
-    assert hasattr(calculator, 'target_encoder')
-    assert hasattr(calculator, 'scaler')
-    
+    assert hasattr(calculator, "label_encoders")
+    assert hasattr(calculator, "target_encoder")
+    assert hasattr(calculator, "scaler")
+
     # Check that metro encoder was created
-    assert 'metro' in calculator.label_encoders
+    assert "metro" in calculator.label_encoders
 
 
 def test_fit_vehicle_ownership_model_caps_vehicles_at_2(calculator):
@@ -80,14 +79,14 @@ def test_fit_vehicle_ownership_model_caps_vehicles_at_2(calculator):
         "income": [30000, 50000, 75000, 100000],
         "metro": ["urban", "urban", "suburban", "suburban"],
         "vehicles": [0, 1, 3, 5],  # Values including 0, 1, and > 2
-        "hh_weight": [1.0, 1.0, 1.0, 1.0]
+        "hh_weight": [1.0, 1.0, 1.0, 1.0],
     })
-    
+
     model = calculator.fit_vehicle_ownership_model(pums_data)
-    
+
     # Check that the model was fitted successfully
     assert model is not None
-    
+
     # The internal data should have vehicles capped at 2
     # We can verify this by checking the target encoder classes
     expected_classes = [0, 1, 2]  # Should only have 0, 1, 2 vehicles
@@ -101,11 +100,11 @@ def test_fit_vehicle_ownership_model_with_sample_weights(calculator):
         "income": [30000, 50000, 75000, 100000],
         "metro": ["urban", "urban", "suburban", "suburban"],
         "vehicles": [0, 1, 2, 2],
-        "hh_weight": [2.0, 1.5, 1.0, 0.5]  # Different weights
+        "hh_weight": [2.0, 1.5, 1.0, 0.5],  # Different weights
     })
-    
+
     model = calculator.fit_vehicle_ownership_model(pums_data)
-    
+
     # Check that model was fitted successfully
     assert model is not None
     assert calculator.vehicle_ownership_model is not None
@@ -118,15 +117,15 @@ def test_fit_vehicle_ownership_model_handles_missing_values(calculator, caplog):
         "income": [30000, 50000, 75000, None, 60000, 80000],
         "metro": ["urban", None, "suburban", "suburban", "urban", "rural"],
         "vehicles": [0, 1, 2, 2, 1, 2],
-        "hh_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        "hh_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
     })
-    
+
     # The function should handle missing values gracefully by dropping incomplete rows
     # After dropping rows with missing values, we should have enough data to fit the model
     model = calculator.fit_vehicle_ownership_model(pums_data)
     assert model is not None
     assert calculator.vehicle_ownership_model is not None
-    
+
     # Check that the warning message was logged correctly
     assert len(caplog.records) > 0
     warning_message = caplog.records[0].message
@@ -137,18 +136,18 @@ def test_predict_num_vehicles_success(calculator, sample_pums_data, sample_metad
     """Test successful vehicle prediction."""
     # First fit the model
     calculator.fit_vehicle_ownership_model(sample_pums_data)
-    
+
     # Then predict
     result_df = calculator.predict_num_vehicles(sample_metadata)
-    
+
     # Check that result has the expected columns
     assert "vehicles" in result_df.columns
     assert len(result_df) == len(sample_metadata)
-    
+
     # Check that all original columns are preserved
     for col in sample_metadata.columns:
         assert col in result_df.columns
-    
+
     # Check that vehicle predictions are integers in expected range
     vehicle_predictions = result_df.get_column("vehicles").to_list()
     assert all(isinstance(v, (int, np.integer)) for v in vehicle_predictions)
@@ -164,7 +163,7 @@ def test_predict_num_vehicles_without_fitted_model(calculator, sample_metadata):
 def test_predict_num_vehicles_without_metadata(calculator, sample_pums_data):
     """Test that error is raised when no metadata is provided."""
     calculator.fit_vehicle_ownership_model(sample_pums_data)
-    
+
     with pytest.raises(MetadataDataFrameError):
         calculator.predict_num_vehicles(None)
 
@@ -172,7 +171,7 @@ def test_predict_num_vehicles_without_metadata(calculator, sample_pums_data):
 def test_predict_num_vehicles_missing_required_features(calculator, sample_pums_data):
     """Test that error is raised when required features are missing."""
     calculator.fit_vehicle_ownership_model(sample_pums_data)
-    
+
     # Create metadata with missing values
     incomplete_metadata = pl.DataFrame({
         "bldg_id": [1, 2, 3],
@@ -180,10 +179,10 @@ def test_predict_num_vehicles_missing_required_features(calculator, sample_pums_
         "income": [30000, 50000, None],  # Missing value
         "metro": ["urban", "urban", None],  # Missing value
     })
-    
+
     with pytest.raises(ValueError) as exc_info:
         calculator.predict_num_vehicles(incomplete_metadata)
-    
+
     # Check that the error message mentions missing data
     assert "Missing vehicle ownership model input data" in str(exc_info.value)
     assert "building IDs" in str(exc_info.value)
@@ -192,11 +191,11 @@ def test_predict_num_vehicles_missing_required_features(calculator, sample_pums_
 def test_predict_num_vehicles_consistent_predictions(calculator, sample_pums_data, sample_metadata):
     """Test that predictions are consistent for same input."""
     calculator.fit_vehicle_ownership_model(sample_pums_data)
-    
+
     # Make predictions twice
     result1 = calculator.predict_num_vehicles(sample_metadata)
     result2 = calculator.predict_num_vehicles(sample_metadata)
-    
+
     # Results should be identical
     assert result1.equals(result2)
 
@@ -204,7 +203,7 @@ def test_predict_num_vehicles_consistent_predictions(calculator, sample_pums_dat
 def test_predict_num_vehicles_feature_encoding(calculator, sample_pums_data):
     """Test that categorical features are properly encoded during prediction."""
     calculator.fit_vehicle_ownership_model(sample_pums_data)
-    
+
     # Create metadata with new metro values not seen during training
     new_metadata = pl.DataFrame({
         "bldg_id": [1],
@@ -212,7 +211,7 @@ def test_predict_num_vehicles_feature_encoding(calculator, sample_pums_data):
         "income": [50000],
         "metro": ["urban"],  # This should be encoded properly
     })
-    
+
     # Should not raise an error
     result = calculator.predict_num_vehicles(new_metadata)
     assert len(result) == 1
@@ -222,7 +221,7 @@ def test_predict_num_vehicles_feature_encoding(calculator, sample_pums_data):
 def test_predict_num_vehicles_feature_scaling(calculator, sample_pums_data):
     """Test that features are properly scaled during prediction."""
     calculator.fit_vehicle_ownership_model(sample_pums_data)
-    
+
     # Create metadata with extreme values to test scaling
     extreme_metadata = pl.DataFrame({
         "bldg_id": [1, 2],
@@ -230,7 +229,7 @@ def test_predict_num_vehicles_feature_scaling(calculator, sample_pums_data):
         "income": [10000, 500000],  # Extreme values
         "metro": ["urban", "suburban"],
     })
-    
+
     # Should not raise an error and should produce predictions
     result = calculator.predict_num_vehicles(extreme_metadata)
     assert len(result) == 2
@@ -243,22 +242,21 @@ def test_random_seed_reproducibility(calculator, sample_pums_data, sample_metada
     """Test that the random seed produces consistent results across multiple runs."""
     # Fit the model
     calculator.fit_vehicle_ownership_model(sample_pums_data)
-    
+
     # Make predictions multiple times
     result1 = calculator.predict_num_vehicles(sample_metadata)
     result2 = calculator.predict_num_vehicles(sample_metadata)
     result3 = calculator.predict_num_vehicles(sample_metadata)
-    
+
     # All results should be identical
     assert result1.equals(result2)
     assert result2.equals(result3)
     assert result1.equals(result3)
-    
+
     # Check that the actual predictions are the same
     predictions1 = result1.get_column("vehicles").to_list()
     predictions2 = result2.get_column("vehicles").to_list()
     predictions3 = result3.get_column("vehicles").to_list()
-    
+
     assert predictions1 == predictions2
     assert predictions2 == predictions3
-
