@@ -226,6 +226,7 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         "HHFAMINC",  # household income
         "HHVEHCNT",  # total number of vehicles
         "URBRUR",  # urban/rural status urban(1)/rural(2)
+        "WTHHFIN",  # household weight
     ]
 
     # Load only the needed columns
@@ -254,6 +255,7 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         "STRTTIME": "start_time",
         "ENDTIME": "end_time",
         "TRPMILES": "miles_driven",
+        "WTHHFIN": "hh_weight",
     })
 
     return nhts_df
