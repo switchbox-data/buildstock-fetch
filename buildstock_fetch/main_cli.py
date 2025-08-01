@@ -344,6 +344,15 @@ def _run_interactive_mode() -> dict[str, str]:
         ).ask()
     )
 
+    # Check for unavailable file types and print warning
+    unavailable_file_types = ["hourly_load_curve", "daily_load_curve", "monthly_load_curve", "annual_load_curve"]
+    selected_unavailable = [ft for ft in requested_file_types if ft in unavailable_file_types]
+    if selected_unavailable:
+        console.print("\n[yellow]The following file types are not available yet:[/yellow]")
+        for file_type in selected_unavailable:
+            console.print(f"  • {file_type}")
+        console.print("")
+
     # Retrieve output directory
     output_directory_str = _handle_cancellation(
         questionary.path(
@@ -518,6 +527,7 @@ def main_callback(
             bldg_ids.extend(bldg_id)
 
     # Fetch the building data (Only the first 10 for now)
+    print("TEST")
     fetch_bldg_data(bldg_ids[:10], Path(inputs["output_directory"]))
 
 
