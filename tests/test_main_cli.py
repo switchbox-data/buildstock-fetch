@@ -40,7 +40,7 @@ runner = CliRunner()
 def test_interactive_mode(mock_text, mock_checkbox, mock_select, mock_path, mock_confirm, cleanup_downloads):
     """Test interactive mode with mocked questionary."""
     # Mock the questionary responses
-    mock_select.return_value.ask.side_effect = ["resstock", "2021", "tmy3", "1", "Download all files"]
+    mock_select.return_value.ask.side_effect = ["resstock", "2021", "tmy3", "1", "Download a sample"]
     mock_checkbox.return_value.ask.side_effect = [["0"], ["CA", "MA"], ["metadata"]]
     mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
     mock_confirm.return_value.ask.return_value = True
@@ -70,7 +70,7 @@ def test_interactive_mode(mock_text, mock_checkbox, mock_select, mock_path, mock
     assert "test_output" in result.stdout
 
     # Test abort path: confirmation returns False
-    mock_select.return_value.ask.side_effect = ["resstock", "2021", "tmy3", "1", "Download all files"]
+    mock_select.return_value.ask.side_effect = ["resstock", "2021", "tmy3", "1", "Download a sample"]
     mock_checkbox.return_value.ask.side_effect = [["0"], ["CA", "MA"], ["metadata"]]
     mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
     mock_confirm.return_value.ask.return_value = False
@@ -84,8 +84,8 @@ def test_interactive_mode(mock_text, mock_checkbox, mock_select, mock_path, mock
     assert result.exit_code == 1
 
     # Mock the questionary responses for another valid run
-    mock_select.return_value.ask.side_effect = ["comstock", "2024", "amy2018", "1", "Download all files"]
-    mock_checkbox.return_value.ask.side_effect = [["7"], ["CA", "TX"], ["15min_load_curve", "metadata"]]
+    mock_select.return_value.ask.side_effect = ["comstock", "2024", "amy2018", "1", "Download a sample"]
+    mock_checkbox.return_value.ask.side_effect = [["7"], ["CA", "TX"], ["load_curve_15min", "metadata"]]
     mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
     mock_confirm.return_value.ask.return_value = True
     result = runner.invoke(app, [])
@@ -106,7 +106,7 @@ def test_interactive_mode(mock_text, mock_checkbox, mock_select, mock_path, mock
     assert "Weather file: amy2018" in result.stdout
     assert "Release version: 1" in result.stdout
     assert "States: ['CA', 'TX']" in result.stdout
-    assert "File type: ['15min_load_curve', 'metadata']" in result.stdout
+    assert "File type: ['load_curve_15min', 'metadata']" in result.stdout
     assert "Upgrade ids: ['7']" in result.stdout
     assert "test_output" in result.stdout
 
@@ -125,7 +125,7 @@ def test_interactive_mode_sample_download(
     mock_checkbox.return_value.ask.side_effect = [["0"], ["CA"], ["metadata"]]
     mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
     mock_confirm.return_value.ask.return_value = True
-    # Mock the text input for sample size
+    # Mock the text input for sample size (for upgrade 0)
     mock_text.return_value.ask.return_value = "3"
 
     result = runner.invoke(app, [])
@@ -149,7 +149,7 @@ def test_interactive_mode_sample_download(
     assert "test_output" in result.stdout
     # Check for sample download messages
     assert "files for this release" in result.stdout
-    assert "Selected 3 randomly sampled buildings to download" in result.stdout
+    assert "Selected 3 buildings for upgrade 0" in result.stdout
 
 
 @patch("questionary.confirm")
@@ -166,7 +166,7 @@ def test_interactive_mode_zero_sample(
     mock_checkbox.return_value.ask.side_effect = [["0"], ["CA"], ["metadata"]]
     mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
     mock_confirm.return_value.ask.return_value = True
-    # Mock the text input for sample size (0)
+    # Mock the text input for sample size (0 for upgrade 0)
     mock_text.return_value.ask.return_value = "0"
 
     result = runner.invoke(app, [])
@@ -190,5 +190,5 @@ def test_interactive_mode_zero_sample(
     assert "test_output" in result.stdout
     # Check for zero sample download messages
     assert "files for this release" in result.stdout
-    assert "No files will be downloaded" in result.stdout
+    assert "No files will be downloaded for upgrade 0" in result.stdout
     assert "No files selected for download" in result.stdout

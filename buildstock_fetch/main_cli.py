@@ -444,8 +444,18 @@ def _get_user_download_choice(bldg_ids: list) -> list:
     if not bldg_ids:
         return []
 
-    total_files = len(bldg_ids)
-    console.print(f"\nThere are {total_files} files for this release.")
+    # Group building IDs by upgrade_id
+    upgrade_id_groups: dict[str, list] = {}
+    for bldg_id in bldg_ids:
+        upgrade_id = bldg_id.upgrade_id
+        if upgrade_id not in upgrade_id_groups:
+            upgrade_id_groups[upgrade_id] = []
+        upgrade_id_groups[upgrade_id].append(bldg_id)
+
+    # Print summary for each upgrade_id
+    console.print(f"\nThere are {len(bldg_ids)} files for this release:")
+    for upgrade_id, bldg_list in upgrade_id_groups.items():
+        console.print(f"  • Upgrade {upgrade_id}: {len(bldg_list)} buildings")
 
     choice = _handle_cancellation(
         questionary.select(
@@ -457,23 +467,33 @@ def _get_user_download_choice(bldg_ids: list) -> list:
     if choice == "Download all files":
         return bldg_ids
     else:
-        # Ask for sample size
-        sample_size_str = _handle_cancellation(
-            questionary.text(
-                f"Enter the number of files to download (0-{total_files}):",
-                validate=lambda text: (text.isdigit() and 0 <= int(text) <= total_files)
-                or f"Please enter a number between 0 and {total_files}",
-            ).ask()
-        )
+        selected_bldg_ids = []
 
-        sample_size = int(sample_size_str)
-        if sample_size == 0:
-            console.print("[yellow]No files will be downloaded.[/yellow]")
-            return []
+        # For each upgrade_id, ask user for sample size
+        for upgrade_id, bldg_list in upgrade_id_groups.items():
+            total_for_upgrade = len(bldg_list)
 
-        # Randomly select the specified number of building IDs
-        selected_bldg_ids = random.sample(bldg_ids, sample_size)
-        console.print(f"[green]Selected {sample_size} randomly sampled buildings to download.[/green]")
+            sample_size_str = _handle_cancellation(
+                questionary.text(
+                    f"Enter the number of files to download for upgrade {upgrade_id} (0-{total_for_upgrade}):",
+                    validate=lambda text, max_val=total_for_upgrade: (text.isdigit() and 0 <= int(text) <= max_val)
+                    or f"Please enter a number between 0 and {max_val}",
+                ).ask()
+            )
+
+            sample_size = int(sample_size_str)
+            if sample_size == 0:
+                console.print(f"[yellow]No files will be downloaded for upgrade {upgrade_id}.[/yellow]")
+                continue
+
+            # Randomly select the specified number of building IDs for this upgrade_id
+            selected_for_upgrade = random.sample(bldg_list, sample_size)
+            selected_bldg_ids.extend(selected_for_upgrade)
+            console.print(f"[green]Selected {sample_size} buildings for upgrade {upgrade_id}.[/green]")
+
+        if not selected_bldg_ids:
+            console.print("[yellow]No files selected for download.[/yellow]")
+
         return selected_bldg_ids
 
 
