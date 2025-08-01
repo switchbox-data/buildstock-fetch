@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from buildstock_fetch.main import fetch_bldg_ids
+from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
 
 # Initialize Rich console
 console = Console()
@@ -199,7 +199,8 @@ def _get_file_type_options_grouped(release_name: str) -> list[dict]:
 
     choices = []
     for category, types in categories.items():
-        available_in_category = [ft for ft in file_types if ft in types]
+        # Filter available types but maintain the defined order
+        available_in_category = [ft for ft in types if ft in file_types]
         if available_in_category:
             choices.append({"name": f"--- {category} ---", "value": None, "disabled": True})
             for file_type in available_in_category:
@@ -527,9 +528,7 @@ def main_callback(
             bldg_ids.extend(bldg_id)
 
     # Fetch the building data (Only the first 10 for now)
-    print(bldg_ids)
-    print("TEST")
-    # fetch_bldg_data(bldg_ids[:10], Path(inputs["output_directory"]))
+    fetch_bldg_data(bldg_ids[:5], inputs["file_type"], Path(inputs["output_directory"]))
 
 
 app.command()(main_callback)
