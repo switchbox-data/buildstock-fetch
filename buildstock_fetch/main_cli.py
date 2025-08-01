@@ -93,9 +93,17 @@ def _get_release_versions_options(
         list(parsed_releases.keys()), product_type=product_type, release_year=release_year, weather_file=weather_file
     )
     available_release_versions = list({parsed_releases[release]["release_version"] for release in available_releases})
-    available_release_versions.sort()
 
-    return available_releases, available_release_versions
+    # Define the desired order: "2", "1.1", "1"
+    display_order = ["2", "1.1", "1"]
+
+    # Filter available release versions to only include those in the desired order
+    ordered_release_versions = []
+    for version in display_order:
+        if version in available_release_versions:
+            ordered_release_versions.append(version)
+
+    return available_releases, ordered_release_versions
 
 
 def _get_upgrade_ids_options(release_name: str) -> list[str]:
