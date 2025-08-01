@@ -1,5 +1,6 @@
 import json
 import pprint
+from collections.abc import Mapping
 from importlib.resources import files
 from pathlib import Path
 from typing import Union, cast
@@ -186,7 +187,7 @@ def _get_file_type_options_grouped(release_name: str) -> list[dict]:
 
     # Define categories
     categories = {
-        "Simulation Files": ["HPXML", "schedule"],
+        "Simulation Files": ["hpxml", "schedule"],
         "End Use Load Curves": [
             "load_curve_15min",
             "load_curve_hourly",
@@ -345,15 +346,6 @@ def _run_interactive_mode() -> dict[str, str]:
         ).ask()
     )
 
-    # Check for unavailable file types and print warning
-    unavailable_file_types = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly", "load_curve_annual"]
-    selected_unavailable = [ft for ft in requested_file_types if ft in unavailable_file_types]
-    if selected_unavailable:
-        console.print("\n[yellow]The following file types are not available yet:[/yellow]")
-        for file_type in selected_unavailable:
-            console.print(f"  • {file_type}")
-        console.print("")
-
     # Retrieve output directory
     output_directory_str = _handle_cancellation(
         questionary.path(
@@ -399,6 +391,51 @@ def _verify_interactive_inputs(inputs: dict) -> bool:
         raise typer.Exit(0) from None
 
     return bool(result)
+
+
+def _print_data_processing_info(inputs: Mapping[str, Union[str, list[str]]]) -> None:
+    """Print the data processing information."""
+    print("Downloading data for:")
+    print(f"Product: {inputs['product']}")
+    print(f"Release year: {inputs['release_year']}")
+    print(f"Weather file: {inputs['weather_file']}")
+    print(f"Release version: {inputs['release_version']}")
+    print(f"States: {inputs['states']}")
+    print(f"File type: {inputs['file_type']}")
+    print(f"Upgrade ids: {inputs['upgrade_ids']}")
+    print(f"Output directory: {inputs['output_directory']}")
+
+
+def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> None:
+    """Check and print warning for unavailable file types."""
+    unavailable_file_types = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly", "load_curve_annual"]
+    selected_file_types = inputs["file_type"].split() if isinstance(inputs["file_type"], str) else inputs["file_type"]
+    selected_unavailable = [ft for ft in selected_file_types if ft in unavailable_file_types]
+    if selected_unavailable:
+        console.print("\n[yellow]The following file types are not available yet:[/yellow]")
+        for file_type in selected_unavailable:
+            console.print(f"  • {file_type}")
+        console.print("")
+
+
+def _fetch_all_building_ids(inputs: Mapping[str, Union[str, list[str]]]) -> list:
+    """Fetch building IDs for all states and upgrade IDs."""
+    bldg_ids = []
+    for state in inputs["states"]:
+        state = state.strip()
+        if state == "":
+            continue
+        for upgrade_id in inputs["upgrade_ids"]:
+            bldg_id = fetch_bldg_ids(
+                str(inputs["product"]),
+                str(inputs["release_year"]),
+                str(inputs["weather_file"]),
+                str(inputs["release_version"]),
+                str(state),
+                str(upgrade_id),
+            )
+            bldg_ids.extend(bldg_id)
+    return bldg_ids
 
 
 def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
@@ -500,35 +537,15 @@ def main_callback(
             raise typer.Exit(0) from None
 
     # Process the data
-    print("Downloading data for:")
-    print(f"Product: {inputs['product']}")
-    print(f"Release year: {inputs['release_year']}")
-    print(f"Weather file: {inputs['weather_file']}")
-    print(f"Release version: {inputs['release_version']}")
-    print(f"States: {inputs['states']}")
-    print(f"File type: {inputs['file_type']}")
-    print(f"Upgrade ids: {inputs['upgrade_ids']}")
-    print(f"Output directory: {inputs['output_directory']}")
+    _print_data_processing_info(inputs)
+    _check_unavailable_file_types(inputs)
 
-    # Fetch the building ids
-    bldg_ids = []
-    for state in inputs["states"]:
-        state = state.strip()
-        if state == "":
-            continue
-        for upgrade_id in inputs["upgrade_ids"]:
-            bldg_id = fetch_bldg_ids(
-                inputs["product"],
-                inputs["release_year"],
-                inputs["weather_file"],
-                inputs["release_version"],
-                state,
-                upgrade_id,
-            )
-            bldg_ids.extend(bldg_id)
-
-    # Fetch the building data (Only the first 10 for now)
-    fetch_bldg_data(bldg_ids[:5], inputs["file_type"], Path(inputs["output_directory"]))
+    # Fetch the building ids and download data
+    bldg_ids = _fetch_all_building_ids(inputs)
+    file_type_tuple = (
+        tuple(inputs["file_type"].split()) if isinstance(inputs["file_type"], str) else tuple(inputs["file_type"])
+    )
+    fetch_bldg_data(bldg_ids[:5], file_type_tuple, Path(inputs["output_directory"]))
 
 
 app.command()(main_callback)
