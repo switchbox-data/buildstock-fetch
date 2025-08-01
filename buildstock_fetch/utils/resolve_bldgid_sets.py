@@ -99,7 +99,7 @@ def _process_zip_file(
                 unique_files.add(file_name)
                 # Check for XML files
                 if file_name.lower().endswith(".xml"):
-                    available_data.add("HPXML")
+                    available_data.add("hpxml")
                 # Check for schedule CSV files
                 if file_name.lower().endswith(".csv") and "schedule" in file_name.lower():
                     available_data.add("schedule")

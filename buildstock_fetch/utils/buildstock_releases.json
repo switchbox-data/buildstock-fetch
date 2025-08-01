@@ -8,12 +8,12 @@
       "0"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   },
   "com_2021_tmy3_1": {
@@ -25,12 +25,12 @@
       "0"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   },
   "res_2021_amy2018_1": {
@@ -42,12 +42,12 @@
       "0"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   },
   "res_2021_tmy3_1": {
@@ -59,12 +59,12 @@
       "0"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   },
   "res_2022_amy2012_1.1": {
@@ -86,14 +86,14 @@
       "10"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
-      "load_curve_daily",
-      "HPXML",
+      "hpxml",
       "schedule",
+      "load_curve_daily",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_hourly",
+      "load_curve_15min"
     ]
   },
   "res_2022_amy2012_1": {
@@ -115,14 +115,14 @@
       "10"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
-      "load_curve_daily",
-      "HPXML",
+      "hpxml",
       "schedule",
+      "load_curve_daily",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_hourly",
+      "load_curve_15min"
     ]
   },
   "res_2022_amy2018_1.1": {
@@ -144,14 +144,14 @@
       "10"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
-      "load_curve_daily",
-      "HPXML",
+      "hpxml",
       "schedule",
+      "load_curve_daily",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_hourly",
+      "load_curve_15min"
     ]
   },
   "res_2022_amy2018_1": {
@@ -173,14 +173,14 @@
       "10"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
-      "load_curve_daily",
-      "HPXML",
+      "hpxml",
       "schedule",
+      "load_curve_daily",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_hourly",
+      "load_curve_15min"
     ]
   },
   "res_2022_tmy3_1.1": {
@@ -202,14 +202,14 @@
       "10"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
-      "load_curve_daily",
-      "HPXML",
+      "hpxml",
       "schedule",
+      "load_curve_daily",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_hourly",
+      "load_curve_15min"
     ]
   },
   "res_2022_tmy3_1": {
@@ -231,14 +231,14 @@
       "10"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
-      "load_curve_daily",
-      "HPXML",
+      "hpxml",
       "schedule",
+      "load_curve_daily",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_hourly",
+      "load_curve_15min"
     ]
   },
   "com_2023_amy2018_1": {
@@ -260,12 +260,12 @@
       "10"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   },
   "com_2023_amy2018_2": {
@@ -295,12 +295,12 @@
       "18"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   },
   "com_2024_amy2018_1": {
@@ -343,12 +343,12 @@
       "32"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   },
   "com_2024_amy2018_2": {
@@ -399,12 +399,12 @@
       "39"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   },
   "res_2024_amy2018_2": {
@@ -432,12 +432,12 @@
       "16"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   },
   "res_2024_tmy3_1": {
@@ -475,12 +475,12 @@
       "16"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   },
   "com_2025_amy2018_1": {
@@ -549,12 +549,12 @@
       "57"
     ],
     "available_data": [
-      "load_curve_hourly",
+      "load_curve_monthly",
       "load_curve_annual",
       "load_curve_daily",
+      "load_curve_hourly",
       "metadata",
-      "load_curve_15min",
-      "load_curve_monthly"
+      "load_curve_15min"
     ]
   }
 }
