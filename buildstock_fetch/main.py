@@ -247,7 +247,6 @@ def fetch_bldg_ids(
 
     # Check if the partition exists
     if not partition_path.exists():
-        print("ERROR TEST")
         return []
 
     # Read the parquet files in the specific partition

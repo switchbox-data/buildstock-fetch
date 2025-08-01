@@ -1,5 +1,6 @@
 import json
 import pprint
+import random
 from collections.abc import Mapping
 from importlib.resources import files
 from pathlib import Path
@@ -438,6 +439,44 @@ def _fetch_all_building_ids(inputs: Mapping[str, Union[str, list[str]]]) -> list
     return bldg_ids
 
 
+def _get_user_download_choice(bldg_ids: list) -> list:
+    """Ask user whether to download all files or a sample."""
+    if not bldg_ids:
+        return []
+
+    total_files = len(bldg_ids)
+    console.print(f"\nThere are {total_files} files for this release.")
+
+    choice = _handle_cancellation(
+        questionary.select(
+            "Would you like to download all files or a sample of them?",
+            choices=["Download all files", "Download a sample"],
+        ).ask()
+    )
+
+    if choice == "Download all files":
+        return bldg_ids
+    else:
+        # Ask for sample size
+        sample_size_str = _handle_cancellation(
+            questionary.text(
+                f"Enter the number of files to download (0-{total_files}):",
+                validate=lambda text: (text.isdigit() and 0 <= int(text) <= total_files)
+                or f"Please enter a number between 0 and {total_files}",
+            ).ask()
+        )
+
+        sample_size = int(sample_size_str)
+        if sample_size == 0:
+            console.print("[yellow]No files will be downloaded.[/yellow]")
+            return []
+
+        # Randomly select the specified number of building IDs
+        selected_bldg_ids = random.sample(bldg_ids, sample_size)
+        console.print(f"[green]Selected {sample_size} randomly sampled buildings to download.[/green]")
+        return selected_bldg_ids
+
+
 def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
     """Validate the direct inputs"""
     if not all([
@@ -542,10 +581,17 @@ def main_callback(
 
     # Fetch the building ids and download data
     bldg_ids = _fetch_all_building_ids(inputs)
-    file_type_tuple = (
-        tuple(inputs["file_type"].split()) if isinstance(inputs["file_type"], str) else tuple(inputs["file_type"])
-    )
-    fetch_bldg_data(bldg_ids[:5], file_type_tuple, Path(inputs["output_directory"]))
+
+    # Ask user about download choice
+    selected_bldg_ids = _get_user_download_choice(bldg_ids)
+
+    if selected_bldg_ids:
+        file_type_tuple = (
+            tuple(inputs["file_type"].split()) if isinstance(inputs["file_type"], str) else tuple(inputs["file_type"])
+        )
+        fetch_bldg_data(selected_bldg_ids, file_type_tuple, Path(inputs["output_directory"]))
+    else:
+        console.print("[yellow]No files selected for download.[/yellow]")
 
 
 app.command()(main_callback)
