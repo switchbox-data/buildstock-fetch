@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, Optional
 
@@ -44,6 +44,20 @@ class WeatherDataError(Exception):
     pass
 
 
+class InsufficientVehiclesError(Exception):
+    """Raised when there are not enough matching vehicles in NHTS data."""
+
+    def __init__(self, bldg_id: str, vehicle_id: int, count: int):
+        self.message = f"Building {bldg_id}, vehicle {vehicle_id}: {count} matching vehicles"
+        super().__init__(self.message)
+
+
+class NoDateRangeError(Exception):
+    """Raised when no start_date or end_date is provided."""
+
+    pass
+
+
 @dataclass
 class EVDemandConfig:
     state: str
@@ -67,21 +81,25 @@ class EVDemandConfig:
 class VehicleProfile:
     """Represents a vehicle's driving profile parameters."""
 
-    building_id: int
+    building_id: str
     vehicle_id: int
-    weekday_departure_hour: int
-    weekday_arrival_hour: int
-    weekday_miles: float
-    weekend_departure_hour: int
-    weekend_arrival_hour: int
-    weekend_miles: float
+    weekday_departure_hour: list[int]  # List of departure hours for each weekday trip
+    weekday_arrival_hour: list[int]  # List of arrival hours for each weekday trip
+    weekday_miles: list[float]  # List of miles for each weekday trip
+    weekday_trip_weights: list[float]  # List of trip weights for each weekday trip
+    weekend_departure_hour: list[int]  # List of departure hours for each weekend trip
+    weekend_arrival_hour: list[int]  # List of arrival hours for each weekend trip
+    weekend_miles: list[float]  # List of miles for each weekend trip
+    weekend_trip_weights: list[float]  # List of trip weights for each weekend trip
+    weekday_trip_ids: list[int]  # List of trip IDs for weekdays
+    weekend_trip_ids: list[int]  # List of trip IDs for weekends
 
 
 @dataclass
 class TripSchedule:
     """Represents a daily trip schedule for a vehicle."""
 
-    building_id: int
+    building_id: str  # Changed from int to str to match VehicleProfile
     vehicle_id: int
     date: datetime
     departure_hour: int
@@ -110,24 +128,38 @@ class EVDemandCalculator:
         metadata_df: pl.DataFrame,
         nhts_df: pl.DataFrame,
         pums_df: pl.DataFrame,
+        start_date: datetime,
+        end_date: datetime,
+        max_vehicles: int = 2,
+        random_state: int = 42,
         weather_df: Optional[pl.DataFrame] = None,
-        random_state: int = 42,  # seed for reproducibility
     ):
         """
         Initialize the EV demand calculator.
 
         Args:
             metadata_df: ResStock metadata DataFrame
-            nhts_df: NHTS trip data DataFrame (optional)
+            nhts_df: NHTS trip data DataFrame
+            pums_df: PUMS data DataFrame
             weather_df: Weather data DataFrame (optional)
+            start_date: Start date for trip generation
+            end_date: End date for trip generation
             random_state: Random seed for reproducible results
         """
         # Set random seed for reproducible results
         np.random.seed(random_state)
 
+        self.max_vehicles = max_vehicles
+
         self.metadata_df = metadata_df
         self.nhts_df = nhts_df
+        self.pums_df = pums_df
         self.weather_df = weather_df
+
+        self.start_date = start_date
+        self.end_date = end_date
+        self.num_days = (self.end_date - self.start_date).days + 1
+
         self.vehicle_ownership_model: Optional[Any] = None
         self.random_state = random_state
 
@@ -158,7 +190,10 @@ class EVDemandCalculator:
         """
         # Preprocess data: replace vehicles > 2 with 2, drop nulls, encode categorical
         pums_df = pums_df.with_columns(
-            pl.when(pl.col("vehicles") > 2).then(2).otherwise(pl.col("vehicles")).alias("vehicles")
+            pl.when(pl.col("vehicles") > self.max_vehicles)
+            .then(self.max_vehicles)
+            .otherwise(pl.col("vehicles"))
+            .alias("vehicles")
         )
 
         # Drop rows with missing values in required features
@@ -249,44 +284,178 @@ class EVDemandCalculator:
         return result_df
 
     def sample_vehicle_profiles(
-        self, metadata_df: Optional[pl.DataFrame] = None
-    ) -> dict[tuple[int, int], VehicleProfile]:
+        self, bldg_veh_df: pl.DataFrame, nhts_df: pl.DataFrame
+    ) -> dict[tuple[str, int], VehicleProfile]:
         """
         For each household and vehicle, sample weekday and weekend trip profiles from NHTS.
 
         Args:
-            metadata_df: DataFrame with household and vehicle info. If None, uses self.metadata_df
+            bldg_veh_df: DataFrame with household and vehicle info.
+            nhts_df: NHTS trip data DataFrame with trip weights
 
         Returns:
             Dict mapping (building_id, vehicle_id) to sampled trip profile parameters
         """
-        df = self.metadata_df
+        df = bldg_veh_df
         if df is None:
             raise MetadataDataFrameError()
 
-        if self.nhts_df is None:
+        if nhts_df is None:
             raise NHTSDataError()
 
-        # TODO: Implement NHTS sampling logic
-        # This is a placeholder - replace with actual sampling logic
-        profiles = {}
-        for row in df.iter_rows(named=True):
-            building_id = row["building_id"]
-            num_vehicles = row.get("num_vehicles", 1)
+        # Cap the number of vehicles at the max number of vehicles per household
+        nhts_df = nhts_df.with_columns(
+            pl.when(pl.col("vehicles") > self.max_vehicles)
+            .then(self.max_vehicles)
+            .otherwise(pl.col("vehicles"))
+            .alias("vehicles")
+        )
 
-            for vehicle_id in range(num_vehicles):
-                profiles[(building_id, vehicle_id)] = VehicleProfile(
-                    building_id=building_id,
-                    vehicle_id=vehicle_id,
-                    weekday_departure_hour=8,
-                    weekday_arrival_hour=18,
-                    weekday_miles=30.0,
-                    weekend_departure_hour=10,
-                    weekend_arrival_hour=16,
-                    weekend_miles=20.0,
+        # Group NHTS data by weekday/weekend
+        weekday_trips = nhts_df.filter(pl.col("weekday") == 2)
+        weekend_trips = nhts_df.filter(pl.col("weekday") == 1)
+
+        profiles = {}
+
+        for row in df.iter_rows(named=True):
+            bldg_id = row["bldg_id"]
+            num_vehicles = row["vehicles"]  # This comes from predict_num_vehicles
+
+            # Find matching households
+            matching_criteria = (
+                (pl.col("income_bucket") == row["income_bucket"])
+                & (pl.col("occupants") == row["occupants"])
+                & (pl.col("vehicles") == num_vehicles)  # Match on total vehicles in household
+            )
+
+            # For each vehicle in the household
+            for vehicle_id in range(1, num_vehicles + 1):  # Start from 1 to match example
+                # Get all unique vehicle IDs from matching households
+                matching_vehicles = weekday_trips.filter(matching_criteria).select(["hh_vehicle_id"]).unique()
+
+                # Check if we have enough unique vehicles
+                if matching_vehicles.height < 5:
+                    raise InsufficientVehiclesError(bldg_id, vehicle_id, matching_vehicles.height)
+
+                # Randomly sample one vehicle (no weights)
+                sampled_hh_vehicle_id = matching_vehicles.sample(1).row(0)[0]
+
+                # Get all weekday trips for this vehicle
+                weekday_samples = weekday_trips.filter(pl.col("hh_vehicle_id") == sampled_hh_vehicle_id).select([
+                    "start_time",
+                    "end_time",
+                    "miles_driven",
+                    "trip_weight",
+                ])
+
+                # Get all weekend trips for the same vehicle
+                weekend_samples = weekend_trips.filter(pl.col("hh_vehicle_id") == sampled_hh_vehicle_id).select([
+                    "start_time",
+                    "end_time",
+                    "miles_driven",
+                    "trip_weight",
+                ])
+
+                # Convert all trips to lists
+                weekday_rows = weekday_samples.rows()
+                weekday_departures = [t[0] // 100 for t in weekday_rows]  # Convert HHMM to HH
+                weekday_arrivals = [t[1] // 100 for t in weekday_rows]
+                weekday_miles = [t[2] for t in weekday_rows]
+                weekday_weights = [t[3] for t in weekday_rows]
+                weekday_trip_ids = list(range(1, len(weekday_departures) + 1))
+
+                weekend_rows = weekend_samples.rows()
+                weekend_departures = [t[0] // 100 for t in weekend_rows]
+                weekend_arrivals = [t[1] // 100 for t in weekend_rows]
+                weekend_miles = [t[2] for t in weekend_rows]
+                weekend_weights = [t[3] for t in weekend_rows]
+                weekend_trip_ids = list(range(1, len(weekend_departures) + 1))
+
+                # Create VehicleProfile for this specific vehicle
+                profiles[(bldg_id, vehicle_id)] = VehicleProfile(
+                    building_id=bldg_id,
+                    vehicle_id=vehicle_id,  # Using 1-based indexing to match example
+                    weekday_departure_hour=weekday_departures,
+                    weekday_arrival_hour=weekday_arrivals,
+                    weekday_miles=weekday_miles,
+                    weekday_trip_weights=weekday_weights,
+                    weekend_departure_hour=weekend_departures,
+                    weekend_arrival_hour=weekend_arrivals,
+                    weekend_miles=weekend_miles,
+                    weekend_trip_weights=weekend_weights,
+                    weekday_trip_ids=weekday_trip_ids,
+                    weekend_trip_ids=weekend_trip_ids,
                 )
 
         return profiles
+
+    def generate_trip_schedules(self, profile: VehicleProfile) -> list[TripSchedule]:
+        """Generate trip schedules for all days in the date range."""
+        schedules = []
+
+        # Calculate number of days between start and end dates
+        days = (self.end_date - self.start_date).days + 1
+
+        for day_offset in range(days):
+            current_date = self.start_date + timedelta(days=day_offset)
+            is_weekday = current_date.weekday() < 5  # Monday-Friday are weekdays
+
+            # Get available trips and weights for this day type
+            if is_weekday:
+                available_trips = len(profile.weekday_trip_ids)
+                weights = np.array(profile.weekday_trip_weights)
+            else:
+                available_trips = len(profile.weekend_trip_ids)
+                weights = np.array(profile.weekend_trip_weights)
+
+            if available_trips == 0:
+                continue  # Skip days where we have no trips
+
+            # Randomly determine number of trips for this day (1 to max available)
+            num_trips = np.random.randint(1, available_trips + 1)
+
+            # Normalize weights for numpy's choice function
+            weights = weights / weights.sum()
+
+            # Sample trip indices using the weights
+            trip_indices = np.random.choice(
+                available_trips,
+                size=num_trips,
+                replace=False,  # Don't use the same trip twice
+                p=weights,
+            )
+
+            for idx in trip_indices:
+                if is_weekday:
+                    departure = profile.weekday_departure_hour[idx]
+                    arrival = profile.weekday_arrival_hour[idx]
+                    base_miles = profile.weekday_miles[idx]
+                else:
+                    departure = profile.weekend_departure_hour[idx]
+                    arrival = profile.weekend_arrival_hour[idx]
+                    base_miles = profile.weekend_miles[idx]
+
+                # Add variance to miles only (keep original departure/arrival times)
+                miles = np.random.normal(base_miles, base_miles * 0.1)
+
+                # Get temperature and calculate energy consumption
+                avg_temp = self.get_avg_temp_while_away(departure, arrival, current_date)
+                kwh = self.miles_to_kwh(miles, avg_temp)
+
+                schedules.append(
+                    TripSchedule(
+                        building_id=profile.building_id,
+                        vehicle_id=profile.vehicle_id,
+                        date=current_date,
+                        departure_hour=departure,
+                        arrival_hour=arrival,
+                        miles_driven=miles,
+                        avg_temp_while_away=avg_temp,
+                        kwh_consumed=kwh,
+                    )
+                )
+
+        return schedules
 
     def get_avg_temp_while_away(self, departure_hour: int, arrival_hour: int, date: datetime) -> float:
         """
@@ -341,50 +510,37 @@ class EVDemandCalculator:
 
     def generate_annual_trip_schedule(
         self,
-        profile_params: dict[tuple[int, int], VehicleProfile],
-        start_date: str = "2022-01-01",
-        end_date: str = "2022-12-31",
+        profile_params: dict[tuple[str, int], VehicleProfile],
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
     ) -> pl.DataFrame:
         """
         Generate an annual trip schedule for each vehicle based on sampled parameters.
 
         Args:
             profile_params: Dict of sampled trip profile parameters
-            start_date: Start date for the annual schedule
-            end_date: End date for the annual schedule
+            start_date: Start date for the schedule (overrides instance start_date)
+            end_date: End date for the schedule (overrides instance end_date)
 
         Returns:
             DataFrame with daily departure/arrival times and miles driven for each vehicle
         """
-        # TODO: Implement annual schedule generation
-        # This is a placeholder - replace with actual schedule generation logic
-        schedules = []
+        # Use instance dates if none provided
+        start = start_date if start_date is not None else self.start_date
+        end = end_date if end_date is not None else self.end_date
 
-        # Parse start date once
-        start_datetime = datetime(2022, 1, 1)  # Fixed date for placeholder
+        if start is None or end is None:
+            raise NoDateRangeError()
 
-        for (building_id, vehicle_id), profile in profile_params.items():
-            # Placeholder: generate one day of data
-            schedule = TripSchedule(
-                building_id=building_id,
-                vehicle_id=vehicle_id,
-                date=start_datetime,
-                departure_hour=profile.weekday_departure_hour,
-                arrival_hour=profile.weekday_arrival_hour,
-                miles_driven=profile.weekday_miles,
-                avg_temp_while_away=self.get_avg_temp_while_away(
-                    profile.weekday_departure_hour, profile.weekday_arrival_hour, start_datetime
-                ),
-                kwh_consumed=0.0,  # Will be calculated below
-            )
+        all_schedules = []
 
-            # Calculate kWh consumed
-            schedule.kwh_consumed = self.miles_to_kwh(schedule.miles_driven, schedule.avg_temp_while_away)
-
-            schedules.append(schedule)
+        # Generate schedules for each vehicle
+        for profile in profile_params.values():
+            schedules = self.generate_trip_schedules(profile)
+            all_schedules.extend(schedules)
 
         # Convert to DataFrame
-        return pl.DataFrame([vars(schedule) for schedule in schedules])
+        return pl.DataFrame([vars(schedule) for schedule in all_schedules])
 
     def assign_battery_capacity(self, daily_kwh: pl.Series) -> pl.Series:
         """
@@ -483,11 +639,27 @@ if __name__ == "__main__":
     print(f"✓ Loaded weather data: {len(weather_df)} rows")
 
     # Test the multinomial model
-    calculator = EVDemandCalculator(metadata_df=metadata_df, nhts_df=nhts_df, pums_df=pums_df, weather_df=weather_df)
+    calculator = EVDemandCalculator(
+        metadata_df=metadata_df[0:2, :],
+        nhts_df=nhts_df,
+        pums_df=pums_df,
+        weather_df=weather_df,
+        start_date=datetime(2022, 1, 1),
+        end_date=datetime(2022, 1, 7),
+    )
 
     # Fit the vehicle ownership model
     calculator.fit_vehicle_ownership_model(pums_df)
 
     # Test predictions on a small sample
-    sample_metadata = metadata_df.head(20)
+    sample_metadata = metadata_df.head(2)
     predictions_df = calculator.predict_num_vehicles(sample_metadata)
+
+    # sample vehicle profiles
+    vehicle_profiles = calculator.sample_vehicle_profiles(predictions_df, nhts_df)
+
+    # generate annual trip schedules
+    trip_schedules = calculator.generate_annual_trip_schedule(vehicle_profiles)
+
+    # # assign battery capacities
+    # battery_capacities = calculator.assign_battery_capacity(trip_schedules.get_column("kwh_consumed"))
