@@ -1,5 +1,6 @@
 import json
 import pprint
+from importlib.resources import files
 from pathlib import Path
 from typing import Union, cast
 
@@ -9,7 +10,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
+from buildstock_fetch.main import fetch_bldg_ids
 
 # Initialize Rich console
 console = Console()
@@ -24,7 +25,7 @@ app = typer.Typer(
 
 
 # File configuration
-BUILDSTOCK_RELEASES_FILE = Path(__file__).parent.parent / "utils" / "buildstock_releases.json"
+BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch.utils").joinpath("buildstock_releases.json"))
 
 
 def _filter_available_releases(
@@ -119,7 +120,6 @@ def _get_upgrade_ids_options(release_name: str) -> list[str]:
 def _get_state_options() -> list[str]:
     return [
         "AL",
-        "AK",
         "AZ",
         "AR",
         "CA",
@@ -188,11 +188,11 @@ def _get_file_type_options_grouped(release_name: str) -> list[dict]:
     categories = {
         "Simulation Files": ["HPXML", "schedule"],
         "End Use Load Curves": [
-            "15min_load_curve",
-            "hourly_load_curve",
-            "daily_load_curve",
-            "monthly_load_curve",
-            "annual_load_curve",
+            "load_curve_15min",
+            "load_curve_hourly",
+            "load_curve_daily",
+            "load_curve_monthly",
+            "load_curve_annual",
         ],
         "Metadata": ["metadata"],
     }
@@ -345,7 +345,7 @@ def _run_interactive_mode() -> dict[str, str]:
     )
 
     # Check for unavailable file types and print warning
-    unavailable_file_types = ["hourly_load_curve", "daily_load_curve", "monthly_load_curve", "annual_load_curve"]
+    unavailable_file_types = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly", "load_curve_annual"]
     selected_unavailable = [ft for ft in requested_file_types if ft in unavailable_file_types]
     if selected_unavailable:
         console.print("\n[yellow]The following file types are not available yet:[/yellow]")
@@ -527,8 +527,9 @@ def main_callback(
             bldg_ids.extend(bldg_id)
 
     # Fetch the building data (Only the first 10 for now)
+    print(bldg_ids)
     print("TEST")
-    fetch_bldg_data(bldg_ids[:10], Path(inputs["output_directory"]))
+    # fetch_bldg_data(bldg_ids[:10], Path(inputs["output_directory"]))
 
 
 app.command()(main_callback)

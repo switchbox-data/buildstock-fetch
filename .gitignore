@@ -147,3 +147,6 @@ data/
 
 # Test output directories
 **/test_output/
+
+# EV data
+utils/ev_data/inputs/*.csv

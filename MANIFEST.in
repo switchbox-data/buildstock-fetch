@@ -1,0 +1,2 @@
+recursive-include buildstock_fetch/utils *.json
+recursive-include buildstock_fetch/utils/building_data *

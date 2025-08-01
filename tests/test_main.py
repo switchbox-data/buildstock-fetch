@@ -6,7 +6,16 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from buildstock_fetch.main import BuildingID, fetch_bldg_data, fetch_bldg_ids
+from buildstock_fetch.main import (
+    BuildingID,
+    NoBuildingDataError,
+    NoMetadataError,
+    RequestedFileTypes,
+    _parse_requested_file_type,
+    download_bldg_data,
+    fetch_bldg_data,
+    fetch_bldg_ids,
+)
 
 
 @pytest.fixture(scope="function")
@@ -48,7 +57,189 @@ def test_building_id_config():
     assert bldg.res_com == "resstock"
 
 
+def test_parse_requested_file_type():
+    assert _parse_requested_file_type(("hpxml", "schedule")) == RequestedFileTypes(hpxml=True, schedule=True)
+    assert _parse_requested_file_type(("hpxml", "schedule", "metadata")) == RequestedFileTypes(
+        hpxml=True, schedule=True, metadata=True
+    )
+    assert _parse_requested_file_type(("hpxml", "schedule", "metadata", "load_curve_15min")) == RequestedFileTypes(
+        hpxml=True, schedule=True, metadata=True, load_curve_15min=True
+    )
+    assert _parse_requested_file_type((
+        "hpxml",
+        "schedule",
+        "metadata",
+        "load_curve_15min",
+        "load_curve_hourly",
+    )) == RequestedFileTypes(hpxml=True, schedule=True, metadata=True, load_curve_15min=True, load_curve_hourly=True)
+    assert _parse_requested_file_type((
+        "hpxml",
+        "schedule",
+        "metadata",
+        "load_curve_15min",
+        "load_curve_hourly",
+        "load_curve_daily",
+    )) == RequestedFileTypes(
+        hpxml=True,
+        schedule=True,
+        metadata=True,
+        load_curve_15min=True,
+        load_curve_hourly=True,
+        load_curve_daily=True,
+    )
+    assert _parse_requested_file_type((
+        "hpxml",
+        "schedule",
+        "metadata",
+        "load_curve_15min",
+        "load_curve_hourly",
+        "load_curve_daily",
+    )) == RequestedFileTypes(
+        hpxml=True,
+        schedule=True,
+        metadata=True,
+        load_curve_15min=True,
+        load_curve_hourly=True,
+        load_curve_daily=True,
+    )
+
+
+def test_download_bldg_data(cleanup_downloads):
+    # Test fetching HPXML files
+    bldg_id = BuildingID(bldg_id=7)
+    download_bldg_data(
+        bldg_id=bldg_id,
+        file_type=RequestedFileTypes(hpxml=True),
+        output_dir=Path("data"),
+    )
+    assert Path(f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/bldg0000007-up00.xml").exists()
+
+    # Test fetching schedule files
+    bldg_id = BuildingID(bldg_id=7)
+    download_bldg_data(
+        bldg_id=bldg_id,
+        file_type=RequestedFileTypes(schedule=True),
+        output_dir=Path("data"),
+    )
+    assert Path(f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/bldg0000007-up00_schedule.csv").exists()
+
+    # Test fetching both HPXML and schedule files
+    bldg_id = BuildingID(bldg_id=7)
+    download_bldg_data(
+        bldg_id=bldg_id,
+        file_type=RequestedFileTypes(hpxml=True, schedule=True),
+        output_dir=Path("data"),
+    )
+    assert Path(f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/bldg0000007-up00.xml").exists()
+    assert Path(f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/bldg0000007-up00_schedule.csv").exists()
+
+
 def test_fetch_bldg_data(cleanup_downloads):
-    fetch_bldg_data([BuildingID(bldg_id=7), BuildingID(bldg_id=8)])
-    assert Path("data/0000007_upgrade0.zip").exists()
-    assert Path("data/0000008_upgrade0.zip").exists()
+    bldg_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=11)]
+    file_type = ("hpxml", "schedule", "metadata")
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 7
+    assert Path(f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/bldg0000007-up00.xml").exists()
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/bldg0000007-up00_schedule.csv"
+    ).exists()
+    assert Path(f"data/{bldg_ids[1].get_release_name()}/hpxml/{bldg_ids[1].state}/bldg0000008-up00.xml").exists()
+    assert Path(
+        f"data/{bldg_ids[1].get_release_name()}/schedule/{bldg_ids[1].state}/bldg0000008-up00_schedule.csv"
+    ).exists()
+    assert Path(f"data/{bldg_ids[2].get_release_name()}/hpxml/{bldg_ids[2].state}/bldg0000011-up00.xml").exists()
+    assert Path(
+        f"data/{bldg_ids[2].get_release_name()}/schedule/{bldg_ids[2].state}/bldg0000011-up00_schedule.csv"
+    ).exists()
+    assert Path(f"data/{bldg_ids[0].get_release_name()}/metadata/{bldg_ids[0].state}/metadata.parquet").exists()
+
+    # Test 2021 release - should raise NoBuildingDataError
+    bldg_ids = [BuildingID(bldg_id=7, release_year="2021", res_com="resstock", weather="tmy3", upgrade_id="1")]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+
+    with pytest.raises(
+        NoBuildingDataError, match=f"Building data is not available for {bldg_ids[0].get_release_name()}"
+    ):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
+
+    # Test 2023 release - should raise NoBuildingDataError
+    bldg_ids = [BuildingID(bldg_id=7, release_year="2023", res_com="comstock", weather="amy2018", upgrade_id="1")]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+
+    with pytest.raises(
+        NoBuildingDataError, match=f"Building data is not available for {bldg_ids[0].get_release_name()}"
+    ):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
+
+    # Test 2024 comstock release - should raise NoBuildingDataError
+    bldg_ids = [BuildingID(bldg_id=7, release_year="2024", res_com="comstock", weather="amy2018", upgrade_id="1")]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+
+    with pytest.raises(
+        NoBuildingDataError, match=f"Building data is not available for {bldg_ids[0].get_release_name()}"
+    ):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
+
+    # Test 2024 resstock release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=7, release_year="2024", res_com="resstock", weather="tmy3", upgrade_id="1", release_number="2"
+        )
+    ]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    assert Path(f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/bldg0000007-up01.xml").exists()
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/bldg0000007-up01_schedule.csv"
+    ).exists()
+
+
+def test_fetch_metadata(cleanup_downloads):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=7, release_year="2024", res_com="resstock", weather="tmy3", upgrade_id="1", release_number="2"
+        )
+    ]
+    file_type = ("metadata",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    assert Path(f"data/{bldg_ids[0].get_release_name()}/metadata/{bldg_ids[0].state}/metadata.parquet").exists()
+
+    # Test 2024 comstock release - should raise NoMetadataError
+    bldg_ids = [
+        BuildingID(
+            bldg_id=7, release_year="2024", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="2"
+        )
+    ]
+    file_type = ("metadata",)
+    output_dir = Path("data")
+
+    with pytest.raises(NoMetadataError, match=f"Metadata is not available for {bldg_ids[0].get_release_name()}"):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
+
+    # Test 2025 comstock release - should raise NoMetadataError
+    bldg_ids = [
+        BuildingID(
+            bldg_id=7, release_year="2025", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="1"
+        )
+    ]
+    file_type = ("metadata",)
+    output_dir = Path("data")
+
+    with pytest.raises(NoMetadataError, match=f"Metadata is not available for {bldg_ids[0].get_release_name()}"):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
