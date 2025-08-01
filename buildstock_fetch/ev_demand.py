@@ -1,10 +1,14 @@
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Final, Optional
 
 import numpy as np
 import polars as pl
+
+from buildstock_fetch.utils import ev_utils
+
+BASEPATH: Final[Path] = Path(__file__).resolve().parents[1]
 
 
 class MetadataPathError(Exception):
@@ -35,6 +39,25 @@ class WeatherDataError(Exception):
     """Raised when weather data is not loaded."""
 
     pass
+
+
+@dataclass
+class EVDemandConfig:
+    state: str
+    release: str
+    metadata_path: Optional[str] = None
+    pums_path: Optional[str] = None
+    nhts_path: str = f"{BASEPATH}/utils/ev_data/inputs/NHTS_v2_1_trip_surveys.csv"
+    weather_path: Optional[str] = None
+    output_dir: Optional[Path] = None
+
+    def __post_init__(self) -> None:
+        if self.metadata_path is None:
+            self.metadata_path = f"{Path(__file__).parent}/data/{self.release}/metadata/{self.state}/metadata.parquet"
+        if self.pums_path is None:
+            self.pums_path = f"{BASEPATH}/utils/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
+        if self.weather_path is None:
+            self.weather_path = f"{BASEPATH}//data/{self.release}/weather.csv"
 
 
 @dataclass
@@ -79,18 +102,24 @@ class EVDemandCalculator:
     7. Assign battery capacities
     """
 
-    def __init__(self, metadata_path: Optional[str] = None):
+    def __init__(
+        self,
+        metadata_df: pl.DataFrame,
+        nhts_df: Optional[pl.DataFrame] = None,
+        weather_df: Optional[pl.DataFrame] = None,
+    ):
         """
         Initialize the EV demand calculator.
 
         Args:
-            metadata_path: Path to the ResStock metadata parquet file
+            metadata_df: ResStock metadata DataFrame
+            nhts_df: NHTS trip data DataFrame (optional)
+            weather_df: Weather data DataFrame (optional)
         """
-        self.metadata_path = metadata_path
-        self.metadata_df: Optional[pl.DataFrame] = None
+        self.metadata_df = metadata_df
+        self.nhts_df = nhts_df
+        self.weather_df = weather_df
         self.vehicle_ownership_model: Optional[object] = None
-        self.nhts_df: Optional[pl.DataFrame] = None
-        self.weather_df: Optional[pl.DataFrame] = None
 
         # Available battery capacities in kWh
         self.battery_capacities = [12, 40, 60, 90, 120]
@@ -105,23 +134,6 @@ class EVDemandCalculator:
             5.2918e-8,  # a_4 (quartic term)
             -2.0659e-10,  # a_5 (quintic term)
         ])
-
-    def load_metadata(self, metadata_path: Optional[str] = None) -> pl.DataFrame:
-        """
-        Load and parse the ResStock metadata parquet file.
-
-        Args:
-            metadata_path: Path to the metadata parquet file. If None, uses self.metadata_path
-
-        Returns:
-            DataFrame with columns including 'building_id', 'occupants', 'inc', 'metro_area' (PUMA), etc.
-        """
-        path = metadata_path or self.metadata_path
-        if path is None:
-            raise MetadataPathError()
-
-        self.metadata_df = pl.read_parquet(path)
-        return self.metadata_df
 
     def fit_vehicle_ownership_model(self, pums_df: pl.DataFrame) -> object:
         """
@@ -160,36 +172,6 @@ class EVDemandCalculator:
         df = df.with_columns(pl.lit(1).alias("num_vehicles"))  # Placeholder: assume 1 vehicle per household
         return df
 
-    def load_nhts_data(self, nhts_path: str) -> pl.DataFrame:
-        """
-        Load and preprocess the NHTS trip data.
-
-        Args:
-            nhts_path: Path to the NHTS trip data file
-
-        Returns:
-            DataFrame with trip records, including trip weights, household features, and trip parameters
-        """
-        # TODO: Implement NHTS data loading and preprocessing
-        # This is a placeholder - replace with actual NHTS loading logic
-        self.nhts_df = pl.DataFrame()  # Placeholder
-        return self.nhts_df
-
-    def load_weather_data(self, weather_path: str) -> pl.DataFrame:
-        """
-        Load hourly weather data (e.g., temperature) for a given location.
-
-        Args:
-            weather_path: Path to the weather data file (e.g., TMY3 CSV or EPW)
-
-        Returns:
-            DataFrame with at least columns ['datetime', 'temperature']
-        """
-        # TODO: Implement weather data loading
-        # This is a placeholder - replace with actual weather loading logic
-        self.weather_df = pl.DataFrame()  # Placeholder
-        return self.weather_df
-
     def sample_vehicle_profiles(
         self, metadata_df: Optional[pl.DataFrame] = None
     ) -> dict[tuple[int, int], VehicleProfile]:
@@ -202,7 +184,7 @@ class EVDemandCalculator:
         Returns:
             Dict mapping (building_id, vehicle_id) to sampled trip profile parameters
         """
-        df = metadata_df or self.metadata_df
+        df = self.metadata_df
         if df is None:
             raise MetadataDataFrameError()
 
@@ -356,142 +338,85 @@ class EVDemandCalculator:
 
         return pl.Series(assigned_capacities)
 
-    def run_complete_workflow(
-        self, pums_path: str, nhts_path: str, weather_path: str, output_dir: Optional[Path] = None
-    ) -> dict[str, Union[pl.DataFrame, pl.Series]]:
-        """
-        Run the complete EV demand workflow.
+    # def run_complete_workflow(
+    #     self, pums_path: str, nhts_path: str, weather_path: str, output_dir: Optional[Path] = None
+    # ) -> dict[str, Union[pl.DataFrame, pl.Series]]:
+    #     """
+    #     Run the complete EV demand workflow.
 
-        Args:
-            pums_path: Path to PUMS data file
-            nhts_path: Path to NHTS data file
-            weather_path: Path to weather data file
-            output_dir: Directory to save output files
+    #     Args:
+    #         pums_path: Path to PUMS data file
+    #         nhts_path: Path to NHTS data file
+    #         weather_path: Path to weather data file
+    #         output_dir: Directory to save output files
 
-        Returns:
-            Dictionary containing all output DataFrames and Series
-        """
-        # Step 1: Load metadata
-        metadata_df = self.load_metadata()
+    #     Returns:
+    #         Dictionary containing all output DataFrames and Series
+    #     """
+    #     # Step 1: Load metadata
+    #     metadata_df = self.load_metadata()
 
-        # Step 2: Load PUMS data and fit vehicle ownership model
-        pums_df = pl.read_csv(pums_path)  # TODO: Adjust based on actual PUMS format
-        self.fit_vehicle_ownership_model(pums_df)
+    #     # Step 2: Load PUMS data and fit vehicle ownership model
+    #     pums_df = pl.read_csv(pums_path)  # TODO: Adjust based on actual PUMS format
+    #     self.fit_vehicle_ownership_model(pums_df)
 
-        # Step 3: Predict number of vehicles
-        metadata_with_vehicles = self.predict_num_vehicles(metadata_df)
+    #     # Step 3: Predict number of vehicles
+    #     metadata_with_vehicles = self.predict_num_vehicles(metadata_df)
 
-        # Step 4: Load NHTS data
-        self.load_nhts_data(nhts_path)
+    #     # Step 4: Load NHTS data
+    #     self.load_nhts_data(nhts_path)
 
-        # Step 5: Load weather data
-        self.load_weather_data(weather_path)
+    #     # Step 5: Load weather data
+    #     self.load_weather_data(weather_path)
 
-        # Step 6: Sample vehicle profiles
-        vehicle_profiles = self.sample_vehicle_profiles(metadata_with_vehicles)
+    #     # Step 6: Sample vehicle profiles
+    #     vehicle_profiles = self.sample_vehicle_profiles(metadata_with_vehicles)
 
-        # Step 7: Generate annual trip schedules
-        trip_schedules = self.generate_annual_trip_schedule(vehicle_profiles)
+    #     # Step 7: Generate annual trip schedules
+    #     trip_schedules = self.generate_annual_trip_schedule(vehicle_profiles)
 
-        # Step 8: Assign battery capacities
-        max_daily_kwh = trip_schedules.group_by(["building_id", "vehicle_id"]).agg(pl.col("kwh_consumed").max())
-        battery_capacities = self.assign_battery_capacity(max_daily_kwh.get_column("kwh_consumed"))
+    #     # Step 8: Assign battery capacities
+    #     max_daily_kwh = trip_schedules.group_by(["building_id", "vehicle_id"]).agg(pl.col("kwh_consumed").max())
+    #     battery_capacities = self.assign_battery_capacity(max_daily_kwh.get_column("kwh_consumed"))
 
-        # Save outputs if output_dir is provided
-        if output_dir:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(exist_ok=True)
+    #     # Save outputs if output_dir is provided
+    #     if output_dir:
+    #         output_dir = Path(output_dir)
+    #         output_dir.mkdir(exist_ok=True)
 
-            metadata_with_vehicles.write_csv(output_dir / "metadata_with_vehicles.csv")
-            trip_schedules.write_csv(output_dir / "trip_schedules.csv")
-            battery_capacities.to_frame().write_csv(output_dir / "battery_capacities.csv")
+    #         metadata_with_vehicles.write_csv(output_dir / "metadata_with_vehicles.csv")
+    #         trip_schedules.write_csv(output_dir / "trip_schedules.csv")
+    #         battery_capacities.to_frame().write_csv(output_dir / "battery_capacities.csv")
 
-        return {
-            "metadata_with_vehicles": metadata_with_vehicles,
-            "trip_schedules": trip_schedules,
-            "battery_capacities": battery_capacities,
-        }
+    #     return {
+    #         "metadata_with_vehicles": metadata_with_vehicles,
+    #         "trip_schedules": trip_schedules,
+    #         "battery_capacities": battery_capacities,
+    #     }
 
 
 # Example usage
 if __name__ == "__main__":
-    from pathlib import Path
+    # Step 1: Create configuration
+    config = EVDemandConfig(state="NY", release="resstock_tmy3_release_1")
 
-    print("=== EV Demand Calculator Example ===")
+    # Step 2: Load all data
+    metadata_df, nhts_df, pums_df, weather_df = ev_utils.load_all_input_data(config)
+    print(f"✓ Loaded metadata: {len(metadata_df)} rows")
+    print(f"✓ Loaded NHTS data: {len(nhts_df)} rows")
+    print(f"✓ Loaded weather data: {len(weather_df)} rows")
 
-    # Step 1: Download metadata using the main module
-    print("1. Downloading ResStock metadata...")
-    # Note: In a real implementation, you would use:
-    # from main import BuildingID, fetch_bldg_data
-    # bldg_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=9)]
-    # downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, ("metadata",), output_dir)
+    # # Step 3: Initialize calculator with data
+    # calculator = EVDemandCalculator(
+    #     metadata_df=metadata_df,
+    #     nhts_df=nhts_df,
+    #     weather_df=weather_df
+    # )
 
-    output_dir = Path(__file__).parent / "data"
-    metadata_file = "path/to/metadata.parquet"  # Placeholder for example
+    # print(f"✓ Initialized calculator")
+    # print(f"  - Battery capacities: {calculator.battery_capacities}")
+    # print(
+    #     f"  - Efficiency coefficients: {len(calculator.efficiency_coefficients)} terms")
 
-    # Step 2: Initialize the EV demand calculator
-    print("2. Initializing EV demand calculator...")
-    calculator = EVDemandCalculator(str(metadata_file))
-
-    # Step 3: Test the miles_to_kwh function
-    print("3. Testing energy consumption calculation...")
-    print("Based on Yuksel & Michalek (2015) Nissan Leaf regression\n")
-
-    # Single temperature and mileage
-    temp_f = 70  # 70°F
-    daily_miles = 40  # 40 miles per day
-    consumption = calculator.miles_to_kwh(temp_f, daily_miles)
-    print(f"Temperature: {temp_f}°F")
-    print(f"Daily miles: {daily_miles}")
-    print(f"Daily consumption: {consumption:.2f} kWh")
-    print(f"Consumption per mile: {consumption / daily_miles:.3f} kWh/mile\n")
-
-    # Compare different temperatures
-    temperatures = [20, 40, 60, 70, 80, 100]  # Various temperatures
-    miles = 50  # Fixed daily mileage
-
-    print("Temperature comparison (50 miles/day):")
-    print("Temp (°F) | Consumption (kWh) | Per Mile (kWh/mi)")
-    print("-" * 50)
-
-    for temp in temperatures:
-        consumption = calculator.miles_to_kwh(temp, miles)
-        per_mile = consumption / miles
-        print(f"{temp:8} | {consumption:13.2f} | {per_mile:11.3f}")
-
-    # Step 4: Demonstrate complete workflow (with placeholder data paths)
-    print("\n4. Complete workflow demonstration...")
-    print("Note: This requires actual data files to run fully")
-
-    try:
-        # Example of how to run the complete workflow
-        results = calculator.run_complete_workflow(
-            pums_path="path/to/pums_data.csv",
-            nhts_path="path/to/nhts_data.csv",
-            weather_path="path/to/weather_data.csv",
-            output_dir=output_dir / "ev_results",
-        )
-
-        print("Workflow completed successfully!")
-        print(f"Generated {len(results['metadata_with_vehicles'])} household records")
-        print(f"Generated {len(results['trip_schedules'])} trip schedule records")
-        print(f"Assigned battery capacities to {len(results['battery_capacities'])} vehicles")
-
-    except Exception as e:
-        print(f"Workflow demonstration failed (expected with placeholder paths): {e}")
-        print("To run the complete workflow, provide actual paths to:")
-        print("- PUMS data file")
-        print("- NHTS data file")
-        print("- Weather data file")
-
-    print("\n" + "=" * 60)
-    print("Workflow Summary:")
-    print("1. Download ResStock metadata using main.py")
-    print("2. Load PUMS data and fit vehicle ownership model")
-    print("3. Predict number of vehicles per household")
-    print("4. Load NHTS trip data and sample driving profiles")
-    print("5. Load weather data for temperature calculations")
-    print("6. Generate annual trip schedules")
-    print("7. Convert miles to kWh using temperature-dependent efficiency")
-    print("8. Assign appropriate battery capacities")
-    print("=" * 60)
+    # # Step 4: Run calculations (placeholder for now)
+    # print("Ready to run EV demand calculations!")
