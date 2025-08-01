@@ -180,6 +180,34 @@ def _get_file_type_options(release_name: str) -> list[str]:
     return cast(list[str], available_releases[release_name]["available_data"])
 
 
+def _get_file_type_options_grouped(release_name: str) -> list[dict]:
+    """Get file type options grouped by category for questionary checkbox."""
+    file_types = _get_file_type_options(release_name)
+
+    # Define categories
+    categories = {
+        "Simulation Files": ["HPXML", "schedule"],
+        "End Use Load Curves": [
+            "15min_load_curve",
+            "hourly_load_curve",
+            "daily_load_curve",
+            "monthly_load_curve",
+            "annual_load_curve",
+        ],
+        "Metadata": ["metadata"],
+    }
+
+    choices = []
+    for category, types in categories.items():
+        available_in_category = [ft for ft in file_types if ft in types]
+        if available_in_category:
+            choices.append({"name": f"--- {category} ---", "value": None, "disabled": True})
+            for file_type in available_in_category:
+                choices.append({"name": f"  {file_type}", "value": file_type, "style": "bold"})
+
+    return choices
+
+
 def _get_available_releases_names() -> list[str]:
     # Read the buildstock releases JSON file
     with open(BUILDSTOCK_RELEASES_FILE) as f:
@@ -310,7 +338,7 @@ def _run_interactive_mode() -> dict[str, str]:
     requested_file_types = _handle_cancellation(
         questionary.checkbox(
             "Select file type:",
-            choices=_get_file_type_options(selected_release_name),
+            choices=_get_file_type_options_grouped(selected_release_name),
             instruction="Use spacebar to select/deselect options, enter to confirm",
             validate=lambda answer: "You must select at least one file type" if len(answer) == 0 else True,
         ).ask()
