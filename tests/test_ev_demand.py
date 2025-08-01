@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import numpy as np
 import polars as pl
 import pytest
@@ -51,6 +53,9 @@ def calculator(sample_metadata, mock_nhts_data):
         metadata_df=sample_metadata,
         nhts_df=mock_nhts_data,
         pums_df=pl.DataFrame(),  # Will be overridden in tests
+        start_date=datetime(2020, 1, 1),  # One week starting from Monday
+        end_date=datetime(2020, 1, 7),  # to Sunday
+        max_vehicles=2,
         random_state=42,
     )
 
