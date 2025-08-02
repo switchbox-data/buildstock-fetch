@@ -15,6 +15,7 @@ from rich.progress import (
     DownloadColumn,
     Progress,
     SpinnerColumn,
+    TaskID,
     TaskProgressColumn,
     TextColumn,
     TimeRemainingColumn,
@@ -283,7 +284,7 @@ def fetch_bldg_ids(
     return building_ids
 
 
-def _download_with_progress(url: str, output_file: Path, progress: Progress, task_id: int) -> int:
+def _download_with_progress(url: str, output_file: Path, progress: Progress, task_id: TaskID) -> int:
     """Download a file with progress tracking."""
     # Get file size first
     response = requests.head(url, timeout=30)
@@ -313,7 +314,7 @@ def download_bldg_data(
     file_type: RequestedFileTypes,
     output_dir: Path,
     progress: Optional[Progress] = None,
-    task_id: Optional[int] = None,
+    task_id: Optional[TaskID] = None,
 ) -> dict[str, Union[Path, None]]:
     """Download and extract building data for a single building. Only HPXML and schedule files are supported.
 
