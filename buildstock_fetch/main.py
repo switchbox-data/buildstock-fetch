@@ -9,6 +9,17 @@ from typing import Optional, Union
 
 import polars as pl
 import requests
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 
 
 class InvalidProductError(ValueError):
@@ -272,8 +283,37 @@ def fetch_bldg_ids(
     return building_ids
 
 
+def _download_with_progress(url: str, output_file: Path, progress: Progress, task_id: int) -> int:
+    """Download a file with progress tracking."""
+    # Get file size first
+    response = requests.head(url, timeout=30)
+    response.raise_for_status()
+    total_size = int(response.headers.get("content-length", 0))
+    progress.update(task_id, total=total_size)
+
+    # Download with streaming
+    response = requests.get(url, stream=True, timeout=30)
+    response.raise_for_status()
+
+    downloaded_size = 0
+
+    with open(output_file, "wb") as file:
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:
+                file.write(chunk)
+                downloaded_size += len(chunk)
+                if total_size > 0:
+                    progress.update(task_id, completed=downloaded_size)
+
+    return downloaded_size
+
+
 def download_bldg_data(
-    bldg_id: BuildingID, file_type: RequestedFileTypes, output_dir: Path
+    bldg_id: BuildingID,
+    file_type: RequestedFileTypes,
+    output_dir: Path,
+    progress: Optional[Progress] = None,
+    task_id: Optional[int] = None,
 ) -> dict[str, Union[Path, None]]:
     """Download and extract building data for a single building. Only HPXML and schedule files are supported.
 
@@ -281,6 +321,8 @@ def download_bldg_data(
         bldg_id: A BuildingID object to download data for.
         file_type: RequestedFileTypes object to specify which files to download.
         output_dir: Directory to save the downloaded files.
+        progress: Optional Rich progress object for tracking download progress.
+        task_id: Optional task ID for progress tracking.
 
     Returns:
         A list of paths to the downloaded files.
@@ -303,12 +345,17 @@ def download_bldg_data(
         if download_url == "":
             message = f"Building data is not available for {bldg_id.get_release_name()}"
             raise NoBuildingDataError(message)
-        response = requests.get(download_url, timeout=30)
-        response.raise_for_status()
 
         output_file = temp_dir / f"{str(bldg_id.bldg_id).zfill(7)}_upgrade{bldg_id.upgrade_id}.zip"
-        with open(output_file, "wb") as file:
-            file.write(response.content)
+
+        # Download with progress tracking if progress object is provided
+        if progress and task_id is not None:
+            _download_with_progress(download_url, output_file, progress, task_id)
+        else:
+            response = requests.get(download_url, timeout=30)
+            response.raise_for_status()
+            with open(output_file, "wb") as file:
+                file.write(response.content)
 
         # Extract specific files based on file_type
         with zipfile.ZipFile(output_file, "r") as zip_ref:
@@ -371,6 +418,59 @@ def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes
     return file_type_obj
 
 
+def _process_download_results(
+    future: concurrent.futures.Future,
+    bldg_id: BuildingID,
+    file_type_obj: RequestedFileTypes,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+) -> None:
+    """Process the results of a completed download."""
+    try:
+        paths_dict = future.result()
+        # Convert dict values to list, filtering out None values
+        paths = [path for path in paths_dict.values() if path is not None]
+        downloaded_paths.extend(paths)
+
+        if file_type_obj.hpxml and paths_dict["hpxml"] is None:
+            failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml")
+        if file_type_obj.schedule and paths_dict["schedule"] is None:
+            failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv")
+
+    except NoBuildingDataError:
+        raise
+    except Exception as e:
+        console.print(f"[red]Download failed for bldg_id {bldg_id}: {e}[/red]")
+
+
+def _download_metadata_with_progress(bldg: BuildingID, output_dir: Path, progress: Progress) -> Path:
+    """Download metadata file with progress tracking."""
+    download_url = bldg.get_metadata_url()
+    if download_url == "":
+        message = f"Metadata is not available for {bldg.get_release_name()}"
+        raise NoMetadataError(message)
+
+    # Create metadata task with progress tracking
+    metadata_task = progress.add_task(
+        "[yellow]Downloading metadata",
+        total=0,  # Will be updated when we get the file size
+    )
+
+    # Get file size first
+    response = requests.head(download_url, timeout=30)
+    response.raise_for_status()
+    total_size = int(response.headers.get("content-length", 0))
+    progress.update(metadata_task, total=total_size)
+
+    # Download with progress
+    output_file = output_dir / bldg.get_release_name() / "metadata" / bldg.state / "metadata.parquet"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    _download_with_progress(download_url, output_file, progress, metadata_task)
+
+    return output_file
+
+
 def fetch_bldg_data(
     bldg_ids: list[BuildingID], file_type: tuple[str, ...], output_dir: Path, max_workers: int = 5
 ) -> tuple[list[Path], list[str]]:
@@ -385,50 +485,68 @@ def fetch_bldg_data(
         A list of paths to the downloaded files.
     """
     file_type_obj = _parse_requested_file_type(file_type)
+    console = Console()
 
-    downloaded_paths = []
-    failed_downloads = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks and keep track of future -> bldg_id mapping
-        future_to_bldg = {
-            executor.submit(download_bldg_data, bldg_id, file_type_obj, output_dir): bldg_id for bldg_id in bldg_ids
-        }
+    downloaded_paths: list[Path] = []
+    failed_downloads: list[str] = []
 
-        # Process completed futures
-        for future in concurrent.futures.as_completed(future_to_bldg):
-            bldg_id = future_to_bldg[future]  # Get the correct bldg_id for this future
-            try:
-                paths_dict = future.result()
-                # Convert dict values to list, filtering out None values
-                paths = [path for path in paths_dict.values() if path is not None]
-                downloaded_paths.extend(paths)
-
-                if file_type_obj.hpxml and paths_dict["hpxml"] is None:
-                    failed_downloads.append(f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml")
-                if file_type_obj.schedule and paths_dict["schedule"] is None:
-                    failed_downloads.append(
-                        f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
-                    )
-            except NoBuildingDataError:
-                raise
-            except Exception as e:
-                print(f"Download failed for bldg_id {bldg_id}: {e}")
-
-    # Get metadata if requested. Only one building is needed to get the metadata.
+    # Calculate total files to download
+    total_files = len(bldg_ids)
     if file_type_obj.metadata:
-        bldg = bldg_ids[0]
-        download_url = bldg.get_metadata_url()
-        if download_url == "":
-            message = f"Metadata is not available for {bldg.get_release_name()}"
-            raise NoMetadataError(message)
-        response = requests.get(download_url, timeout=30)
-        response.raise_for_status()
+        total_files += 1  # Add metadata file
 
-        output_file = output_dir / bldg.get_release_name() / "metadata" / bldg.state / "metadata.parquet"
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_file, "wb") as file:
-            file.write(response.content)
-        downloaded_paths.append(output_file)
+    console.print(f"\n[bold blue]Starting download of {total_files} files...[/bold blue]")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TextColumn("•"),
+        DownloadColumn(),
+        TextColumn("•"),
+        TransferSpeedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        # Create individual download tasks for each building
+        download_tasks = {}
+        for i, bldg_id in enumerate(bldg_ids):
+            task_id = progress.add_task(
+                f"[cyan]Building {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
+                total=0,  # Will be updated when we get the file size
+            )
+            download_tasks[i] = task_id
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks and keep track of future -> bldg_id mapping
+            future_to_bldg = {
+                executor.submit(
+                    download_bldg_data, bldg_id, file_type_obj, output_dir, progress, download_tasks[i]
+                ): bldg_id
+                for i, bldg_id in enumerate(bldg_ids)
+            }
+
+            # Process completed futures
+            for future in concurrent.futures.as_completed(future_to_bldg):
+                bldg_id = future_to_bldg[future]  # Get the correct bldg_id for this future
+                _process_download_results(future, bldg_id, file_type_obj, downloaded_paths, failed_downloads, console)
+
+        # Get metadata if requested. Only one building is needed to get the metadata.
+        if file_type_obj.metadata:
+            bldg = bldg_ids[0]
+            metadata_file = _download_metadata_with_progress(bldg, output_dir, progress)
+            downloaded_paths.append(metadata_file)
+
+    # Print summary
+    console.print("\n[bold green]Download complete![/bold green]")
+    console.print(f"[green]Successfully downloaded: {len(downloaded_paths)} files[/green]")
+    if failed_downloads:
+        console.print(f"[red]Failed downloads: {len(failed_downloads)} files[/red]")
+        for failed in failed_downloads:
+            console.print(f"  [red]• {failed}[/red]")
 
     return downloaded_paths, failed_downloads
 
