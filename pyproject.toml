@@ -19,6 +19,10 @@ classifiers = [
 ]
 dependencies = [
     "requests>=2.32.3",
+    "typer>=0.9.0",
+    "rich>=13.9.5",
+    "questionary>=1.11.0",
+    "pandas>=2.0.0",
     "boto3>=1.33.0",
     "botocore>=1.33.0",
     "pyarrow>=14.0.1",
@@ -30,6 +34,9 @@ dependencies = [
 Homepage = "https://switchbox-data.github.io/buildstock-fetch/"
 Repository = "https://github.com/switchbox-data/buildstock-fetch"
 Documentation = "https://switchbox-data.github.io/buildstock-fetch/"
+
+[project.scripts]
+bsf = "buildstock_fetch.main_cli:app"
 
 [dependency-groups]
 dev = [
@@ -45,7 +52,6 @@ dev = [
     "types-requests>=2.31.0",
     "types-boto3>=1.33.0",
     "pandas-stubs>=2.2.0",
-    "types-boto3>=1.33.0",
 ]
 
 [build-system]

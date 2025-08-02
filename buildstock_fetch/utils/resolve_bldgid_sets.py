@@ -99,7 +99,7 @@ def _process_zip_file(
                 unique_files.add(file_name)
                 # Check for XML files
                 if file_name.lower().endswith(".xml"):
-                    available_data.add("HPXML")
+                    available_data.add("hpxml")
                 # Check for schedule CSV files
                 if file_name.lower().endswith(".csv") and "schedule" in file_name.lower():
                     available_data.add("schedule")
@@ -181,11 +181,11 @@ def _process_directory_match(
         available_data = _find_and_process_model_file(s3_client, bucket_name, current_prefix)
         found_dirs.update(available_data - {"building_energy_model"})
     elif expected == "timeseries_individual_buildings":
-        found_dirs.add("15min_load_curve")
-        found_dirs.add("hourly_load_curve")
-        found_dirs.add("daily_load_curve")
-        found_dirs.add("monthly_load_curve")
-        found_dirs.add("annual_load_curve")
+        found_dirs.add("load_curve_15min")
+        found_dirs.add("load_curve_hourly")
+        found_dirs.add("load_curve_daily")
+        found_dirs.add("load_curve_monthly")
+        found_dirs.add("load_curve_annual")
 
 
 def _check_directory_matches(

@@ -46,9 +46,9 @@ def test_fetch_bldg_ids():
 
 
 def test_building_id_config():
-    res_2024_amy = {"release_number": "1", "release_year": "2022", "res_com": "resstock", "weather": "tmy3"}
+    res_2022_tmy3_1 = {"release_number": "1", "release_year": "2022", "res_com": "resstock", "weather": "tmy3"}
 
-    bldg = BuildingID(bldg_id=7, **res_2024_amy)
+    bldg = BuildingID(bldg_id=7, **res_2022_tmy3_1)
     assert bldg.bldg_id == 7
     assert bldg.upgrade_id == "0"
     assert bldg.release_number == "1"
@@ -62,47 +62,45 @@ def test_parse_requested_file_type():
     assert _parse_requested_file_type(("hpxml", "schedule", "metadata")) == RequestedFileTypes(
         hpxml=True, schedule=True, metadata=True
     )
-    assert _parse_requested_file_type(("hpxml", "schedule", "metadata", "time_series_15min")) == RequestedFileTypes(
-        hpxml=True, schedule=True, metadata=True, time_series_15min=True
+    assert _parse_requested_file_type(("hpxml", "schedule", "metadata", "load_curve_15min")) == RequestedFileTypes(
+        hpxml=True, schedule=True, metadata=True, load_curve_15min=True
     )
     assert _parse_requested_file_type((
         "hpxml",
         "schedule",
         "metadata",
-        "time_series_15min",
-        "time_series_hourly",
-    )) == RequestedFileTypes(hpxml=True, schedule=True, metadata=True, time_series_15min=True, time_series_hourly=True)
+        "load_curve_15min",
+        "load_curve_hourly",
+    )) == RequestedFileTypes(hpxml=True, schedule=True, metadata=True, load_curve_15min=True, load_curve_hourly=True)
     assert _parse_requested_file_type((
         "hpxml",
         "schedule",
         "metadata",
-        "time_series_15min",
-        "time_series_hourly",
-        "time_series_daily",
+        "load_curve_15min",
+        "load_curve_hourly",
+        "load_curve_daily",
     )) == RequestedFileTypes(
         hpxml=True,
         schedule=True,
         metadata=True,
-        time_series_15min=True,
-        time_series_hourly=True,
-        time_series_daily=True,
+        load_curve_15min=True,
+        load_curve_hourly=True,
+        load_curve_daily=True,
     )
     assert _parse_requested_file_type((
         "hpxml",
         "schedule",
         "metadata",
-        "time_series_15min",
-        "time_series_hourly",
-        "time_series_daily",
-        "time_series_weekly",
+        "load_curve_15min",
+        "load_curve_hourly",
+        "load_curve_daily",
     )) == RequestedFileTypes(
         hpxml=True,
         schedule=True,
         metadata=True,
-        time_series_15min=True,
-        time_series_hourly=True,
-        time_series_daily=True,
-        time_series_weekly=True,
+        load_curve_15min=True,
+        load_curve_hourly=True,
+        load_curve_daily=True,
     )
 
 
