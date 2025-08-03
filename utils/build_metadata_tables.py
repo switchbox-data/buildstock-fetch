@@ -3,10 +3,12 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Union
 
 import boto3
-import polars as pl
+import pandas as pd
 import pyarrow.fs as fs
+import pyarrow.parquet as pq
 from botocore import UNSIGNED
 from botocore.config import Config
 
@@ -64,15 +66,15 @@ def select_priority_columns(available_columns: list) -> list:
     return selected_columns
 
 
-def rename_columns(df: pl.DataFrame) -> pl.DataFrame:
+def rename_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Rename columns to standardized names based on their category.
 
     Args:
-        df (pl.DataFrame): DataFrame with columns to rename
+        df (pd.DataFrame): DataFrame with columns to rename
 
     Returns:
-        pl.DataFrame: DataFrame with renamed columns
+        pd.DataFrame: DataFrame with renamed columns
     """
     column_mapping = {}
     for col in df.columns:
@@ -86,12 +88,12 @@ def rename_columns(df: pl.DataFrame) -> pl.DataFrame:
             column_mapping[col] = "bldg_id"
     logger.info(f"Column mapping: {column_mapping}")
 
-    return df.rename(column_mapping)
+    return df.rename(columns=column_mapping)
 
 
-def _read_parquet_with_columns(file_key: str, s3: fs.S3FileSystem, bucket_name: str) -> tuple[pl.DataFrame, list]:
+def _read_parquet_with_columns(file_key: str, s3: fs.S3FileSystem, bucket_name: str) -> tuple[pd.DataFrame, list]:
     """
-    Read parquet file and return Polars DataFrame with selected columns.
+    Read parquet file and return DataFrame with selected columns.
 
     Args:
         file_key (str): The S3 key of the parquet file
@@ -99,75 +101,69 @@ def _read_parquet_with_columns(file_key: str, s3: fs.S3FileSystem, bucket_name: 
         bucket_name (str): Name of the S3 bucket
 
     Returns:
-        tuple: (Polars DataFrame, list of available columns)
+        tuple: (DataFrame, list of available columns)
     """
-    # Use PyArrow's S3FileSystem to read the file
-    s3_file_path = f"{bucket_name}/{file_key}"
+    # Check available columns
+    parquet_file = pq.ParquetFile(f"{bucket_name}/{file_key}", filesystem=s3)
+    available_columns = parquet_file.schema_arrow.names
 
-    # Read the file using PyArrow's S3FileSystem, then convert to Polars
-    with s3.open_input_file(s3_file_path) as f:
-        # Get available columns by reading the file
-        lazy_df = pl.scan_parquet(f)
-        available_columns = lazy_df.collect_schema().names()
+    # Select columns with priority (first available in each category)
+    selected_columns = select_priority_columns(available_columns)
 
-        # Select columns with priority
-        selected_columns = select_priority_columns(available_columns)
+    # Read with selected columns (will read all if selected_columns is empty)
+    table = pq.read_table(f"{bucket_name}/{file_key}", columns=selected_columns or None, filesystem=s3)
 
-        # Reset file pointer and read with selected columns
-        f.seek(0)
-        df = pl.read_parquet(f, columns=selected_columns) if selected_columns else pl.read_parquet(f)
+    # Convert to pandas, preserving index if bldg_id is the index
+    df = table.to_pandas(use_threads=False)
 
     return df, available_columns
 
 
-def _handle_bldg_id_column(df: pl.DataFrame, file_key: str, s3: fs.S3FileSystem, bucket_name: str) -> pl.DataFrame:
+def _handle_bldg_id_column(df: pd.DataFrame, file_key: str, s3: fs.S3FileSystem, bucket_name: str) -> pd.DataFrame:
     """
     Handle bldg_id column extraction and validation.
 
     Args:
-        df (pl.DataFrame): DataFrame to process
+        df (pd.DataFrame): DataFrame to process
         file_key (str): The S3 key of the parquet file
         s3 (fs.S3FileSystem): S3 filesystem instance
         bucket_name (str): Name of the S3 bucket
 
     Returns:
-        pl.DataFrame: DataFrame with bldg_id properly handled
+        pd.DataFrame: DataFrame with bldg_id properly handled
     """
-    # Check if bldg_id is missing from columns
+    # Check if bldg_id is missing from columns but present as index
+    if "bldg_id" not in df.columns and df.index.name == "bldg_id":
+        # Add bldg_id from index to columns
+        df["bldg_id"] = df.index
+        df = df.reset_index(drop=True)
+        logger.info("Added bldg_id from index to columns")
+
+    # If bldg_id is still missing, try reading the parquet file with index
     if "bldg_id" not in df.columns:
-        # Construct S3 path
-        s3_path = f"s3://{bucket_name}/{file_key}"
+        # Read the parquet file directly to check for index
+        parquet_file = pq.ParquetFile(f"{bucket_name}/{file_key}", filesystem=s3)
+        df_with_index = parquet_file.read().to_pandas()
 
-        # Extract storage options from s3fs filesystem
-        storage_options = {
-            "aws_access_key_id": getattr(s3, "key", None),
-            "aws_secret_access_key": getattr(s3, "secret", None),
-            "aws_region": getattr(s3, "client_kwargs", {}).get("region_name", "us-west-2"),
-        }
-
-        # Remove None values from storage_options
-        storage_options = {k: v for k, v in storage_options.items() if v is not None}
-
-        # Try reading the full parquet file to check all columns
-        df_full = pl.read_parquet(s3_path, storage_options=storage_options)
-
-        if "bldg_id" in df_full.columns:
-            # If bldg_id exists in the full file, use it
-            df = df_full
-            logger.info("Found bldg_id in full parquet file")
+        if df_with_index.index.name == "bldg_id":
+            # Re-read with index preserved
+            df = parquet_file.read().to_pandas()
+            df["bldg_id"] = df.index
+            df = df.reset_index(drop=True)
+            logger.info("Added bldg_id from index to columns (second attempt)")
         else:
-            logger.warning("Warning: bldg_id column not found in parquet file")
+            logger.warning("Warning: bldg_id column not found in data or index")
 
     return df
 
 
-def _validate_bldg_id(df: pl.DataFrame, release_name: str | None) -> bool:
+def _validate_bldg_id(df: pd.DataFrame, release_name: Union[str, None]) -> bool:
     """
     Validate bldg_id column and return True if valid.
 
     Args:
-        df (pl.DataFrame): DataFrame to validate
-        release_name (str | None): Name of the release for error reporting
+        df (pd.DataFrame): DataFrame to validate
+        release_name (Union[str, None]): Name of the release for error reporting
 
     Returns:
         bool: True if bldg_id is valid, False otherwise
@@ -178,60 +174,59 @@ def _validate_bldg_id(df: pl.DataFrame, release_name: str | None) -> bool:
         return False
 
     # Ensure bldg_id is integer if it exists
-    df = df.with_columns(pl.col("bldg_id").cast(pl.Int64))
+    df["bldg_id"] = df["bldg_id"].astype("Int64")
     logger.info("Converted bldg_id to integer type")
 
     # Verify that bldg_id contains proper integer values
-    nan_count = df.filter(pl.col("bldg_id").is_null()).height
-    total_rows = df.height
+    nan_count = df["bldg_id"].isna().sum()
+    total_rows = len(df)
 
     if nan_count == total_rows:
-        logger.exception(f"ERROR: bldg_id column contains only null values after conversion in {release_name}")
+        logger.exception(f"ERROR: bldg_id column contains only NaN values after conversion in {release_name}")
         logger.exception("This indicates the column was not properly extracted from the parquet file")
         return False
-    elif nan_count > total_rows * 0.5:  # More than 50% null
+    elif nan_count > total_rows * 0.5:  # More than 50% NaN
         logger.exception(
-            f"ERROR: bldg_id column has {nan_count} null values out of {total_rows} total rows in {release_name}"
+            f"ERROR: bldg_id column has {nan_count} NaN values out of {total_rows} total rows in {release_name}"
         )
         logger.exception("This indicates the column was not properly extracted from the parquet file")
         return False
     else:
-        # Remove rows where bldg_id is null
-        df = df.filter(pl.col("bldg_id").is_not_null())
-        logger.info(f"Removed {nan_count} rows with null bldg_id values in {release_name}")
+        # Remove rows where bldg_id is NaN
+        df.dropna(subset=["bldg_id"], inplace=True)
+        logger.info(f"Removed {nan_count} rows with NaN bldg_id values in {release_name}")
         logger.info(f"bldg_id column verified: {total_rows - nan_count} valid integer values in {release_name}")
         return True
 
 
 def _add_metadata_columns(
-    df: pl.DataFrame, res_com: str | None, weather: str | None, release_version: str | None, release_year: str | None
-) -> pl.DataFrame:
+    df: pd.DataFrame,
+    res_com: Union[str, None],
+    weather: Union[str, None],
+    release_version: Union[str, None],
+    release_year: Union[str, None],
+) -> pd.DataFrame:
     """
     Add metadata columns to DataFrame.
 
     Args:
-        df (pl.DataFrame): DataFrame to add columns to
-        res_com (str | None): The res_com value
-        weather (str | None): The weather value
-        release_version (str | None): The release number
-        release_year (str | None): The release year
+        df (pd.DataFrame): DataFrame to add columns to
+        res_com (Union[str, None]): The res_com value
+        weather (Union[str, None]): The weather value
+        release_version (Union[str, None]): The release number
+        release_year (Union[str, None]): The release year
 
     Returns:
-        pl.DataFrame: DataFrame with metadata columns added
+        pd.DataFrame: DataFrame with metadata columns added
     """
-    columns_to_add = []
-
     if res_com is not None:
-        columns_to_add.append(pl.lit(res_com).alias("product"))
+        df["product"] = res_com
     if weather is not None:
-        columns_to_add.append(pl.lit(weather).alias("weather_file"))
+        df["weather_file"] = weather
     if release_version is not None:
-        columns_to_add.append(pl.lit(release_version).alias("release_version"))
+        df["release_version"] = release_version
     if release_year is not None:
-        columns_to_add.append(pl.lit(release_year).alias("release_year"))
-
-    if columns_to_add:
-        df = df.with_columns(columns_to_add)
+        df["release_year"] = release_year
 
     return df
 
@@ -240,14 +235,14 @@ def process_parquet_file(
     file_key: str,
     s3: fs.S3FileSystem,
     bucket_name: str,
-    res_com: str | None = None,
-    weather: str | None = None,
-    release_version: str | None = None,
-    release_year: str | None = None,
-    release_name: str | None = None,
-) -> pl.DataFrame | None:
+    res_com: Union[str, None] = None,
+    weather: Union[str, None] = None,
+    release_version: Union[str, None] = None,
+    release_year: Union[str, None] = None,
+    release_name: Union[str, None] = None,
+) -> Union[pd.DataFrame, None]:
     """
-    Process a parquet file from S3 and return a polars DataFrame.
+    Process a parquet file from S3 and return a pandas DataFrame.
 
     Args:
         file_key (str): The S3 key of the parquet file
@@ -260,7 +255,7 @@ def process_parquet_file(
         release_name (str): The release name
 
     Returns:
-        pl.DataFrame: Processed DataFrame
+        pd.DataFrame: Processed DataFrame
     """
     try:
         # Read parquet file with selected columns
@@ -280,7 +275,7 @@ def process_parquet_file(
         # Add metadata columns
         df = _add_metadata_columns(df, res_com, weather, release_version, release_year)
 
-        logger.info(f"Successfully loaded {df.height} rows with {len(df.columns)} columns in {release_name}")
+        logger.info(f"Successfully loaded {len(df)} rows with {len(df.columns)} columns in {release_name}")
 
     except Exception:
         logger.exception("Error processing file")
@@ -307,7 +302,7 @@ def find_metadata_files(base_file_key: str, file_key_suffix: str, s3_client, buc
     return download_files
 
 
-def _extract_upgrade_number(filename: str) -> str | None:
+def _extract_upgrade_number(filename: str) -> Union[str, None]:
     """
     Extract upgrade number from filename like 'AK_G0200130_upgrade01.parquet'.
 
@@ -315,7 +310,7 @@ def _extract_upgrade_number(filename: str) -> str | None:
         filename (str): The filename to parse
 
     Returns:
-        str | None: The upgrade number (e.g., '01') or None if not found
+        Union[str, None]: The upgrade number (e.g., '01') or None if not found
     """
     if "upgrade" not in filename:
         return None
@@ -376,7 +371,7 @@ def find_all_parquet_files(base_file_key: str, s3_client, bucket_name: str) -> d
 
 if __name__ == "__main__":
     # Load the release data
-    with open("/workspaces/buildstock-fetch/utils/buildstock_releases.json") as file:
+    with open("/workspaces/buildstock-fetcher/utils/buildstock_releases.json") as file:
         data = json.load(file)
 
     # Directory to save the data
@@ -407,7 +402,7 @@ if __name__ == "__main__":
             df = process_parquet_file(
                 file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
             )
-            if df is not None and df.height > 0:
+            if df is not None and len(df) > 0:
                 all_dataframes.append(df)
             else:
                 logger.exception(
@@ -439,7 +434,7 @@ if __name__ == "__main__":
                 df = process_parquet_file(
                     file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
                 )
-                if df is not None and df.height > 0:
+                if df is not None and len(df) > 0:
                     all_dataframes.append(df)
                 else:
                     logger.exception(
@@ -484,7 +479,7 @@ if __name__ == "__main__":
                         df = process_parquet_file(
                             file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
                         )
-                        if df is not None and df.height > 0:
+                        if df is not None and len(df) > 0:
                             combined_dfs.append(df)
                         else:
                             logger.exception(
@@ -495,9 +490,9 @@ if __name__ == "__main__":
 
                     if combined_dfs:
                         # Concatenate all DataFrames for this release
-                        combined_df = pl.concat(combined_dfs)
+                        combined_df = pd.concat(combined_dfs, ignore_index=True)
                         logger.info(
-                            f"Combined {len(combined_dfs)} files into {combined_df.height} total rows in {release_name}"
+                            f"Combined {len(combined_dfs)} files into {len(combined_df)} total rows in {release_name}"
                         )
                         all_dataframes.append(combined_df)
                     else:
@@ -508,31 +503,19 @@ if __name__ == "__main__":
     # Combine all DataFrames and save as partitioned parquet
     if all_dataframes:
         logger.info(f"Combining {len(all_dataframes)} DataFrames...")
-
-        # Ensure consistent schema across all DataFrames
-        logger.info("Ensuring consistent schema across DataFrames...")
-        normalized_dataframes = []
-        for i, df in enumerate(all_dataframes):
-            # Convert categorical columns to string to ensure compatibility
-            df_normalized = df.with_columns([
-                pl.col(col).cast(pl.Utf8) for col in df.columns if df.schema[col] == pl.Categorical
-            ])
-            normalized_dataframes.append(df_normalized)
-            logger.info(f"Normalized DataFrame {i + 1} schema: {df_normalized.schema}")
-
-        final_df = pl.concat(normalized_dataframes)
-        logger.info(f"Final DataFrame has {final_df.height} rows and {len(final_df.columns)} columns")
+        final_df = pd.concat(all_dataframes, ignore_index=True)
+        logger.info(f"Final DataFrame has {len(final_df)} rows and {len(final_df.columns)} columns")
 
         # Sort by county
         if "county" in final_df.columns:
-            final_df = final_df.sort("county")
+            final_df = final_df.sort_values("county")
 
         # Save as partitioned parquet file
         output_file = f"{data_dir}/building_data/combined_metadata.parquet"
-        final_df.write_parquet(
+        final_df.to_parquet(
             output_file,
-            use_pyarrow=True,
             partition_cols=["product", "release_year", "weather_file", "release_version", "state"],
+            index=False,
         )
         logger.info(f"Successfully saved combined DataFrame to {output_file}")
     else:
