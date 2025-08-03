@@ -192,3 +192,227 @@ def test_interactive_mode_zero_sample(
     assert "files for this release" in result.stdout
     assert "No files will be downloaded for upgrade 0" in result.stdout
     assert "No files selected for download" in result.stdout
+
+
+def test_cli_direct_arguments(cleanup_downloads):
+    """Test CLI with direct command line arguments (non-interactive mode)."""
+    # Test with direct arguments for metadata download
+    result = runner.invoke(
+        app,
+        [
+            "--product",
+            "resstock",
+            "--release_year",
+            "2021",
+            "--weather_file",
+            "tmy3",
+            "--release_version",
+            "1",
+            "--states",
+            "CA",
+            "--file_type",
+            "metadata",
+            "--upgrade_id",
+            "0",
+            "--output_directory",
+            "test_output",
+        ],
+    )
+
+    # Debug output
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+    print(f"Exception: {result.exception}")
+
+    assert "Downloading data for:" in result.stdout
+    assert "Product: resstock" in result.stdout
+    assert "Release year: 2021" in result.stdout
+    assert "Weather file: tmy3" in result.stdout
+    assert "Release version: 1" in result.stdout
+    assert "States: ['CA']" in result.stdout
+    assert "File type: ['metadata']" in result.stdout
+    assert "Upgrade ids: ['0']" in result.stdout
+    assert "test_output" in result.stdout
+
+
+def test_cli_multiple_file_types(cleanup_downloads):
+    """Test CLI with multiple file types."""
+    result = runner.invoke(
+        app,
+        [
+            "--product",
+            "comstock",
+            "--release_year",
+            "2023",
+            "--weather_file",
+            "amy2018",
+            "--release_version",
+            "2",
+            "--states",
+            "CA TX",
+            "--file_type",
+            "load_curve_15min metadata",
+            "--upgrade_id",
+            "7",
+            "--output_directory",
+            "test_output",
+        ],
+    )
+
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+    print(f"Exception: {result.exception}")
+
+    assert "Downloading data for:" in result.stdout
+    assert "Product: comstock" in result.stdout
+    assert "Release year: 2023" in result.stdout
+    assert "Weather file: amy2018" in result.stdout
+    assert "Release version: 2" in result.stdout
+    assert "States: ['CA', 'TX']" in result.stdout
+    assert "File type: ['load_curve_15min', 'metadata']" in result.stdout
+    assert "Upgrade ids: ['7']" in result.stdout
+
+
+def test_cli_multiple_upgrade_ids(cleanup_downloads):
+    """Test CLI with multiple upgrade IDs."""
+    result = runner.invoke(
+        app,
+        [
+            "--product",
+            "resstock",
+            "--release_year",
+            "2022",
+            "--weather_file",
+            "tmy3",
+            "--release_version",
+            "1",
+            "--states",
+            "NY",
+            "--file_type",
+            "hpxml schedule",
+            "--upgrade_id",
+            "0 1 2",
+            "--output_directory",
+            "test_output",
+        ],
+    )
+
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+    print(f"Exception: {result.exception}")
+
+    assert "Downloading data for:" in result.stdout
+    assert "Product: resstock" in result.stdout
+    assert "Release year: 2022" in result.stdout
+    assert "Weather file: tmy3" in result.stdout
+    assert "Release version: 1" in result.stdout
+    assert "States: ['NY']" in result.stdout
+    assert "File type: ['hpxml', 'schedule']" in result.stdout
+    assert "Upgrade ids: ['0', '1', '2']" in result.stdout
+
+
+def test_cli_invalid_arguments(cleanup_downloads):
+    """Test CLI with invalid arguments."""
+    # Test with invalid product
+    result = runner.invoke(
+        app,
+        [
+            "--product",
+            "invalid_product",
+            "--release_year",
+            "2021",
+            "--weather_file",
+            "tmy3",
+            "--release_version",
+            "1",
+            "--states",
+            "CA",
+            "--file_type",
+            "metadata",
+            "--output_directory",
+            "test_output",
+        ],
+    )
+
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+    print(f"Exception: {result.exception}")
+
+    assert result.exit_code == 1  # Invalid product should exit with code 1
+    assert "Invalid product" in result.stdout
+
+    # Test with invalid release year
+    result = runner.invoke(
+        app,
+        [
+            "--product",
+            "resstock",
+            "--release_year",
+            "2000",  # Invalid year
+            "--weather_file",
+            "tmy3",
+            "--release_version",
+            "1",
+            "--states",
+            "CA",
+            "--file_type",
+            "metadata",
+            "--output_directory",
+            "test_output",
+        ],
+    )
+
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+    print(f"Exception: {result.exception}")
+
+    assert result.exit_code == 1
+    assert "Invalid release name" in result.stdout
+
+    # Test with invalid state
+    result = runner.invoke(
+        app,
+        [
+            "--product",
+            "resstock",
+            "--release_year",
+            "2021",
+            "--weather_file",
+            "tmy3",
+            "--release_version",
+            "1",
+            "--states",
+            "ABCDEFG",  # Invalid state
+            "--file_type",
+            "metadata",
+            "--output_directory",
+            "test_output",
+        ],
+    )
+
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+    print(f"Exception: {result.exception}")
+
+    assert result.exit_code == 1
+    assert "Invalid state" in result.stdout
+
+
+def test_cli_help():
+    """Test CLI help functionality."""
+    # Test help command
+    result = runner.invoke(app, ["--help"])
+
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+
+    assert result.exit_code == 0
+    assert "Buildstock Fetch CLI tool. Run without arguments for interactive mode." in result.stdout
+    assert "--product" in result.stdout
+    assert "--release_year" in result.stdout
+    assert "--weather_file" in result.stdout
+    assert "--release_version" in result.stdout
+    assert "--states" in result.stdout
+    assert "--file_type" in result.stdout
+    assert "--upgrade_id" in result.stdout
+    assert "--output_directory" in result.stdout

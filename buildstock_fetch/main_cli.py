@@ -30,6 +30,12 @@ app = typer.Typer(
 BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch.utils").joinpath("buildstock_releases.json"))
 
 
+class InvalidProductError(Exception):
+    """Exception raised when an invalid product is provided."""
+
+    pass
+
+
 def _filter_available_releases(
     available_releases: list[str],
     product_type: Union[str, None] = None,
@@ -277,7 +283,7 @@ def _handle_cancellation(result: Union[str, None], message: str = "Operation can
     return result
 
 
-def _run_interactive_mode() -> dict[str, str]:
+def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     """Run the interactive CLI mode"""
     console.print(Panel("BuildStock Fetch Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
     console.print("Welcome to the BuildStock Fetch CLI!")
@@ -497,8 +503,8 @@ def _get_user_download_choice(bldg_ids: list) -> list:
         return selected_bldg_ids
 
 
-def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
-    """Validate the direct inputs"""
+def _validate_required_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
+    """Validate that all required inputs are provided."""
     if not all([
         inputs["product"],
         inputs["release_year"],
@@ -510,29 +516,86 @@ def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[s
         inputs["output_directory"],
     ]):
         return "Please provide all required inputs"
+    return True
 
+
+def _validate_release_name(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
+    """Validate the release name."""
     available_releases = _get_all_available_releases()
-    # Check for valid release name
-    product_short_name = "res" if inputs["product"] == "resstock" else "com"
+
+    if inputs["product"] == "resstock":
+        product_short_name = "res"
+    elif inputs["product"] == "comstock":
+        product_short_name = "com"
+    else:
+        raise InvalidProductError
+
     release_name = f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
     if release_name not in available_releases:
         return f"Invalid release name: {release_name}"
+    return True
 
-    # Check for valid upgrade ids
+
+def _validate_upgrade_ids(inputs: dict[str, Union[str, list[str]]], release_name: str) -> Union[str, bool]:
+    """Validate upgrade IDs."""
+    available_releases = _get_all_available_releases()
     for upgrade_id in inputs["upgrade_ids"]:
-        if upgrade_id not in available_releases[release_name]["upgrade_ids"]:
+        if int(upgrade_id) not in [
+            int(upgrade_id_val) for upgrade_id_val in available_releases[release_name]["upgrade_ids"]
+        ]:
             return f"Invalid upgrade id: {upgrade_id}"
+    return True
 
-    # Check for valid file type
-    if inputs["file_type"] not in available_releases[release_name]["available_data"]:
-        return f"Invalid file type: {inputs['file_type']}"
 
-    # Check for valid state
+def _validate_file_types(inputs: dict[str, Union[str, list[str]]], release_name: str) -> Union[str, bool]:
+    """Validate file types."""
+    available_releases = _get_all_available_releases()
+    for file_type in inputs["file_type"]:
+        if file_type not in available_releases[release_name]["available_data"]:
+            return f"Invalid file type: {file_type}"
+    return True
+
+
+def _validate_states(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
+    """Validate states."""
     for state in inputs["states"]:
         if state not in _get_state_options():
             return f"Invalid state: {state}"
+    return True
 
-    # Check for valid output directory
+
+def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
+    """Validate the direct inputs"""
+    # Check required inputs
+    required_check = _validate_required_inputs(inputs)
+    if required_check is not True:
+        return required_check
+
+    # Check release name
+    release_check = _validate_release_name(inputs)
+    if release_check is not True:
+        return release_check
+
+    # Get release name for further validation
+    product_short_name = "res" if inputs["product"] == "resstock" else "com"
+    release_name = f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
+
+    # Check upgrade IDs
+    upgrade_check = _validate_upgrade_ids(inputs, release_name)
+    if upgrade_check is not True:
+        return upgrade_check
+
+    # Check file types
+    file_type_check = _validate_file_types(inputs, release_name)
+    if file_type_check is not True:
+        return file_type_check
+
+    # Check states
+    state_check = _validate_states(inputs)
+    if state_check is not True:
+        return state_check
+
+    # Check output directory
     output_directory_validation = _validate_output_directory(str(inputs["output_directory"]))
     if output_directory_validation is not True:
         return f"Invalid output directory: {inputs['output_directory']}"
@@ -562,7 +625,7 @@ def main_callback(
     output_directory: str = OUTPUT_DIRECTORY_OPTION,
 ) -> None:
     """
-    DBF CLI tool. Run without arguments for interactive mode.
+    Buildstock Fetch CLI tool. Run without arguments for interactive mode.
     """
 
     # If no arguments provided, run interactive mode
@@ -579,21 +642,28 @@ def main_callback(
     else:
         states_list = states.split() if states else []
         upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
+        file_type_list = file_type.split() if file_type else []
 
-        inputs = {
+        direct_inputs: dict[str, Union[str, list[str]]] = {
             "product": product,
             "release_year": release_year,
             "weather_file": weather_file,
             "release_version": str(release_version),
-            "states": states_list,  # type: ignore[dict-item]
-            "file_type": file_type,
-            "upgrade_ids": upgrade_ids_list,  # type: ignore[dict-item]
+            "states": states_list,
+            "file_type": file_type_list,
+            "upgrade_ids": upgrade_ids_list,
             "output_directory": output_directory,
         }
-        validation_result = _validate_direct_inputs(inputs)  # type: ignore[arg-type]
-        if validation_result is not True:
-            console.print(f"\n[red]{validation_result}[/red]")
-            raise typer.Exit(0) from None
+        try:
+            validation_result = _validate_direct_inputs(direct_inputs)
+            if validation_result is not True:
+                console.print(f"\n[red]{validation_result}[/red]")
+                raise typer.Exit(1) from None
+        except InvalidProductError:
+            console.print(f"\n[red]Invalid product: {direct_inputs['product']}[/red]")
+            raise typer.Exit(1) from None
+
+        inputs = direct_inputs
 
     # Process the data
     _print_data_processing_info(inputs)
@@ -609,7 +679,10 @@ def main_callback(
         file_type_tuple = (
             tuple(inputs["file_type"].split()) if isinstance(inputs["file_type"], str) else tuple(inputs["file_type"])
         )
-        fetch_bldg_data(selected_bldg_ids, file_type_tuple, Path(inputs["output_directory"]))
+        output_dir = inputs["output_directory"]
+        if isinstance(output_dir, list):
+            output_dir = output_dir[0] if output_dir else "."
+        fetch_bldg_data(selected_bldg_ids, file_type_tuple, Path(output_dir))
     else:
         console.print("[yellow]No files selected for download.[/yellow]")
 
