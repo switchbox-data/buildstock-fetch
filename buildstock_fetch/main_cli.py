@@ -450,18 +450,18 @@ def _get_user_download_choice(bldg_ids: list) -> list:
     if not bldg_ids:
         return []
 
-    # Group building IDs by upgrade_id
-    upgrade_id_groups: dict[str, list] = {}
+    # Group building IDs by state-upgrade_id pairs
+    state_upgrade_groups: dict[tuple[str, str], list] = {}
     for bldg_id in bldg_ids:
-        upgrade_id = bldg_id.upgrade_id
-        if upgrade_id not in upgrade_id_groups:
-            upgrade_id_groups[upgrade_id] = []
-        upgrade_id_groups[upgrade_id].append(bldg_id)
+        state_upgrade_key = (bldg_id.state, bldg_id.upgrade_id)
+        if state_upgrade_key not in state_upgrade_groups:
+            state_upgrade_groups[state_upgrade_key] = []
+        state_upgrade_groups[state_upgrade_key].append(bldg_id)
 
-    # Print summary for each upgrade_id
+    # Print summary for each state-upgrade_id pair
     console.print(f"\nThere are {len(bldg_ids)} files for this release:")
-    for upgrade_id, bldg_list in upgrade_id_groups.items():
-        console.print(f"  • Upgrade {upgrade_id}: {len(bldg_list)} buildings")
+    for (state, upgrade_id), bldg_list in state_upgrade_groups.items():
+        console.print(f"  • State {state}, Upgrade {upgrade_id}: {len(bldg_list)} buildings")
 
     choice = _handle_cancellation(
         questionary.select(
@@ -475,27 +475,29 @@ def _get_user_download_choice(bldg_ids: list) -> list:
     else:
         selected_bldg_ids = []
 
-        # For each upgrade_id, ask user for sample size
-        for upgrade_id, bldg_list in upgrade_id_groups.items():
-            total_for_upgrade = len(bldg_list)
+        # For each state-upgrade_id pair, ask user for sample size
+        for (state, upgrade_id), bldg_list in state_upgrade_groups.items():
+            total_for_state_upgrade = len(bldg_list)
 
             sample_size_str = _handle_cancellation(
                 questionary.text(
-                    f"Enter the number of files to download for upgrade {upgrade_id} (0-{total_for_upgrade}):",
-                    validate=lambda text, max_val=total_for_upgrade: (text.isdigit() and 0 <= int(text) <= max_val)
+                    f"Enter the number of files to download for State {state}, Upgrade {upgrade_id} (0-{total_for_state_upgrade}):",
+                    validate=lambda text, max_val=total_for_state_upgrade: (
+                        text.isdigit() and 0 <= int(text) <= max_val
+                    )
                     or f"Please enter a number between 0 and {max_val}",
                 ).ask()
             )
 
             sample_size = int(sample_size_str)
             if sample_size == 0:
-                console.print(f"[yellow]No files will be downloaded for upgrade {upgrade_id}.[/yellow]")
+                console.print(f"[yellow]No files will be downloaded for State {state}, Upgrade {upgrade_id}.[/yellow]")
                 continue
 
-            # Randomly select the specified number of building IDs for this upgrade_id
-            selected_for_upgrade = random.sample(bldg_list, sample_size)
-            selected_bldg_ids.extend(selected_for_upgrade)
-            console.print(f"[green]Selected {sample_size} buildings for upgrade {upgrade_id}.[/green]")
+            # Randomly select the specified number of building IDs for this state-upgrade_id pair
+            selected_for_state_upgrade = random.sample(bldg_list, sample_size)
+            selected_bldg_ids.extend(selected_for_state_upgrade)
+            console.print(f"[green]Selected {sample_size} buildings for State {state}, Upgrade {upgrade_id}.[/green]")
 
         if not selected_bldg_ids:
             console.print("[yellow]No files selected for download.[/yellow]")
