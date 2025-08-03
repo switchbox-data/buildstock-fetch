@@ -156,7 +156,7 @@ def test_interactive_mode_sample_download(
     assert "test_output" in result.stdout
     # Check for sample download messages
     assert "files for this release" in result.stdout
-    assert "Selected 3 buildings for upgrade 0" in result.stdout
+    assert "Selected 3 buildings for State CA, Upgrade 0" in result.stdout
 
 
 @patch("questionary.confirm")
@@ -197,7 +197,7 @@ def test_interactive_mode_zero_sample(
     assert "test_output" in result.stdout
     # Check for zero sample download messages
     assert "files for this release" in result.stdout
-    assert "No files will be downloaded for upgrade 0" in result.stdout
+    assert "No files will be downloaded for State CA, Upgrade 0" in result.stdout
     assert "No files selected for download" in result.stdout
 
 
