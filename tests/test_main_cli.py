@@ -1,3 +1,4 @@
+import re
 import shutil
 from pathlib import Path
 from unittest.mock import patch
@@ -6,6 +7,12 @@ import pytest
 from typer.testing import CliRunner
 
 from buildstock_fetch.main_cli import app
+
+
+def strip_ansi_codes(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    return ansi_escape.sub("", text)
 
 
 @pytest.fixture(scope="function")
@@ -406,13 +413,16 @@ def test_cli_help():
     print(f"Exit code: {result.exit_code}")
     print(f"Output: {result.output}")
 
+    # Strip ANSI escape codes for easier text checking
+    clean_output = strip_ansi_codes(result.stdout)
+
     assert result.exit_code == 0
-    assert "Buildstock Fetch CLI tool. Run without arguments for interactive mode." in result.stdout
-    assert "--product" in result.stdout
-    assert "--release_year" in result.stdout
-    assert "--weather_file" in result.stdout
-    assert "--release_version" in result.stdout
-    assert "--states" in result.stdout
-    assert "--file_type" in result.stdout
-    assert "--upgrade_id" in result.stdout
-    assert "--output_directory" in result.stdout
+    assert "Buildstock Fetch CLI tool. Run without arguments for interactive mode." in clean_output
+    assert "--product" in clean_output
+    assert "--release_year" in clean_output
+    assert "--weather_file" in clean_output
+    assert "--release_version" in clean_output
+    assert "--states" in clean_output
+    assert "--file_type" in clean_output
+    assert "--upgrade_id" in clean_output
+    assert "--output_directory" in clean_output
