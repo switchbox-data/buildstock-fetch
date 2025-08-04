@@ -606,14 +606,23 @@ def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[s
 
 
 # Module-level option definitions
-PRODUCT_OPTION = typer.Option(None, "--product", "-p")
-RELEASE_YEAR_OPTION = typer.Option(None, "--release_year", "-y")
-WEATHER_FILE_OPTION = typer.Option(None, "--weather_file", "-w")
-RELEASE_VERSION_OPTION = typer.Option(None, "--release_version", "-r")
-STATES_OPTION = typer.Option(None, "--states", "-s", help="List of states (can be specified multiple times)")
-FILE_TYPE_OPTION = typer.Option(None, "--file_type", "-f")
-UPGRADE_ID_OPTION = typer.Option(None, "--upgrade_id", "-u", help="Upgrade IDs (space-separated, e.g., '0 1 2')")
-OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o")
+PRODUCT_OPTION = typer.Option(None, "--product", "-p", help='"resstock" or "comstock"')
+RELEASE_YEAR_OPTION = typer.Option(None, "--release_year", "-y", help="Release year (typically 2021 or later)")
+WEATHER_FILE_OPTION = typer.Option(None, "--weather_file", "-w", help='"tmy3", "amy2012", "amy2018"')
+RELEASE_VERSION_OPTION = typer.Option(None, "--release_version", "-r", help="1, 1.1, or 2")
+STATES_OPTION = typer.Option(
+    None, "--states", "-s", help="List of states (multiple can be provided, inside quotes and separated by spaces)"
+)
+FILE_TYPE_OPTION = typer.Option(
+    None,
+    "--file_type",
+    "-f",
+    help="List of file types (multiple can be provided, inside quotes and separated by spaces)",
+)
+UPGRADE_ID_OPTION = typer.Option(
+    None, "--upgrade_id", "-u", help="Upgrade IDs (multiple can be provided, inside quotes and separated by spaces)"
+)
+OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='"data" or "../output"')
 
 
 def main_callback(
