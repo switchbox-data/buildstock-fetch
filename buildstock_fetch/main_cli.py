@@ -622,7 +622,7 @@ FILE_TYPE_OPTION = typer.Option(
 UPGRADE_ID_OPTION = typer.Option(
     None, "--upgrade_id", "-u", help="Upgrade IDs (multiple can be provided, inside quotes and separated by spaces)"
 )
-OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='"data" or "../output"')
+OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='e.g., "data" or "../output"')
 
 
 def main_callback(
