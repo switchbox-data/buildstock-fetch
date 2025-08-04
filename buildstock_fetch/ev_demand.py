@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, Optional
@@ -83,16 +83,16 @@ class VehicleProfile:
 
     building_id: str
     vehicle_id: int
-    weekday_departure_hour: list[int]  # List of departure hours for each weekday trip
-    weekday_arrival_hour: list[int]  # List of arrival hours for each weekday trip
-    weekday_miles: list[float]  # List of miles for each weekday trip
-    weekday_trip_weights: list[float]  # List of trip weights for each weekday trip
-    weekend_departure_hour: list[int]  # List of departure hours for each weekend trip
-    weekend_arrival_hour: list[int]  # List of arrival hours for each weekend trip
-    weekend_miles: list[float]  # List of miles for each weekend trip
-    weekend_trip_weights: list[float]  # List of trip weights for each weekend trip
-    weekday_trip_ids: list[int]  # List of trip IDs for weekdays
-    weekend_trip_ids: list[int]  # List of trip IDs for weekends
+    weekday_departure_hour: list[int] = field(default_factory=list)  # List of departure hours for each weekday trip
+    weekday_arrival_hour: list[int] = field(default_factory=list)  # List of arrival hours for each weekday trip
+    weekday_miles: list[float] = field(default_factory=list)  # List of miles for each weekday trip
+    weekday_trip_weights: list[float] = field(default_factory=list)  # List of trip weights for each weekday trip
+    weekend_departure_hour: list[int] = field(default_factory=list)  # List of departure hours for each weekend trip
+    weekend_arrival_hour: list[int] = field(default_factory=list)  # List of arrival hours for each weekend trip
+    weekend_miles: list[float] = field(default_factory=list)  # List of miles for each weekend trip
+    weekend_trip_weights: list[float] = field(default_factory=list)  # List of trip weights for each weekend trip
+    weekday_trip_ids: list[int] = field(default_factory=list)  # List of trip IDs for weekdays
+    weekend_trip_ids: list[int] = field(default_factory=list)  # List of trip IDs for weekends
 
 
 @dataclass
@@ -283,6 +283,65 @@ class EVDemandCalculator:
 
         return result_df
 
+    def find_best_match(
+        self, target_income: int, target_occupants: int, target_vehicles: int, weekday: bool = True
+    ) -> tuple[str, str]:
+        """
+        Find the best matching vehicle in NHTS data based on prioritized criteria.
+        First tries exact match, then relaxes constraints in order of least to most important:
+        vehicles -> occupants -> income_bucket
+
+        Args:
+            target_income: Target income bucket to match
+            target_occupants: Target number of occupants to match
+            target_vehicles: Target number of vehicles to match
+            weekday: Whether to match against weekday (True) or weekend (False) trips
+
+        Returns:
+            Tuple of (match_type, matched_vehicle_id) where match_type indicates how the match was found
+        """
+        # Select weekday or weekend trips
+        trips = self.nhts_df.filter(pl.col("weekday") == (2 if weekday else 1))
+
+        # Try exact match first
+        exact_match = (
+            trips.filter(
+                (pl.col("income_bucket") == target_income)
+                & (pl.col("occupants") == target_occupants)
+                & (pl.col("vehicles") == target_vehicles)
+            )
+            .select(["hh_vehicle_id"])
+            .unique()
+        )
+
+        if exact_match.height > 0:
+            # Randomly select one vehicle from exact matches
+            return "exact", exact_match.sample(1).row(0)[0]
+
+        # Try matching only income and occupants
+        income_occ_match = (
+            trips.filter((pl.col("income_bucket") == target_income) & (pl.col("occupants") == target_occupants))
+            .select(["hh_vehicle_id"])
+            .unique()
+        )
+
+        if income_occ_match.height > 0:
+            return "income_occupants", income_occ_match.sample(1).row(0)[0]
+
+        # Try matching only income (most important criteria)
+        income_match = trips.filter(pl.col("income_bucket") == target_income).select(["hh_vehicle_id"]).unique()
+
+        if income_match.height > 0:
+            return "income_only", income_match.sample(1).row(0)[0]
+
+        # If still no match, find closest income bucket
+        all_incomes = trips.select("income_bucket").unique().sort("income_bucket")
+        closest_income = min(all_incomes.get_column("income_bucket"), key=lambda x: abs(x - target_income))
+
+        fallback_match = trips.filter(pl.col("income_bucket") == closest_income).select(["hh_vehicle_id"]).unique()
+
+        return "closest_income", fallback_match.sample(1).row(0)[0]
+
     def sample_vehicle_profiles(
         self, bldg_veh_df: pl.DataFrame, nhts_df: pl.DataFrame
     ) -> dict[tuple[str, int], VehicleProfile]:
@@ -321,27 +380,19 @@ class EVDemandCalculator:
             bldg_id = row["bldg_id"]
             num_vehicles = row["vehicles"]  # This comes from predict_num_vehicles
 
-            # Find matching households
-            matching_criteria = (
-                (pl.col("income_bucket") == row["income_bucket"])
-                & (pl.col("occupants") == row["occupants"])
-                & (pl.col("vehicles") == num_vehicles)  # Match on total vehicles in household
-            )
+            # Skip households with no vehicles
+            if num_vehicles == 0:
+                continue
 
             # For each vehicle in the household
             for vehicle_id in range(1, num_vehicles + 1):  # Start from 1 to match example
-                # Get all unique vehicle IDs from matching households
-                matching_vehicles = weekday_trips.filter(matching_criteria).select(["hh_vehicle_id"]).unique()
-
-                # Check if we have enough unique vehicles
-                if matching_vehicles.height < 5:
-                    raise InsufficientVehiclesError(bldg_id, vehicle_id, matching_vehicles.height)
-
-                # Randomly sample one vehicle (no weights)
-                sampled_hh_vehicle_id = matching_vehicles.sample(1).row(0)[0]
+                # Find best matching vehicle based on our criteria
+                match_type, matched_vehicle_id = self.find_best_match(
+                    target_income=row["income_bucket"], target_occupants=row["occupants"], target_vehicles=num_vehicles
+                )
 
                 # Get all weekday trips for this vehicle
-                weekday_samples = weekday_trips.filter(pl.col("hh_vehicle_id") == sampled_hh_vehicle_id).select([
+                weekday_samples = weekday_trips.filter(pl.col("hh_vehicle_id") == matched_vehicle_id).select([
                     "start_time",
                     "end_time",
                     "miles_driven",
@@ -349,32 +400,33 @@ class EVDemandCalculator:
                 ])
 
                 # Get all weekend trips for the same vehicle
-                weekend_samples = weekend_trips.filter(pl.col("hh_vehicle_id") == sampled_hh_vehicle_id).select([
+                weekend_samples = weekend_trips.filter(pl.col("hh_vehicle_id") == matched_vehicle_id).select([
                     "start_time",
                     "end_time",
                     "miles_driven",
                     "trip_weight",
                 ])
 
-                # Convert all trips to lists
+                # Process weekday trips
                 weekday_rows = weekday_samples.rows()
                 weekday_departures = [t[0] // 100 for t in weekday_rows]  # Convert HHMM to HH
                 weekday_arrivals = [t[1] // 100 for t in weekday_rows]
                 weekday_miles = [t[2] for t in weekday_rows]
                 weekday_weights = [t[3] for t in weekday_rows]
-                weekday_trip_ids = list(range(1, len(weekday_departures) + 1))
+                weekday_trip_ids = list(range(1, len(weekday_rows) + 1))
 
+                # Process weekend trips
                 weekend_rows = weekend_samples.rows()
                 weekend_departures = [t[0] // 100 for t in weekend_rows]
                 weekend_arrivals = [t[1] // 100 for t in weekend_rows]
                 weekend_miles = [t[2] for t in weekend_rows]
                 weekend_weights = [t[3] for t in weekend_rows]
-                weekend_trip_ids = list(range(1, len(weekend_departures) + 1))
+                weekend_trip_ids = list(range(1, len(weekend_rows) + 1))
 
                 # Create VehicleProfile for this specific vehicle
                 profiles[(bldg_id, vehicle_id)] = VehicleProfile(
                     building_id=bldg_id,
-                    vehicle_id=vehicle_id,  # Using 1-based indexing to match example
+                    vehicle_id=vehicle_id,
                     weekday_departure_hour=weekday_departures,
                     weekday_arrival_hour=weekday_arrivals,
                     weekday_miles=weekday_miles,
@@ -652,7 +704,7 @@ if __name__ == "__main__":
     calculator.fit_vehicle_ownership_model(pums_df)
 
     # Test predictions on a small sample
-    sample_metadata = metadata_df.head(2)
+    sample_metadata = metadata_df.head(200)
     predictions_df = calculator.predict_num_vehicles(sample_metadata)
 
     # sample vehicle profiles
@@ -663,3 +715,61 @@ if __name__ == "__main__":
 
     # # assign battery capacities
     # battery_capacities = calculator.assign_battery_capacity(trip_schedules.get_column("kwh_consumed"))
+
+
+# EDA
+
+# nhts_df_eda = nhts_df.with_columns(
+#     pl.when(pl.col("vehicles") > 2)
+#     .then(2)
+#     .otherwise(pl.col("vehicles"))
+#     .alias("vehicles")
+# )
+
+# nhts_df_eda.group_by(["income_bucket", "occupants", "vehicles"]).agg(pl.col("hh_vehicle_id").count()).sort("hh_vehicle_id")
+# EDA for NHTS data coverage
+# Create complete grid of expected combinations
+# expected_combinations = (
+#     pl.DataFrame({
+#         'income_bucket': np.repeat(np.arange(1, 12), 16),  # 1-11
+#         'occupants': np.tile(np.repeat(np.arange(1, 9), 2), 11),  # 1-8
+#         'vehicles': np.tile(np.arange(1, 3), 88)  # 1-2
+#     })
+# )
+
+# # Cap vehicles in NHTS data
+# nhts_df_eda = nhts_df.with_columns(
+#     pl.when(pl.col("vehicles") > 2)
+#     .then(2)
+#     .otherwise(pl.col("vehicles"))
+#     .alias("vehicles")
+# )
+
+# # Get actual combinations and their counts
+# actual_combinations = (
+#     nhts_df_eda
+#     .group_by(["income_bucket", "occupants", "vehicles"])
+#     .agg([
+#         pl.col("hh_vehicle_id").n_unique().alias("unique_vehicles"),
+#         pl.count().alias("total_trips")
+#     ])
+# )
+
+# # Find missing combinations
+# missing_combinations = expected_combinations.join(
+#     actual_combinations,
+#     on=["income_bucket", "occupants"],
+#     how="left"
+# ).filter(
+#     pl.col("unique_vehicles").is_null()
+# )
+
+# print("\nMissing combinations:")
+# print(missing_combinations.sort(["income_bucket", "occupants", "vehicles"]))
+
+# # Check max occupants in metadata
+# max_occupants = metadata_df.get_column("occupants").max()
+# print(f"\nMax occupants in metadata: {max_occupants}")
+# if max_occupants > 8:
+#     print("WARNING: Need to cap occupants at 8 in metadata!")
+#     print(f"Number of records with > 8 occupants: {metadata_df.filter(pl.col('occupants') > 8).height}")
