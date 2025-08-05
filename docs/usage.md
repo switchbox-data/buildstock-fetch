@@ -19,7 +19,7 @@ NREL's ResStock and ComStock projects, collectively known as BuildStock, offer a
 
 The simulations output [end-use load profiles](https://www.nrel.gov/buildings/end-use-load-profiles), which NREL releases as open data. But it's also possible to do your own Buildstock simulations using the same building and weather file that NREL uses.
 
-**BuildStock Fetch** is a python library that makes it easy to download NREL's [end-use load profiles](https://www.nrel.gov/buildings/end-use-load-profiles), as well as the [hpxml](https://hpxml-guide.readthedocs.io/en/latest/), weather, and other input files needed to run your simulations using [OCHRE](https://ochre-nrel.readthedocs.io/en/latest/Introduction.html) a lightweight BEM library also developed by NREL. 
+**BuildStock Fetch** is a python library that makes it easy to download NREL's [end-use load profiles](https://www.nrel.gov/buildings/end-use-load-profiles), as well as the [hpxml](https://hpxml-guide.readthedocs.io/en/latest/), weather, and other input files needed to run your simulations using [OCHRE](https://ochre-nrel.readthedocs.io/en/latest/Introduction.html) a lightweight BEM library also developed by NREL.
 
 ## Key Features
 
@@ -29,7 +29,7 @@ The simulations output [end-use load profiles](https://www.nrel.gov/buildings/en
 
 ## Data source
 
-BuildStock Fetch (`bsf`) makes it easier to download the files available on [NREL's public aws s3 buckets](https://data.openei.org/s3_viewer?bucket=oedi-data-lake&prefix=nrel-pds-building-stock%2Fend-use-load-profiles-for-us-building-stock%2F). 
+BuildStock Fetch (`bsf`) makes it easier to download the files available on [NREL's public aws s3 buckets](https://data.openei.org/s3_viewer?bucket=oedi-data-lake&prefix=nrel-pds-building-stock%2Fend-use-load-profiles-for-us-building-stock%2F).
 
 Besides weather files, all the data that `bsf` allows you to download is on **building units**, either residential dwellings or commercial establishments.
 
