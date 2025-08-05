@@ -71,9 +71,7 @@ These units are grouped into **Buildstock releases**, which are defined by:
 BuildStock Fetch is not yet available as a published library on PyPI. In the meantime, the library can be installed directly from the GitHub repository using:
 
 ```bash
-git clone https://github.com/your-org/buildstock-fetch.git
-cd buildstock-fetch
-pip install -e .
+pip3 install git+https://github.com/switchbox-data/buildstock-fetch.git@main
 ```
 
 ## Quick Start
