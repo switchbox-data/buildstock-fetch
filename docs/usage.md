@@ -172,12 +172,27 @@ sample_buildings/
 └── com_2024_amy2018_1/
     ├── hpxml/
     │   ├── CA/
+    │   │   ├── bldg_id1_up_0.xml
+    │   │   ├── bldg_id1_up_1.xml
+    │   │   ├── bldg_id1_up_2.xml
+    │   │   ├── bldg_id2_up_0.xml
+    │   │   ├── ...
     │   ├── TX/
+    │   │   ├── bldg_id1_up_0.xml
+    │   │   ├── bldg_id1_up_1.xml
+    │   │   ├── ...
     │   └── NY/
+    │   │   ├── bldg_id1_up_0.xml
+    │   │   ├── bldg_id1_up_1.xml
+    │   │   ├── ...
     └── schedule/
         ├── CA/
-        ├── TX/
-        └── NY/
+        │   ├── bldg_id1_up_0_schedule.csv
+        │   ├── bldg_id1_up_1_schedule.csv
+        │   ├── bldg_id1_up_2_schedule.csv
+        │   ├── bldg_id2_up_0_schedule.csv
+        │   ├── ...
+        ├── ...
 ```
 
 ### Example 3: Download Load Curves for Analysis
@@ -209,7 +224,7 @@ Please select the release information and file type you would like to fetch:
 Select product type: [resstock, comstock]
 Select release year: [2021, 2022, 2023, 2024, ...]
 Select weather file: [tmy3, amy2012, amy2018]
-Select release version: [1, 2]
+Select release version: [1, 1.1, 2]
 Select upgrade ids: [0, 1, 2, 3, 4, 5, 6, 7, ...]
 Select states: [AL, AZ, AR, CA, ...]
 Select file type: [hpxml, schedule, metadata, load_curve_15min, ...]
