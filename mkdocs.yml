@@ -10,6 +10,8 @@ copyright: Maintained by <a href="https://switchbox-data.com">switchbox-data</a>
 nav:
   - Home: index.md
   - Modules: modules.md
+  - Usage: usage.md
+
 plugins:
   - search
   - mkdocstrings:
