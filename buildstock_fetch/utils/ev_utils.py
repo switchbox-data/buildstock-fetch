@@ -22,6 +22,28 @@ __all__ = [
 ]
 
 
+STATE_TO_CENSUS_DIVISION: dict[str, int] = {
+    # New England (1)
+    "CT": 1, "ME": 1, "MA": 1, "NH": 1, "RI": 1, "VT": 1,
+    # Middle Atlantic (2)
+    "NJ": 2, "NY": 2, "PA": 2,
+    # East North Central (3)
+    "IL": 3, "IN": 3, "MI": 3, "OH": 3, "WI": 3,
+    # West North Central (4)
+    "IA": 4, "KS": 4, "MN": 4, "MO": 4, "NE": 4, "ND": 4, "SD": 4,
+    # South Atlantic (5)
+    "DE": 5, "DC": 5, "FL": 5, "GA": 5, "MD": 5, "NC": 5, "SC": 5, "VA": 5, "WV": 5,
+    # East South Central (6)
+    "AL": 6, "KY": 6, "MS": 6, "TN": 6,
+    # West South Central (7)
+    "AR": 7, "LA": 7, "OK": 7, "TX": 7,
+    # Mountain (8)
+    "AZ": 8, "CO": 8, "ID": 8, "MT": 8, "NV": 8, "NM": 8, "UT": 8, "WY": 8,
+    # Pacific (9)
+    "AK": 9, "CA": 9, "HI": 9, "OR": 9, "WA": 9,
+}
+
+
 def get_census_division_for_state(state: str) -> int:
     """
     Get the census division number for a given state.
@@ -35,24 +57,11 @@ def get_census_division_for_state(state: str) -> int:
     Raises:
         ValueError: If the state is not found in any census division
     """
-    census_divisions = {
-        1: ["CT", "ME", "MA", "NH", "RI", "VT"],  # New England
-        2: ["NJ", "NY", "PA"],  # Middle Atlantic
-        3: ["IL", "IN", "MI", "OH", "WI"],  # East North Central
-        4: ["IA", "KS", "MN", "MO", "NE", "ND", "SD"],  # West North Central
-        5: ["DE", "DC", "FL", "GA", "MD", "NC", "SC", "VA", "WV"],  # South Atlantic
-        6: ["AL", "KY", "MS", "TN"],  # East South Central
-        7: ["AR", "LA", "OK", "TX"],  # West South Central
-        8: ["AZ", "CO", "ID", "MT", "NV", "NM", "UT", "WY"],  # Mountain
-        9: ["AK", "CA", "HI", "OR", "WA"],  # Pacific
-    }
-
-    for division, states in census_divisions.items():
-        if state in states:
-            return division
-
-    msg = f"State {state} not found in any census division"
-    raise ValueError(msg)
+    try:
+        return STATE_TO_CENSUS_DIVISION[state]
+    except KeyError as e:
+        msg = f"State {state} not found in any census division"
+        raise ValueError(msg) from e
 
 
 def assign_income_midpoints(income_str: str) -> int:
@@ -75,7 +84,7 @@ def assign_income_midpoints(income_str: str) -> int:
         max_val = int(parts[1])
         return (min_val + max_val) // 2
 
-    # If it's not a range, return the value as-is
+    # If it's not a range (<10,000, 200,000+), return the value as-is
     return int(income_str)
 
 
@@ -87,7 +96,7 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
         metadata_path: Path to the metadata parquet file
 
     Returns:
-        DataFrame with columns including 'bldg_id', 'occupants', 'income', 'metro', 'puma.
+        DataFrame with columns including 'bldg_id', 'occupants', 'income', 'metro', 'puma'.
 
     Raises:
         FileNotFoundError: If the metadata file doesn't exist
@@ -108,7 +117,7 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
         pl.col("in.occupants").alias("occupants"),
     ])
 
-    # Process household size - replace "10+" with "10" and convert to numeric
+    # Process household size - replace "10+" with "10" 
     metadata_df = metadata_df.with_columns([
         pl.when(pl.col("occupants") == "10+").then(pl.lit("10")).otherwise(pl.col("occupants")).alias("occupants_temp")
     ])
@@ -117,16 +126,6 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
     metadata_df = metadata_df.with_columns([pl.col("occupants_temp").cast(pl.Int64).alias("occupants")]).drop(
         "occupants_temp"
     )
-
-    # # Create household size bins
-    # metadata_df = metadata_df.with_columns([
-    #     pl.when(pl.col("occupants") > 1)
-    #     .then(pl.lit("2+ ppl"))
-    #     .when(pl.col("occupants") == 1)
-    #     .then(pl.lit("1 person"))
-    #     .otherwise(pl.lit(None))
-    #     .alias("hhsize_bins")
-    # ])
 
     # Process income categories - convert to standard ranges first
     metadata_df = metadata_df.with_columns([
