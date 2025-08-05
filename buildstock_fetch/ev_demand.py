@@ -206,7 +206,7 @@ class EVDemandCalculator:
         Returns:
             DataFrame with an added 'vehicles' column
         """
-        df = metadata_df
+        df = self.metadata_df if metadata_df is None else metadata_df
         if df is None:
             raise MetadataDataFrameError()
 
@@ -260,7 +260,7 @@ class EVDemandCalculator:
         Returns:
             Dict mapping (building_id, vehicle_id) to sampled trip profile parameters
         """
-        df = self.metadata_df
+        df = self.metadata_df if metadata_df is None else metadata_df
         if df is None:
             raise MetadataDataFrameError()
 
