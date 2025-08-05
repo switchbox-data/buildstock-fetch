@@ -1,2 +1,5 @@
+recursive-include buildstock_fetch *.py
+recursive-include buildstock_fetch/utils *.py
 recursive-include buildstock_fetch/utils *.json
 recursive-include buildstock_fetch/utils/building_data *
+recursive-include buildstock_fetch/utils/building_data/combined_metadata.parquet *

@@ -63,6 +63,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["buildstock_fetch*"]
 
 [tool.setuptools.package-data]
 "buildstock_fetch.utils" = ["*.json", "building_data/*"]
