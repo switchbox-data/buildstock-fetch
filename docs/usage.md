@@ -1,6 +1,6 @@
 # BuildStock Fetch
 
-A Python CLI tool for downloading and managing building energy data from the National Renewable Energy Laboratory (NREL) ResStock and ComStock database.
+A Python CLI tool for downloading building energy simulation data from the National Renewable Energy Laboratory (NREL) ResStock and ComStock projects.
 
 ## Table of Contents
 
@@ -15,52 +15,56 @@ A Python CLI tool for downloading and managing building energy data from the Nat
 
 ## Background
 
-**BuildStock Fetch** is a python-based library built for fetching building energy files provided by NREL's ResStock and ComStock projects. These include data files used for building energy simulation, pre-run simulation results, weather data, and more. The results from these simulations represent detailed energy simulations of the U.S. building stock, enabling researchers, policymakers, and energy analysts to:
+NREL's ResStock and ComStock projects, collectively known as BuildStock, offer a statistically representative snapshot of buildings across the United States. These realistic-but-not-real buildings are then loaded into building energy modeling (BEM) software EnergyPlus, in order to estimate their weather-dependent energy consumption and water use by simulating heating, cooling, lighting, ventilation, and other energy flows.
 
-- **Analyze building energy consumption patterns** across different climate zones and building types
-- **Evaluate energy efficiency measures** and their potential impact
-- **Support energy policy development** with data-driven insights
-- **Enable building energy research** with standardized, high-quality datasets
+The simulations output [end-use load profiles](https://www.nrel.gov/buildings/end-use-load-profiles), which NREL releases as open data. But it's also possible to do your own Buildstock simulations using the same building and weather file that NREL uses.
 
-The BuildStock project, which encompasses the ResStock and ComStock projects, simulates energy usage for millions of buildings across the United States, providing granular data on energy consumption, load profiles, and building characteristics. This tool makes this valuable data accessible to the broader energy research community.
+**BuildStock Fetch** is a python library that makes it easy to download NREL's [end-use load profiles](https://www.nrel.gov/buildings/end-use-load-profiles), as well as the [hpxml](https://hpxml-guide.readthedocs.io/en/latest/), weather, and other input files needed to run your simulations using [OCHRE](https://ochre-nrel.readthedocs.io/en/latest/Introduction.html) a lightweight BEM library also developed by NREL. 
 
-### Key Features
+## Key Features
 
-- **Comprehensive Data Access**: Download building envelope and HVAC equipment files, load and occupancy schedules, metadata, load curves, and weather files.
-- **Flexible Selection**: Choose specific states, upgrade scenarios, and building types
-- **Organized Output**: Structured file organization by release version, state, and building type
+- **Comprehensive Data Access**: Download physical building characteristics, load and occupancy schedules, simulated load curves, and weather files.
+- **Flexible Selection**: Choose specific states, upgrade scenarios, and building types.
+- **Organized Output**: Structured file organization by release version, state, and building type.
 
-### Data source
+## Data source
 
-Majority of the files available for download via BuildStock Fetch is provided by [NREL's public aws s3 buckets](https://data.openei.org/s3_viewer?bucket=oedi-data-lake&prefix=nrel-pds-building-stock%2Fend-use-load-profiles-for-us-building-stock%2F). Here, each file is cateogrized by grouped by its release name, which is comprised of four elements:
+BuildStock Fetch (`bsf`) makes it easier to download the files available on [NREL's public aws s3 buckets](https://data.openei.org/s3_viewer?bucket=oedi-data-lake&prefix=nrel-pds-building-stock%2Fend-use-load-profiles-for-us-building-stock%2F). 
 
-- **Product**: The release is categorized as either ResStock (for simulating residential buildings) or ComStock (for simulating commercial buildings).
+Besides weather files, all the data that `bsf` allows you to download is on **building units**, either residential dwellings or commercial establishments.
 
-- **Release Year**: The year of release. First set of available releases was in 2021, and each subsequent year has its own set of new releases.
+### Buildstock Releases
+These units are grouped into **Buildstock releases**, which are defined by:
 
-- **Weather File**: There are three types of weather files used for simulations, tmy3, amy2012, and amy2018. The tmy3 weather files stand for Typical Meteorological Year 3. They are a standardized weather dataset representing a "typical" annual weather conditions and were built using historical weather data from 1991-2005. The amy2012 weather files stand for Actual Meteorological Year 2012 and they are a set of real weather data from the year 2012. Similarly, amy2018 stands for Actual Meteorological Year 2018, and they are a set of weather data files from the year 2018.
+- **Product**: either ResStock (for residential buildings) or ComStock (for commercial buildings).
 
-- **Release Version**: The first of each type of release has an associated version, which starts from 1. If there are subsequent updated releases for the same release type (i.e. same product, release year, and weather files), then they will have release versions 1.1 or 2.
+- **Release Year**: The year of release. NREL's first release was in 2021, and each subsequent year has seen its own set of new releases.
 
-For each release, there are a list of upgrade scenarios associated with it. These scenarios represent various building envelope and equipment upgrades, such as building envelope weatherization, more efficient HVAC equipments, etc.
+- **Weather File**: Building energy simulations require weather files, which represent temperature, moisture, solar radiation, and other environmental condition. NREL has usef three different weather files for ComStock and ResStock: `tmy3`, `amy2012`, and `amy2018`.
+  - `tmy3` stands for Typical Meteorological Year 3. This is a synthetic weather dataset that represent a "typical" annual weather conditions and were built using historical weather data from 1991-2005.
+  - `amy2012` stands for Actual Meteorological Year 2012, and represents actual weather data from 2012.
+  - `amy2018` stands for Actual Meteorological Year 2018, and represents actual weather data from 2018.
 
-### Available File Types
+- **Release Version**: Most releases have only one version, which is version 1. NREL will occasionally correct or update a release, these releases will have versions 1.1 or 2.
 
-There are largely three classes of file types available for download:
+- **Upgrades**: that main value of ResStock and ComStock is the ability to run "what if?" scenarios, where building shells and equipment are altered in order to compare the resulting simulated load curve to the current baseline building stock. Each release has its own distinct list of numbered upgrade scenarios, representing various building envelope and equipment upgrades, including weatherization packages, efficient electrical appliances, and so on.
 
-- **End Use Load Profiles**: The end use load profiles are building energy simulation results published by NREL. These files provide simulation results that have already been completed by NREL using EnergyPlus. These files provide detailed simulation input parameters and final results, such as fuel consumption by usage type (e.g. space heating/cooling, water heating, lights, etc.), building conditions (e.g. indoor temperature and humidity, hot water temperature, etc.). The end use load profiles provided by NREL are in 15-min time granularity.
+## Available datasets
 
+`bsf` makes it easier to download three kinds of files:
 
-- **Building Simulation Input Data**: The input files needed to run a simulation on OCHRE, which are the building HPXML files, load and occupancy schedule files, and weather files. [OCHRE](https://www.nrel.gov/grid/ochre) is a python-based simulation tool developed by NREL. They are meant to be a lighter-weight alternative to other numerical simulation softwares such as EnergyPlus or TRNSYS. OCHRE requires as input a building HPXML file that provides information on the building envelope and HVAC and water heating equipment, the schedule files that provide load profiles for non-controllable appliance use such as lights or dishwasher and occupancy levels, and weather files. Each building HPXML file has a corresponding weather station ID based on its location.
+- **Building Unit Metadata**: The metadata table offers information each building unit for each upgrade within each release. This information includes the building unit's `bldg_id`, overall physical characteristics (square footage, number of rooms, etc.), the building envelope, all energy consuming devices, air infilation levels, approximate physical location, income range, and so on. These building units are synthetic, drawn from a stastistical distribution of the US building stock assembled from dozens of surveys and other datasets.
 
-- **Metadata**: The metadata table provides attribute information for each building in a given release. These include the building ID that specifies the building HPXML and schedule file, the location of the building, the utility district of the building, and more.
+- **End Use Load Profiles**: NREL maps these synthetic buildings to geometric models in EnergyPlus, and runs physics simulations with particular weather files in order to generate energy consumption load curves for every appliances in every building unit in a given release. NREL then publishes these simulation outputs under the [End Use Load Profiles](https://www.nrel.gov/buildings/end-use-load-profiles) data product. These datasets provide detailed simulation input parameters and load outputs, such as fuel consumption by usage type (e.g. space heating/cooling, water heating, lights, etc.), and building conditions (e.g. indoor temperature and humidity, hot water temperature, etc.). NREL publishes these profiles at 15-min time granularity for each building unit in a particular release, as well as yearly aggregates. Load are often needed at the hourly or monthly level for anaysis, so `bsf` plans to offer these pre-aggregated datasets in the future to save you time.
+
+- **Building Simulation Input Data**: NREL also makes available the input files they use to run these simulations, which are the building metadata in [HPXML format](https://hpxml.nrel.gov/), equipment and occupancy schedule files, and weather files. You can use these input files to run your own simulations of Buildstock building units, either in EnergyPlus (via [buildstock-batch](https://buildstockbatch.readthedocs.io/en/stable/)) or in [OCHRE](https://www.nrel.gov/grid/ochre), a new building energy simulation tool developed by NREL. OCHRE is meant to be lighter-weight alternative to other numerical simulation softwares such as EnergyPlus or TRNSYS. OCHRE requires as input a building HPXML file that provides information on the building envelope and HVAC and water heating equipment, the schedule files that provide load profiles for non-controllable appliance use such as lights or dishwasher and occupancy levels, and weather files. Each building HPXML file has a corresponding weather station ID based on its location, and `bsf` can fetch this for you too.
 
 ## Installation
 
 ### Prerequisites
 
 - Python 3.9 or higher
-- pip or uv package manager
+- `pip` or `uv` package manager
 
 ### Install from Source
 
@@ -74,7 +78,7 @@ pip install -e .
 
 ## Quick Start
 
-The inputs required for BuildStock Fetch are: product type, release year, weather file type, release version, upgrade scenarios, state, types of files to download, and output directory. Once these inputs have been specified, BuildStock Fetch will retrieve the building ID's that correspond to the selection, and download the files requested to the specified output directory.
+To download data with BuildStock Fetch, you must specify the following variables: product type, release year, weather file type, release version, upgrade scenarios, state, types of files to download, and output directory. Once these inputs have been specified, BuildStock Fetch will first resolved the individual `bldg_ids` correspond to this  selection, and then download the requested files pertaining to each building unit to the specified output directory.
 
 ### Interactive Mode
 
@@ -90,19 +94,24 @@ This will guide you through:
 2. Choosing release year
 3. Choosing the weather file type
 4. Choosing the release version
-5. Selecting the upgrade scenarios (can choose multiple)
-6. Selecting the state (can choose multiple)
-7. Selecting the file types to download (can choose multiple)
+5. Selecting the upgrade scenarios (you can choose multiple)
+6. Selecting the state (you can choose multiple)
+7. Selecting the file types to download (you can choose multiple)
 8. Specifying the output directory for the downloaded files.
 
-The interactive CLI mode only show valid release options and file types based on what's currently available on NREL's public database.
+The interactive CLI mode only shows valid release options and file types, based on what's currently available on NREL's s3 bucket.
+
+#### Downloading a sample
+
+Once all the inputs have been collected, BuildStock Fetch will ask whether to download all files for the release, or just a sample. Each release has around 10,000 to 30,000 building units associated with it. If the user wishes to download just a small sample, they can specify the number of files to download for each state-upgrade version pair.
+
 
 ### Direct Command Line
 
-You can also use direct command line arguments, for example:
+You can also use specify the buildstock release, file types, and geography in one go, using direct command line arguments:
 
 ```bash
-buildstock-fetch \
+bsf \
   --product resstock \
   --release_year 2022 \
   --weather_file tmy3 \
@@ -113,6 +122,8 @@ buildstock-fetch \
   --output_directory ./data
 ```
 
+`bsf` will warn you if you've specified an invalid buildstock release, state, file type, upgrade, or output directory.
+
 ### Output Structure
 
 The `--output_directory` option specifies the top directory where the files will be downloaded. From there, the files will be organized as:
@@ -122,21 +133,17 @@ output_directory/
 └── release_name/
     └── file_type/
         └── state/
-            └── file1
-            └── file2
+            └── bldgid1_file
+            └── bldgid2_file
             └── ...
 ```
-
-### Download All Files vs Sample
-
-Once all the inputs have been collected, BuildStock Fetch will ask whether to download all files for the release or a sample. Each release has around 10,000 to 30,000 building ID's associated with it. If the user wishes to download just a small sample, they can specify the number of files to download for each state-upgrade version pair.
 
 ## Usage Examples
 
 ### Example 1: Download Metadata for California
 
 ```bash
-buildstock-fetch \
+bsf \
   --product resstock \
   --release_year 2022 \
   --weather_file tmy3 \
