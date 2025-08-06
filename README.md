@@ -12,11 +12,18 @@ This library simplifies downloading building characteristics and load curve data
 
 ## Using the library
 
-`buildstock-fetch` is currently in pre-release, so expect some bugs! The tool is not yet available on PyPI. In the meantime, install directly from the GitHub:
+`buildstock-fetch` is available on PyPI and can be installed via:
 
 ```bash
-pip3 install git+https://github.com/switchbox-data/buildstock-fetch.git@main
+pip install buildstock-fetch
 ```
+
+or
+
+```bash
+uv pip install buildstock-fetch
+```
+
 
 ## Developing the library
 
