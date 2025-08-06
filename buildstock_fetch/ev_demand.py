@@ -131,6 +131,9 @@ class EVDemandCalculator:
         self.vehicle_ownership_model: Optional[Any] = None
         self.random_state = random_state
 
+        # Features used for vehicle assignment
+        self.veh_assign_features = ["occupants", "income", "metro"]
+
         # Available battery capacities in kWh
         self.battery_capacities = [12, 40, 60, 90, 120]
 
@@ -162,7 +165,7 @@ class EVDemandCalculator:
         )
 
         # Drop rows with missing values in required features
-        feature_columns = ["occupants", "income", "metro"]
+        feature_columns = self.veh_assign_features
 
         # Drop rows with missing values in required features and target variable
         initial_count = len(pums_df)
@@ -214,7 +217,7 @@ class EVDemandCalculator:
             raise VehicleOwnershipModelError()
 
         # Step 1: Prepare features from metadata
-        feature_columns = ["occupants", "income", "metro"]
+        feature_columns = self.veh_assign_features
         X = df.select(["bldg_id", *feature_columns])
 
         # Validate no missing values in required features
