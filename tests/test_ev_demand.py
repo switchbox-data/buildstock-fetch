@@ -96,11 +96,12 @@ def test_fit_vehicle_ownership_model_caps_vehicles_at_2(calculator):
 def test_fit_vehicle_ownership_model_with_sample_weights(calculator):
     """Test model fitting with sample weights."""
     from pytest import approx
+
     # With fixed random_state=42 and fixed input data, coefficients should be exactly:
     expected_coef = np.array([
         [-0.6273701443561746, -0.5479382238614515, 0.14318094439321308],
         [0.20244784926329684, 0.11506717219026819, 0.4769219156039682],
-        [0.42492229509287793, 0.4328710516711835, -0.6201028599971814]
+        [0.42492229509287793, 0.4328710516711835, -0.6201028599971814],
     ])
     pums_data = pl.DataFrame({
         "occupants": [1, 2, 3, 4],
