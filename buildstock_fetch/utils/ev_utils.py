@@ -105,9 +105,12 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
         msg = f"Metadata file not found: {metadata_path}"
         raise FileNotFoundError(msg)
 
-    # Scan parquet file lazily with bldg_id as string to preserve leading zeros
+    # Scan parquet file and ensure bldg_id is properly formatted with leading zeros
     metadata_df = (
-        pl.scan_parquet(metadata_path, columns_to_dtypes={"bldg_id": pl.Utf8})
+        pl.scan_parquet(metadata_path)
+        .with_columns([
+            pl.col("bldg_id").cast(str).str.zfill(5)  # Ensure 5-digit string with leading zeros
+        ])
         # Select and rename columns
         .select([
             pl.col("bldg_id"),
