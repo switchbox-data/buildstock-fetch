@@ -12,7 +12,7 @@ This library simplifies downloading building characteristics and load curve data
 
 ## Installing the library
 
-`buildstock-fetch` is available on PyPI and can be installed via:
+`buildstock-fetch` is available on [PyPI](https://pypi.org/project/buildstock-fetch/) and can be installed via:
 
 ```bash
 pip install buildstock-fetch
