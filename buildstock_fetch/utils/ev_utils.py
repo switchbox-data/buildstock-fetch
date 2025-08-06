@@ -140,7 +140,7 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
             .alias("income")
         ])
         # Convert income ranges to numeric midpoints
-        .with_columns([pl.col("income").map_elements(assign_income_midpoints).alias("income")])
+        .with_columns([pl.col("income").map_elements(assign_income_midpoints, return_dtype=pl.Int64).alias("income")])
         # Extract last 5 characters from PUMA
         .with_columns([pl.col("puma").str.slice(-5).alias("puma")])
         .collect()
