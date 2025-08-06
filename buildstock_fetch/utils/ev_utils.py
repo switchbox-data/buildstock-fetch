@@ -105,45 +105,43 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
         msg = f"Metadata file not found: {metadata_path}"
         raise FileNotFoundError(msg)
 
-    metadata_df = pl.read_parquet(metadata_path)
-
-    # Select and rename columns
-    metadata_df = metadata_df.select([
-        pl.col("bldg_id"),
-        pl.col("weight"),
-        pl.col("in.puma_metro_status").alias("metro"),
-        pl.col("in.puma").alias("puma"),
-        pl.col("in.income").alias("income"),
-        pl.col("in.occupants").alias("occupants"),
-    ])
-
-    # Process household size - replace "10+" with "10" 
-    metadata_df = metadata_df.with_columns([
-        pl.when(pl.col("occupants") == "10+").then(pl.lit("10")).otherwise(pl.col("occupants")).alias("occupants_temp")
-    ])
-
-    # Now cast to numeric
-    metadata_df = metadata_df.with_columns([pl.col("occupants_temp").cast(pl.Int64).alias("occupants")]).drop(
-        "occupants_temp"
+    # Scan parquet file lazily with bldg_id as string to preserve leading zeros
+    metadata_df = (
+        pl.scan_parquet(metadata_path, columns_to_dtypes={"bldg_id": pl.Utf8})
+        # Select and rename columns
+        .select([
+            pl.col("bldg_id"),
+            pl.col("weight"),
+            pl.col("in.puma_metro_status").alias("metro"),
+            pl.col("in.puma").alias("puma"),
+            pl.col("in.income").alias("income"),
+            pl.col("in.occupants").alias("occupants"),
+        ])
+        # Process household size - replace "10+" with "10" and cast to numeric
+        .with_columns([
+            pl.when(pl.col("occupants") == "10+")
+            .then(pl.lit("10"))
+            .otherwise(pl.col("occupants"))
+            .cast(pl.Int64)
+            .alias("occupants")
+        ])
+        # Process income categories - convert to standard ranges first
+        .with_columns([
+            pl.when(pl.col("income") == "<10000")
+            .then(pl.lit("0-10000"))
+            .when(pl.col("income") == "200000+")
+            .then(pl.lit("200000-400000"))
+            .when(pl.col("income") == "Not Available")
+            .then(pl.lit(None))
+            .otherwise(pl.col("income"))
+            .alias("income")
+        ])
+        # Convert income ranges to numeric midpoints
+        .with_columns([pl.col("income").map_elements(assign_income_midpoints).alias("income")])
+        # Extract last 5 characters from PUMA
+        .with_columns([pl.col("puma").str.slice(-5).alias("puma")])
+        .collect()
     )
-
-    # Process income categories - convert to standard ranges first
-    metadata_df = metadata_df.with_columns([
-        pl.when(pl.col("income") == "<10000")
-        .then(pl.lit("0-10000"))
-        .when(pl.col("income") == "200000+")
-        .then(pl.lit("200000-400000"))
-        .when(pl.col("income") == "Not Available")
-        .then(pl.lit(None))
-        .otherwise(pl.col("income"))
-        .alias("income")
-    ])
-
-    # Convert income ranges to numeric midpoints
-    metadata_df = metadata_df.with_columns([pl.col("income").map_elements(assign_income_midpoints).alias("income")])
-
-    # Extract last 5 characters from PUMA
-    metadata_df = metadata_df.with_columns([pl.col("puma").str.slice(-5).alias("puma")])
 
     return metadata_df
 
@@ -232,10 +230,9 @@ def load_pums_data(pums_path: str, metadata_path: str) -> pl.DataFrame:
     # Convert vehicles to numeric (Int64)
     pums_df = pums_df.with_columns([pl.col("vehicles").cast(pl.Int64)])
 
-    # If metadata_path is provided, join with metro-PUMA mapping
-    if metadata_path and Path(metadata_path).exists():
-        metro_puma_df = load_metro_puma_map(metadata_path)
-        pums_df = pums_df.join(metro_puma_df, on="puma", how="left")
+    # join with metro-puma mapping
+    metro_puma_df = load_metro_puma_map(metadata_path)
+    pums_df = pums_df.join(metro_puma_df, on="puma", how="left")
 
     return pums_df
 
@@ -267,16 +264,20 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
         msg = f"Metadata file not found: {metadata_path}"
         raise FileNotFoundError(msg)
 
-    metro_lookup_df = pl.read_parquet(metadata_path, columns=["in.puma_metro_status", "in.puma"])
-
-    # Select and rename columns
-    metro_lookup_df = metro_lookup_df.select([
-        pl.col("in.puma_metro_status").alias("metro"),
-        pl.col("in.puma").alias("puma"),
-    ])
-
-    # Extract last 5 characters from PUMA and get distinct values
-    metro_lookup_df = metro_lookup_df.with_columns([pl.col("puma").str.slice(-5).alias("puma")]).unique()
+    # Load metadata file lazily and process
+    metro_lookup_df = (
+        pl.scan_parquet(metadata_path)
+        # Select and rename only needed columns
+        .select([
+            pl.col("in.puma_metro_status").alias("metro"),
+            pl.col("in.puma").alias("puma"),
+        ])
+        # Extract last 5 characters from PUMA
+        .with_columns([pl.col("puma").str.slice(-5).alias("puma")])
+        # Drop duplicates
+        .unique()
+        .collect()
+    )
 
     return metro_lookup_df
 
