@@ -75,7 +75,7 @@ install:
 # Download NHTS (National Household Travel Survey) data
 download-nhts:
     echo "🚀 Downloading NHTS data from https://nhts.ornl.gov/media/2022/download/csv.zip"
-    uv run python utils/ev_data/download_nhts_data.py
+    uv run python utils/ev_data/inputs/download_2022_nhts_data.py --output-dir utils/ev_data/inputs
 
 # Download PUMS (Public Use Microdata Sample) data for EV demand calculations
 download-pums:
