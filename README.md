@@ -10,7 +10,7 @@ This library simplifies downloading building characteristics and load curve data
 - **Github repository**: <https://github.com/switchbox-data/buildstock-fetch/>
 - **Documentation** <https://switchbox-data.github.io/buildstock-fetch/>
 
-## Using the library
+## Installing the library
 
 `buildstock-fetch` is available on PyPI and can be installed via:
 
@@ -24,6 +24,27 @@ or
 uv pip install buildstock-fetch
 ```
 
+## Using the library
+
+To use the CLI tool in `buildstock-fetch` run:
+
+```bash
+bsf
+```
+
+to activate the interactive mode. Alternatively, provide the inputs directly. For example,
+
+```bash
+bsf --product resstock --release_year 2022 --weather_file tmy3 --release_version 1 --states CA --file_type "hpxml metadata" --upgrade_id "0 1 2" --output_directory ./CA_data
+```
+
+If the above options don't work, try:
+
+```bash
+python -m buildstock_fetch
+```
+
+For more details about the usage, see [Usage](https://switchbox-data.github.io/buildstock-fetch/usage/)
 
 ## Developing the library
 
