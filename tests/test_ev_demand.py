@@ -25,7 +25,7 @@ def sample_pums_data():
 def sample_metadata():
     """Create sample metadata for testing."""
     return pl.DataFrame({
-        "bldg_id": [1, 2, 3, 4, 5],
+        "bldg_id": ["00001", "00002", "00003", "00004", "00005"],
         "occupants": [1, 2, 3, 4, 2],
         "income": [30000, 50000, 75000, 100000, 45000],
         "metro": ["urban", "urban", "suburban", "suburban", "rural"],
@@ -163,6 +163,8 @@ def test_predict_num_vehicles_without_fitted_model(calculator, sample_metadata):
 def test_predict_num_vehicles_without_metadata(calculator, sample_pums_data):
     """Test that error is raised when no metadata is provided."""
     calculator.fit_vehicle_ownership_model(sample_pums_data)
+    # Clear the metadata_df to test the None case properly
+    calculator.metadata_df = None
 
     with pytest.raises(MetadataDataFrameError):
         calculator.predict_num_vehicles(None)
