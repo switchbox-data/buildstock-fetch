@@ -6,8 +6,8 @@ import polars as pl
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 
-from utils.ev_demand import EVDemandCalculator, EVDemandConfig
 from utils import ev_utils
+from utils.ev_demand import EVDemandCalculator, EVDemandConfig
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
