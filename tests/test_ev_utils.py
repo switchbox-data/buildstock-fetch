@@ -1,7 +1,7 @@
 import pytest
 
-from buildstock_fetch.ev_demand import EVDemandConfig
-from buildstock_fetch.utils.ev_utils import (
+from utils.ev_demand import EVDemandConfig
+from utils.ev_utils import (
     get_census_division_for_state,
 )
 

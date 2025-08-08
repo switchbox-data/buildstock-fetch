@@ -27,7 +27,7 @@ app = typer.Typer(
 
 
 # File configuration
-BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch.utils").joinpath("buildstock_releases.json"))
+BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json"))
 
 
 class InvalidProductError(Exception):
