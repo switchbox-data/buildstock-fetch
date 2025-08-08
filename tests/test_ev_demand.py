@@ -2,7 +2,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from buildstock_fetch.ev_demand import (
+from utils.ev_demand import (
     EVDemandCalculator,
     MetadataDataFrameError,
     VehicleOwnershipModelError,

@@ -2,7 +2,7 @@
 name = "buildstock-fetch"
 version = "1.0.0"
 description = "This library simplifies downloading building characteristics and load curve data from NREL's ResStock and ComStock projects."
-authors = [{ name = "Switchbox", email = "bryan@switch.box" }]
+authors = [{ name = "Switchbox", email = "hello@switch.box" }]
 readme = "README.md"
 keywords = ['python']
 requires-python = ">=3.9,<4.0"
@@ -22,13 +22,7 @@ dependencies = [
     "typer>=0.9.0",
     "rich>=13.9.5",
     "questionary>=1.11.0",
-    "pandas>=2.0.0",
-    "boto3>=1.33.0",
-    "botocore>=1.33.0",
-    "pyarrow>=14.0.1",
     "polars>=0.20.0",
-    "numpy>=1.26.4",
-    "scikit-learn>=1.6.1",
 ]
 
 [project.urls]
@@ -43,6 +37,10 @@ bsf = "buildstock_fetch.main_cli:app"
 dev = [
     "pytest>=7.2.0",
     "pre-commit>=2.20.0",
+    "boto3>=1.33.0",
+    "botocore>=1.33.0",
+    "pyarrow>=14.0.1",
+    "numpy>=1.26.4",
     "tox-uv>=1.11.3",
     "deptry>=0.23.0",
     "mypy>=0.991",
@@ -64,12 +62,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 include-package-data = true
 
-[tool.setuptools.packages.find]
-where = ["."]
+packages = ["buildstock_fetch"]
 
 [tool.setuptools.package-data]
-"buildstock_fetch.utils" = ["*.json", "building_data/*"]
-"buildstock_fetch.utils.building_data" = ["combined_metadata.parquet"]
+"buildstock_fetch" = ["*.json", "building_data/*"]
+"buildstock_fetch.data.building_data" = ["combined_metadata.parquet"]
 
 
 [tool.mypy]
@@ -135,3 +132,6 @@ ignore = [
 
 [tool.ruff.format]
 preview = true
+
+[tool.deptry]
+exclude = ["utils/", "tests/", ".venv/"]
