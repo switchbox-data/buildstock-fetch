@@ -53,6 +53,11 @@ class No15minLoadCurveError(ValueError):
     pass
 
 
+METADATA_DIR = Path(
+    str(files("buildstock_fetch.utils").joinpath("building_data").joinpath("combined_metadata.parquet"))
+)
+
+
 @dataclass
 class RequestedFileTypes:
     hpxml: bool = False
@@ -77,13 +82,28 @@ class BuildingID:
 
     @property
     def base_url(self) -> str:
-        return (
-            f"https://oedi-data-lake.s3.amazonaws.com/"
-            "nrel-pds-building-stock/"
-            "end-use-load-profiles-for-us-building-stock/"
-            f"{self.release_year}/"
-            f"{self.res_com}_{self.weather}_release_{self.release_number}/"
-        )
+        if (
+            self.release_year == "2024"
+            and self.res_com == "resstock"
+            and self.weather == "tmy3"
+            and self.release_number == "1"
+        ):
+            return (
+                f"https://oedi-data-lake.s3.amazonaws.com/"
+                "nrel-pds-building-stock/"
+                "end-use-load-profiles-for-us-building-stock/"
+                f"{self.release_year}/"
+                f"{self.res_com}_dataset_{self.release_year}.{self.release_number}/"
+                f"{self.res_com}_{self.weather}/"
+            )
+        else:
+            return (
+                f"https://oedi-data-lake.s3.amazonaws.com/"
+                "nrel-pds-building-stock/"
+                "end-use-load-profiles-for-us-building-stock/"
+                f"{self.release_year}/"
+                f"{self.res_com}_{self.weather}_release_{self.release_number}/"
+            )
 
     def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""
@@ -190,6 +210,118 @@ class BuildingID:
             )
         else:
             return ""
+
+    def get_annual_load_curve_url(self) -> str:
+        """Generate the S3 download URL for this building."""
+        if self.release_year == "2021":
+            return ""
+        elif self.release_year == "2022" or self.release_year == "2023":
+            return self._build_annual_load_state_url()
+        elif self.release_year == "2024":
+            return self._handle_2024_release_annual_load()
+        elif self.release_year == "2025":
+            return self._handle_2025_release_annual_load()
+        else:
+            return ""
+
+    def _build_annual_load_state_url(self) -> str:
+        """Build the state-level URL for annual load curve data.
+
+        Returns:
+            The constructed URL for the state-level data.
+        """
+        if self.upgrade_id == "0":
+            return (
+                f"{self.base_url}metadata_and_annual_results/"
+                f"by_state/state={self.state}/parquet"
+                f"{self.state}_baseline_metadata_and_annual_results.parquet"
+            )
+        else:
+            return (
+                f"{self.base_url}metadata_and_annual_results/"
+                f"by_state/state={self.state}/parquet"
+                f"{self.state}_up{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
+            )
+
+    def _handle_2024_release_annual_load(self) -> str:
+        """Handle the 2024 release logic for annual load curve URLs.
+
+        Returns:
+            The constructed URL or empty string if not applicable.
+        """
+        if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "2":
+            county = self._get_county_name()
+            if county == "":
+                return ""
+            if self.upgrade_id == "0":
+                return (
+                    f"{self.base_url}metadata_and_annual_results/"
+                    f"by_state_and_county/full/parquet/"
+                    f"state={self.state}/county={county}/"
+                    f"{self.state}_{county}_baseline.parquet"
+                )
+            else:
+                return (
+                    f"{self.base_url}metadata_and_annual_results/"
+                    f"by_state_and_county/full/parquet/"
+                    f"state={self.state}/county={county}/"
+                    f"{self.state}_{county}_upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
+                )
+        elif self.res_com == "resstock" and self.weather == "tmy3" and self.release_number == "1":
+            return ""  # This release has a different structure. Need further development
+        else:
+            return self._build_annual_load_state_url()
+
+    def _handle_2025_release_annual_load(self) -> str:
+        """Handle the 2025 release logic for annual load curve URLs.
+
+        Returns:
+            The constructed URL or empty string if not applicable.
+        """
+        if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "1":
+            county = self._get_county_name()
+            if county == "":
+                return ""
+            else:
+                return (
+                    f"{self.base_url}metadata_and_annual_results/"
+                    "by_state_and_county/full/parquet/"
+                    f"state={self.state}/county={county}/"
+                    f"{self.state}_{county}_upgrade{int(self.upgrade_id)!s}.parquet"
+                )
+        else:
+            return ""
+
+    def _get_county_name(self) -> str:
+        """Get the county-based URL by reading from metadata partition.
+
+        Returns:
+            The constructed URL or empty string if not found.
+        """
+        # Read the specific partition that matches our criteria
+        partition_path = (
+            METADATA_DIR
+            / f"product={self.res_com}"
+            / f"release_year={self.release_year}"
+            / f"weather_file={self.weather}"
+            / f"release_version={self.release_number}"
+            / f"state={self.state}"
+        )
+
+        # Check if the partition exists
+        if not partition_path.exists():
+            return ""
+
+        # Read the parquet files in the specific partition
+        df = pl.read_parquet(str(partition_path))
+        building_row = df.filter(pl.col("bldg_id") == self.bldg_id)
+
+        if building_row.height == 0:
+            return ""
+
+        # Return the county value from the matching row
+        county = building_row.select("county").item()
+        return str(county)
 
     def get_release_name(self) -> str:
         """Generate the release name for this building."""
@@ -377,7 +509,14 @@ def download_bldg_data(
                     # Rename to the specified convention
                     old_path = temp_dir / xml_file
                     new_name = f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml"
-                    new_path = output_dir / bldg_id.get_release_name() / "hpxml" / bldg_id.state / new_name
+                    new_path = (
+                        output_dir
+                        / bldg_id.get_release_name()
+                        / "hpxml"
+                        / bldg_id.state
+                        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+                        / new_name
+                    )
                     new_path.parent.mkdir(parents=True, exist_ok=True)
                     old_path.rename(new_path)
                     downloaded_paths["hpxml"] = new_path
@@ -391,7 +530,14 @@ def download_bldg_data(
                     # Rename to the specified convention
                     old_path = temp_dir / schedule_file
                     new_name = f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
-                    new_path = output_dir / bldg_id.get_release_name() / "schedule" / bldg_id.state / new_name
+                    new_path = (
+                        output_dir
+                        / bldg_id.get_release_name()
+                        / "schedule"
+                        / bldg_id.state
+                        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+                        / new_name
+                    )
                     new_path.parent.mkdir(parents=True, exist_ok=True)
                     old_path.rename(new_path)
                     downloaded_paths["schedule"] = new_path
@@ -417,7 +563,14 @@ def download_metadata(bldg_id: BuildingID, output_dir: Path) -> Path:
         raise NoMetadataError(message)
     response = requests.get(download_url, timeout=30)
     response.raise_for_status()
-    output_file = output_dir / bldg_id.get_release_name() / "metadata" / bldg_id.state / "metadata.parquet"
+    output_file = (
+        output_dir
+        / bldg_id.get_release_name()
+        / "metadata"
+        / bldg_id.state
+        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / "metadata.parquet"
+    )
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "wb") as file:
         file.write(response.content)
@@ -443,6 +596,7 @@ def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
         / bldg_id.get_release_name()
         / "load_curve_15min"
         / bldg_id.state
+        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -475,6 +629,7 @@ def download_15min_load_curve_with_progress(
         / bldg_id.get_release_name()
         / "load_curve_15min"
         / bldg_id.state
+        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -559,7 +714,14 @@ def _download_metadata_with_progress(bldg: BuildingID, output_dir: Path, progres
     progress.update(metadata_task, total=total_size)
 
     # Download with progress
-    output_file = output_dir / bldg.get_release_name() / "metadata" / bldg.state / "metadata.parquet"
+    output_file = (
+        output_dir
+        / bldg.get_release_name()
+        / "metadata"
+        / bldg.state
+        / f"up{str(int(bldg.upgrade_id)).zfill(2)}"
+        / "metadata.parquet"
+    )
     output_file.parent.mkdir(parents=True, exist_ok=True)
     _download_with_progress(download_url, output_file, progress, metadata_task)
 

@@ -185,6 +185,7 @@ def _process_directory_match(
         found_dirs.add("load_curve_hourly")
         found_dirs.add("load_curve_daily")
         found_dirs.add("load_curve_monthly")
+    elif expected == "metadata_and_annual_results":
         found_dirs.add("load_curve_annual")
 
 
@@ -200,7 +201,8 @@ def _check_directory_matches(
     dir_name = prefix["Prefix"].rstrip("/").split("/")[-1]
     for expected in expected_dirs:
         if expected in dir_name and expected not in found_dirs:
-            found_dirs.add(expected)
+            if expected != "metadata_and_annual_results":
+                found_dirs.add(expected)
             _process_directory_match(s3_client, bucket_name, current_prefix, expected, found_dirs)
 
 
@@ -210,7 +212,12 @@ def _find_available_data(s3_client: Any, bucket_name: str, prefix: str) -> list[
     Returns a list of directories that exist, searching up to depth 3.
     """
     found_dirs: set[str] = set()
-    expected_dirs = ["building_energy_model", "metadata", "timeseries_individual_buildings"]
+    expected_dirs = [
+        "building_energy_model",
+        "metadata",
+        "timeseries_individual_buildings",
+        "metadata_and_annual_results",
+    ]
     paginator = s3_client.get_paginator("list_objects_v2")
 
     # Queue for BFS: (prefix, depth)
