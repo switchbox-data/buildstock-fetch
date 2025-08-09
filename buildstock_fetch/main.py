@@ -77,13 +77,28 @@ class BuildingID:
 
     @property
     def base_url(self) -> str:
-        return (
-            f"https://oedi-data-lake.s3.amazonaws.com/"
-            "nrel-pds-building-stock/"
-            "end-use-load-profiles-for-us-building-stock/"
-            f"{self.release_year}/"
-            f"{self.res_com}_{self.weather}_release_{self.release_number}/"
-        )
+        if (
+            self.release_year == "2024"
+            and self.res_com == "resstock"
+            and self.weather == "tmy3"
+            and self.release_number == "1"
+        ):
+            return (
+                f"https://oedi-data-lake.s3.amazonaws.com/"
+                "nrel-pds-building-stock/"
+                "end-use-load-profiles-for-us-building-stock/"
+                f"{self.release_year}/"
+                f"{self.res_com}_dataset_{self.release_year}.{self.release_number}/"
+                f"{self.res_com}_{self.weather}/"
+            )
+        else:
+            return (
+                f"https://oedi-data-lake.s3.amazonaws.com/"
+                "nrel-pds-building-stock/"
+                "end-use-load-profiles-for-us-building-stock/"
+                f"{self.release_year}/"
+                f"{self.res_com}_{self.weather}_release_{self.release_number}/"
+            )
 
     def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""
@@ -188,6 +203,28 @@ class BuildingID:
                 f"state={self.state}/"
                 f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
             )
+        else:
+            return ""
+
+    def get_annual_load_curve_url(self) -> str:
+        """Generate the S3 download URL for this building."""
+        if self.release_year == "2021":
+            return ""
+        elif self.release_year == "2022" or self.release_year == "2023":
+            if self.upgrade_id == "0":
+                return (
+                    f"{self.base_url}metadata_and_annual_results/"
+                    f"by_state/state={self.state}/parquet"
+                    f"{self.state}_baseline_metadata_and_annual_results.parquet"
+                )
+            else:
+                return (
+                    f"{self.base_url}metadata_and_annual_results/"
+                    f"by_state/state={self.state}/parquet"
+                    f"{self.state}_up{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
+                )
+        elif self.release_year == "2024" or self.release_year == "2025":
+            return ""
         else:
             return ""
 
