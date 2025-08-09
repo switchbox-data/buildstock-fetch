@@ -220,33 +220,9 @@ class BuildingID:
         elif self.release_year == "2024":
             return self._handle_2024_release_annual_load()
         elif self.release_year == "2025":
-            return ""  # This release requires the county G-code to be specified. Need further development.
+            return self._handle_2025_release_annual_load()
         else:
             return ""
-
-    def _build_county_url(self, county: str) -> str:
-        """Build the county-specific URL for annual load curve data.
-
-        Args:
-            county: The county name to use in the URL.
-
-        Returns:
-            The constructed URL for the county-specific data.
-        """
-        if self.upgrade_id == "0":
-            return (
-                f"{self.base_url}metadata_and_annual_results/"
-                f"by_state_and_county/full/parquet/"
-                f"state={self.state}/county={county}/"
-                f"{self.state}_{county}_baseline.parquet"
-            )
-        else:
-            return (
-                f"{self.base_url}metadata_and_annual_results/"
-                f"by_state_and_county/full/parquet/"
-                f"state={self.state}/county={county}/"
-                f"{self.state}_{county}_upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
-            )
 
     def _build_annual_load_state_url(self) -> str:
         """Build the state-level URL for annual load curve data.
@@ -274,13 +250,49 @@ class BuildingID:
             The constructed URL or empty string if not applicable.
         """
         if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "2":
-            return self._get_county_based_url()
+            county = self._get_county_name()
+            if county == "":
+                return ""
+            if self.upgrade_id == "0":
+                return (
+                    f"{self.base_url}metadata_and_annual_results/"
+                    f"by_state_and_county/full/parquet/"
+                    f"state={self.state}/county={county}/"
+                    f"{self.state}_{county}_baseline.parquet"
+                )
+            else:
+                return (
+                    f"{self.base_url}metadata_and_annual_results/"
+                    f"by_state_and_county/full/parquet/"
+                    f"state={self.state}/county={county}/"
+                    f"{self.state}_{county}_upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
+                )
         elif self.res_com == "resstock" and self.weather == "tmy3" and self.release_number == "1":
             return ""  # This release has a different structure. Need further development
         else:
             return self._build_annual_load_state_url()
 
-    def _get_county_based_url(self) -> str:
+    def _handle_2025_release_annual_load(self) -> str:
+        """Handle the 2025 release logic for annual load curve URLs.
+
+        Returns:
+            The constructed URL or empty string if not applicable.
+        """
+        if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "1":
+            county = self._get_county_name()
+            if county == "":
+                return ""
+            else:
+                return (
+                    f"{self.base_url}metadata_and_annual_results/"
+                    "by_state_and_county/full/parquet/"
+                    f"state={self.state}/county={county}/"
+                    f"{self.state}_{county}_upgrade{int(self.upgrade_id)!s}.parquet"
+                )
+        else:
+            return ""
+
+    def _get_county_name(self) -> str:
         """Get the county-based URL by reading from metadata partition.
 
         Returns:
@@ -309,7 +321,7 @@ class BuildingID:
 
         # Return the county value from the matching row
         county = building_row.select("county").item()
-        return self._build_county_url(county)
+        return str(county)
 
     def get_release_name(self) -> str:
         """Generate the release name for this building."""
