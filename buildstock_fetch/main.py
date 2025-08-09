@@ -223,8 +223,26 @@ class BuildingID:
                     f"by_state/state={self.state}/parquet"
                     f"{self.state}_up{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
                 )
-        elif self.release_year == "2024" or self.release_year == "2025":
-            return ""
+        elif self.release_year == "2024":
+            if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "2":
+                return ""  # This release requires the county G-code to be specified. Need further development.
+            elif self.res_com == "resstock" and self.weather == "tmy3" and self.release_number == "1":
+                return ""  # This release has a different structure. Need further development
+            else:
+                if self.upgrade_id == "0":
+                    return (
+                        f"{self.base_url}metadata_and_annual_results/"
+                        f"by_state/state={self.state}/parquet"
+                        f"{self.state}_baseline_metadata_and_annual_results.parquet"
+                    )
+                else:
+                    return (
+                        f"{self.base_url}metadata_and_annual_results/"
+                        f"by_state/state={self.state}/parquet"
+                        f"{self.state}_up{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
+                    )
+        elif self.release_year == "2025":
+            return ""  # This release requires the county G-code to be specified. Need further development.
         else:
             return ""
 
