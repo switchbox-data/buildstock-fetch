@@ -53,6 +53,12 @@ class No15minLoadCurveError(ValueError):
     pass
 
 
+class NoAnnualLoadCurveError(ValueError):
+    """Raised when annual load curve is not available for a release."""
+
+    pass
+
+
 METADATA_DIR = Path(
     str(files("buildstock_fetch.utils").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
@@ -838,6 +844,133 @@ def _download_metadata_single(
     downloaded_paths.append(metadata_file)
 
 
+def download_annual_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
+    """Download the annual load curve for a given building.
+
+    Args:
+        bldg_id: A BuildingID object to download annual load curve for.
+        output_dir: Directory to save the downloaded annual load curve.
+
+    Returns:
+        Path to the downloaded file.
+    """
+    download_url = bldg_id.get_annual_load_curve_url()
+    if download_url == "":
+        message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
+        raise NoAnnualLoadCurveError(message)
+    response = requests.get(download_url, timeout=30)
+    response.raise_for_status()
+    output_file = (
+        output_dir
+        / bldg_id.get_release_name()
+        / "annual_load_curve"
+        / bldg_id.state
+        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_annual_load_curve.parquet"
+    )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, "wb") as file:
+        file.write(response.content)
+    return output_file
+
+
+def download_annual_load_curve_with_progress(
+    bldg_id: BuildingID, output_dir: Path, progress: Optional[Progress] = None, task_id: Optional[TaskID] = None
+) -> Path:
+    """Download the annual load curve for a given building with progress tracking.
+
+    Args:
+        bldg_id: A BuildingID object to download annual load curve for.
+        output_dir: Directory to save the downloaded annual load curve.
+        progress: Optional Rich progress object for tracking download progress.
+        task_id: Optional task ID for progress tracking.
+
+    Returns:
+        Path to the downloaded file.
+    """
+    download_url = bldg_id.get_annual_load_curve_url()
+    if download_url == "":
+        message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
+        raise NoAnnualLoadCurveError(message)
+
+    output_file = (
+        output_dir
+        / bldg_id.get_release_name()
+        / "annual_load_curve"
+        / bldg_id.state
+        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_annual_load_curve.parquet"
+    )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Download with progress tracking if progress object is provided
+    if progress and task_id is not None:
+        _download_with_progress(download_url, output_file, progress, task_id)
+    else:
+        response = requests.get(download_url, timeout=30)
+        response.raise_for_status()
+        with open(output_file, "wb") as file:
+            file.write(response.content)
+
+    return output_file
+
+
+def _download_annual_load_curves_parallel(
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    max_workers: int,
+    progress: Progress,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+) -> None:
+    """Download annual load curves in parallel with progress tracking."""
+    # Create progress tasks for annual load curve downloads
+    annual_load_curve_tasks = {}
+    for i, bldg_id in enumerate(bldg_ids):
+        task_id = progress.add_task(
+            f"[magenta]Annual load curve {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
+            total=0,  # Will be updated when we get the file size
+        )
+        annual_load_curve_tasks[i] = task_id
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Create a modified version of the download function that uses the specific task IDs
+        def download_annual_with_task_id(bldg_id: BuildingID, output_dir: Path, task_id: TaskID) -> Path:
+            return download_annual_load_curve_with_progress(bldg_id, output_dir, progress, task_id)
+
+        future_to_bldg = {
+            executor.submit(download_annual_with_task_id, bldg_id, output_dir, annual_load_curve_tasks[i]): bldg_id
+            for i, bldg_id in enumerate(bldg_ids)
+        }
+
+        for future in concurrent.futures.as_completed(future_to_bldg):
+            bldg_id = future_to_bldg[future]
+            try:
+                output_file = future.result()
+                downloaded_paths.append(output_file)
+            except NoAnnualLoadCurveError:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "annual_load_curve"
+                    / bldg_id.state
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_annual_load_curve.parquet"
+                )
+                failed_downloads.append(str(output_file))
+                console.print(f"[red]Annual load curve not available for {bldg_id.get_release_name()}[/red]")
+            except Exception as e:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "annual_load_curve"
+                    / bldg_id.state
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_annual_load_curve.parquet"
+                )
+                failed_downloads.append(str(output_file))
+                console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
+
+
 def _print_download_summary(downloaded_paths: list[Path], failed_downloads: list[str], console: Console) -> None:
     """Print a summary of the download results."""
     console.print("\n[bold green]Download complete![/bold green]")
@@ -873,6 +1006,8 @@ def fetch_bldg_data(
         total_files += 1  # Add metadata file
     if file_type_obj.load_curve_15min:
         total_files += len(bldg_ids)  # Add 15-minute load curve files
+    if file_type_obj.load_curve_annual:
+        total_files += len(bldg_ids)  # Add annual load curve files
 
     console.print(f"\n[bold blue]Starting download of {total_files} files...[/bold blue]")
 
@@ -903,6 +1038,12 @@ def fetch_bldg_data(
         # Get 15 min load profile timeseries if requested.
         if file_type_obj.load_curve_15min:
             _download_15min_load_curves_parallel(
+                bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+            )
+
+        # Get annual load curve if requested.
+        if file_type_obj.load_curve_annual:
+            _download_annual_load_curves_parallel(
                 bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
             )
 
