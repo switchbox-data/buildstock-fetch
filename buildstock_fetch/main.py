@@ -377,7 +377,14 @@ def download_bldg_data(
                     # Rename to the specified convention
                     old_path = temp_dir / xml_file
                     new_name = f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}.xml"
-                    new_path = output_dir / bldg_id.get_release_name() / "hpxml" / bldg_id.state / new_name
+                    new_path = (
+                        output_dir
+                        / bldg_id.get_release_name()
+                        / "hpxml"
+                        / bldg_id.state
+                        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+                        / new_name
+                    )
                     new_path.parent.mkdir(parents=True, exist_ok=True)
                     old_path.rename(new_path)
                     downloaded_paths["hpxml"] = new_path
@@ -391,7 +398,14 @@ def download_bldg_data(
                     # Rename to the specified convention
                     old_path = temp_dir / schedule_file
                     new_name = f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{bldg_id.upgrade_id.zfill(2)}_schedule.csv"
-                    new_path = output_dir / bldg_id.get_release_name() / "schedule" / bldg_id.state / new_name
+                    new_path = (
+                        output_dir
+                        / bldg_id.get_release_name()
+                        / "schedule"
+                        / bldg_id.state
+                        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+                        / new_name
+                    )
                     new_path.parent.mkdir(parents=True, exist_ok=True)
                     old_path.rename(new_path)
                     downloaded_paths["schedule"] = new_path
@@ -417,7 +431,14 @@ def download_metadata(bldg_id: BuildingID, output_dir: Path) -> Path:
         raise NoMetadataError(message)
     response = requests.get(download_url, timeout=30)
     response.raise_for_status()
-    output_file = output_dir / bldg_id.get_release_name() / "metadata" / bldg_id.state / "metadata.parquet"
+    output_file = (
+        output_dir
+        / bldg_id.get_release_name()
+        / "metadata"
+        / bldg_id.state
+        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / "metadata.parquet"
+    )
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "wb") as file:
         file.write(response.content)
@@ -443,6 +464,7 @@ def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
         / bldg_id.get_release_name()
         / "load_curve_15min"
         / bldg_id.state
+        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -475,6 +497,7 @@ def download_15min_load_curve_with_progress(
         / bldg_id.get_release_name()
         / "load_curve_15min"
         / bldg_id.state
+        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -559,7 +582,14 @@ def _download_metadata_with_progress(bldg: BuildingID, output_dir: Path, progres
     progress.update(metadata_task, total=total_size)
 
     # Download with progress
-    output_file = output_dir / bldg.get_release_name() / "metadata" / bldg.state / "metadata.parquet"
+    output_file = (
+        output_dir
+        / bldg.get_release_name()
+        / "metadata"
+        / bldg.state
+        / f"up{str(int(bldg.upgrade_id)).zfill(2)}"
+        / "metadata.parquet"
+    )
     output_file.parent.mkdir(parents=True, exist_ok=True)
     _download_with_progress(download_url, output_file, progress, metadata_task)
 
