@@ -62,6 +62,7 @@ class NoAnnualLoadCurveError(ValueError):
 METADATA_DIR = Path(
     str(files("buildstock_fetch.utils").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
+RELEASE_JSON_FILE = Path(str(files("buildstock_fetch.utils").joinpath("buildstock_releases.json")))
 
 
 @dataclass
@@ -110,6 +111,16 @@ class BuildingID:
                 f"{self.release_year}/"
                 f"{self.res_com}_{self.weather}_release_{self.release_number}/"
             )
+
+    def _validate_requested_file_type_availability(self, file_type: str) -> bool:
+        """Validate the requested file type is available for this release."""
+        with open(RELEASE_JSON_FILE) as f:
+            releases_data = json.load(f)
+        release_name = self.get_release_name()
+        if release_name not in releases_data:
+            return False
+        release_data = releases_data[release_name]
+        return file_type in release_data["available_data"]
 
     def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""
@@ -404,10 +415,6 @@ def fetch_bldg_ids(
     Returns:
         A list of building ID's for the given state.
     """
-    # Construct the absolute path to the parquet directory
-    parquet_dir = Path(
-        str(files("buildstock_fetch.utils").joinpath("building_data").joinpath("combined_metadata.parquet"))
-    )
 
     if product == "resstock":
         product_str = "res"
@@ -422,7 +429,7 @@ def fetch_bldg_ids(
 
     # Read the specific partition that matches our criteria
     partition_path = (
-        parquet_dir
+        METADATA_DIR
         / f"product={product}"
         / f"release_year={release_year}"
         / f"weather_file={weather_file}"
