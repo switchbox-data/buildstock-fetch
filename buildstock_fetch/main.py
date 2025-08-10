@@ -246,7 +246,7 @@ class BuildingID:
             return (
                 f"{self.base_url}metadata_and_annual_results/"
                 f"by_state/state={self.state}/parquet/"
-                f"{self.state}_up{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
+                f"{self.state}_upgrade{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
             )
 
     def _handle_2024_release_annual_load(self) -> str:
@@ -844,36 +844,6 @@ def _download_metadata_single(
     downloaded_paths.append(metadata_file)
 
 
-def download_annual_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
-    """Download the annual load curve for a given building.
-
-    Args:
-        bldg_id: A BuildingID object to download annual load curve for.
-        output_dir: Directory to save the downloaded annual load curve.
-
-    Returns:
-        Path to the downloaded file.
-    """
-    download_url = bldg_id.get_annual_load_curve_url()
-    if download_url == "":
-        message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
-        raise NoAnnualLoadCurveError(message)
-    response = requests.get(download_url, timeout=30)
-    response.raise_for_status()
-    output_file = (
-        output_dir
-        / bldg_id.get_release_name()
-        / "annual_load_curve"
-        / bldg_id.state
-        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_annual_load_curve.parquet"
-    )
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, "wb") as file:
-        file.write(response.content)
-    return output_file
-
-
 def download_annual_load_curve_with_progress(
     bldg_id: BuildingID, output_dir: Path, progress: Optional[Progress] = None, task_id: Optional[TaskID] = None
 ) -> Path:
@@ -896,10 +866,10 @@ def download_annual_load_curve_with_progress(
     output_file = (
         output_dir
         / bldg_id.get_release_name()
-        / "annual_load_curve"
+        / "load_curve_annual"
         / bldg_id.state
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_annual_load_curve.parquet"
+        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -953,19 +923,20 @@ def _download_annual_load_curves_parallel(
                 output_file = (
                     output_dir
                     / bldg_id.get_release_name()
-                    / "annual_load_curve"
+                    / "load_curve_annual"
                     / bldg_id.state
-                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_annual_load_curve.parquet"
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
                 )
                 failed_downloads.append(str(output_file))
                 console.print(f"[red]Annual load curve not available for {bldg_id.get_release_name()}[/red]")
+                raise
             except Exception as e:
                 output_file = (
                     output_dir
                     / bldg_id.get_release_name()
-                    / "annual_load_curve"
+                    / "load_curve_annual"
                     / bldg_id.state
-                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_annual_load_curve.parquet"
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
                 )
                 failed_downloads.append(str(output_file))
                 console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
@@ -1053,7 +1024,22 @@ def fetch_bldg_data(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    bldg_ids = fetch_bldg_ids(
-        product="resstock", release_year="2024", weather_file="amy2018", release_version="2", upgrade_id="0", state="NY"
-    )
-    print(bldg_ids[:10])
+    bldg_ids = [
+        BuildingID(
+            bldg_id=9,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="1",
+            state="AL",
+        ),
+        BuildingID(
+            bldg_id=10, release_year="2022", res_com="resstock", weather="amy2018", upgrade_id="0", release_number="1.1"
+        ),
+    ]
+    file_type = ("load_curve_annual",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)

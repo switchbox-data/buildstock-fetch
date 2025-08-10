@@ -9,6 +9,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from buildstock_fetch.main import (
     BuildingID,
     No15minLoadCurveError,
+    NoAnnualLoadCurveError,
     NoBuildingDataError,
     NoMetadataError,
     RequestedFileTypes,
@@ -411,17 +412,50 @@ def test_fetch_15min_load_curve(cleanup_downloads):
 
 
 def test_fetch_annual_load_curve(cleanup_downloads):
-    bldg_ids = [BuildingID(bldg_id=7), BuildingID(bldg_id=8), BuildingID(bldg_id=11)]
-    file_type = ("annual_load_curve",)
+    # 2021 release - should raise NoAnnualLoadCurveError
+    bldg_ids = [BuildingID(bldg_id=7, release_year="2021", res_com="resstock", weather="tmy3", upgrade_id="1")]
+    file_type = ("load_curve_annual",)
+    output_dir = Path("data")
+
+    with pytest.raises(
+        NoAnnualLoadCurveError, match=f"Annual load curve is not available for {bldg_ids[0].get_release_name()}"
+    ):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
+
+    bldg_ids = [BuildingID(bldg_id=8, release_year="2021", res_com="comstock", weather="amy2018", upgrade_id="1")]
+    file_type = ("load_curve_annual",)
+    output_dir = Path("data")
+
+    with pytest.raises(
+        NoAnnualLoadCurveError, match=f"Annual load curve is not available for {bldg_ids[0].get_release_name()}"
+    ):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
+
+    # 2022 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=9,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="1",
+            state="AL",
+        ),
+        BuildingID(
+            bldg_id=10, release_year="2022", res_com="resstock", weather="amy2018", upgrade_id="0", release_number="1.1"
+        ),
+    ]
+    file_type = ("load_curve_annual",)
     output_dir = Path("data")
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    assert len(downloaded_paths) == 3
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/annual_load_curve/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00_annual_load_curve.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
     ).exists()
+    bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_ids[1].get_release_name()}/annual_load_curve/{bldg_ids[1].state}/up{str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00_annual_load_curve.parquet"
-    ).exists()
-    assert Path(
-        f"data/{bldg_ids[2].get_release_name()}/annual_load_curve/{bldg_ids[2].state}/up{str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00_annual_load_curve.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
     ).exists()
