@@ -239,13 +239,13 @@ class BuildingID:
         if self.upgrade_id == "0":
             return (
                 f"{self.base_url}metadata_and_annual_results/"
-                f"by_state/state={self.state}/parquet"
+                f"by_state/state={self.state}/parquet/"
                 f"{self.state}_baseline_metadata_and_annual_results.parquet"
             )
         else:
             return (
                 f"{self.base_url}metadata_and_annual_results/"
-                f"by_state/state={self.state}/parquet"
+                f"by_state/state={self.state}/parquet/"
                 f"{self.state}_up{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
             )
 
