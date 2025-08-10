@@ -124,6 +124,10 @@ class BuildingID:
 
     def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""
+        if not self._validate_requested_file_type_availability(
+            "hpxml"
+        ) or not self._validate_requested_file_type_availability("schedule"):
+            return ""
         if self.release_year == "2021":
             return ""
         elif self.release_year == "2022":
@@ -156,7 +160,8 @@ class BuildingID:
 
     def get_metadata_url(self) -> str:
         """Generate the S3 download URL for this building."""
-
+        if not self._validate_requested_file_type_availability("metadata"):
+            return ""
         if self.release_year == "2021":
             return f"{self.base_url}metadata/metadata.parquet"
         elif self.release_year == "2022" or self.release_year == "2023":
@@ -190,6 +195,8 @@ class BuildingID:
 
     def get_15min_load_curve_url(self) -> str:
         """Generate the S3 download URL for this building."""
+        if not self._validate_requested_file_type_availability("load_curve_15min"):
+            return ""
         if self.release_year == "2021":
             if self.upgrade_id != "0":
                 return ""  # This release only has baseline timeseries
@@ -230,6 +237,8 @@ class BuildingID:
 
     def get_annual_load_curve_url(self) -> str:
         """Generate the S3 download URL for this building."""
+        if not self._validate_requested_file_type_availability("load_curve_annual"):
+            return ""
         if self.release_year == "2021":
             return ""
         elif self.release_year == "2022" or self.release_year == "2023":
