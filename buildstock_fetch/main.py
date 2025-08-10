@@ -230,6 +230,35 @@ class BuildingID:
         else:
             return ""
 
+    def get_annual_load_curve_filename(self) -> str:
+        """Generate the filename for the annual load curve."""
+        if self.release_year == "2021":
+            return ""
+        elif self.release_year == "2022" or self.release_year == "2023":
+            return f"{self.state}_upgrade{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
+        elif self.release_year == "2024":
+            if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "2":
+                county = self._get_county_name()
+                if county == "":
+                    return ""
+                else:
+                    return f"{self.state}_{county}_upgrade{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
+            elif self.res_com == "resstock" and self.weather == "tmy3" and self.release_number == "1":
+                return ""
+            else:
+                return f"{self.state}_upgrade{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
+        elif self.release_year == "2025":
+            if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "1":
+                county = self._get_county_name()
+                if county == "":
+                    return ""
+                else:
+                    return f"{self.state}_{county}_upgrade{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
+            else:
+                return ""
+        else:
+            return ""
+
     def _build_annual_load_state_url(self) -> str:
         """Build the state-level URL for annual load curve data.
 
@@ -326,7 +355,7 @@ class BuildingID:
             return ""
 
         # Return the county value from the matching row
-        county = building_row.select("county").item()
+        county = building_row[0].select("county").item()
         return str(county)
 
     def get_release_name(self) -> str:
@@ -863,14 +892,24 @@ def download_annual_load_curve_with_progress(
         message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
         raise NoAnnualLoadCurveError(message)
 
+    output_filename = bldg_id.get_annual_load_curve_filename()
+    if output_filename == "":
+        message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
+        raise NoAnnualLoadCurveError(message)
+
     output_file = (
         output_dir
         / bldg_id.get_release_name()
         / "load_curve_annual"
         / bldg_id.state
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
+        / output_filename
     )
+
+    # If the file already exists, return it. We only need to download the file for each unique annual load curve.
+    if output_file.exists():
+        return output_file
+
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Download with progress tracking if progress object is provided
@@ -1026,20 +1065,23 @@ def fetch_bldg_data(
 if __name__ == "__main__":  # pragma: no cover
     bldg_ids = [
         BuildingID(
-            bldg_id=9,
-            release_year="2022",
-            res_com="resstock",
-            weather="tmy3",
+            bldg_id=5634,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
             upgrade_id="1",
-            release_number="1",
+            release_number="2",
             state="AL",
         ),
         BuildingID(
-            bldg_id=10, release_year="2022", res_com="resstock", weather="amy2018", upgrade_id="0", release_number="1.1"
+            bldg_id=78270,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="1",
+            release_number="2",
+            state="DE",
         ),
     ]
-    file_type = ("load_curve_annual",)
-    output_dir = Path("data")
-    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    print(downloaded_paths)
-    print(failed_downloads)
+    for bldg_id in bldg_ids:
+        print(bldg_id._get_county_name())

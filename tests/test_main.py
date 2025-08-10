@@ -453,22 +453,17 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     # 2023 release - should work fine
     bldg_ids = [
         BuildingID(
-            bldg_id=9,
-            release_year="2023",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="1",
-            release_number="1",
+            bldg_id=9, release_year="2023", res_com="comstock", weather="amy2018", upgrade_id="1", release_number="1"
         ),
         BuildingID(
             bldg_id=10, release_year="2023", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="2"
@@ -481,9 +476,109 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+    ).exists()
+
+    # 2024 comstock amy2018 v2 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=5634,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="1",
+            release_number="2",
+            state="AL",
+        ),
+        BuildingID(
+            bldg_id=78270,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="1",
+            release_number="2",
+            state="DE",
+        ),
+    ]
+    file_type = ("load_curve_annual",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+    ).exists()
+
+    # 2024 resstock tmy3 v1 release - should crash
+    bldg_ids = [
+        BuildingID(
+            bldg_id=100000,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=100058,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="2",
+            release_number="1",
+            state="NY",
+        ),
+    ]
+    file_type = ("load_curve_annual",)
+    output_dir = Path("data")
+
+    with pytest.raises(
+        NoAnnualLoadCurveError, match=f"Annual load curve is not available for {bldg_ids[0].get_release_name()}"
+    ):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
+
+    # 2025 comstock amy2018 v1 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=61336,
+            release_year="2025",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="FL",
+        ),
+        BuildingID(
+            bldg_id=52360,
+            release_year="2025",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="CT",
+        ),
+    ]
+    file_type = ("load_curve_annual",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
