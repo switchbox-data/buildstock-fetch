@@ -174,19 +174,31 @@ def _find_and_process_model_file(s3_client: Any, bucket_name: str, prefix: str) 
 
 
 def _process_directory_match(
-    s3_client: Any, bucket_name: str, current_prefix: str, expected: str, found_dirs: set[str]
+    s3_client: Any, bucket_name: str, current_prefix: str, expected: str, found_dirs: set[str], expected_dirs: list[str]
 ) -> None:
     """Process a matched directory and update found_dirs accordingly."""
     if expected == "building_energy_model":
         available_data = _find_and_process_model_file(s3_client, bucket_name, current_prefix)
         found_dirs.update(available_data - {"building_energy_model"})
+        expected_dirs.remove("building_energy_model")
+        expected_dirs.remove("model_and_schedule_files")
+    elif expected == "model_and_schedule_files":
+        available_data = _find_and_process_model_file(s3_client, bucket_name, current_prefix)
+        found_dirs.update(available_data - {"model_and_schedule_files"})
+        expected_dirs.remove("building_energy_model")
+        expected_dirs.remove("model_and_schedule_files")
     elif expected == "timeseries_individual_buildings":
         found_dirs.add("load_curve_15min")
         found_dirs.add("load_curve_hourly")
         found_dirs.add("load_curve_daily")
         found_dirs.add("load_curve_monthly")
+        expected_dirs.remove("timeseries_individual_buildings")
     elif expected == "metadata_and_annual_results":
         found_dirs.add("load_curve_annual")
+        expected_dirs.remove("metadata_and_annual_results")
+    elif expected == "metadata":
+        found_dirs.add("metadata")
+        expected_dirs.remove("metadata")
 
 
 def _check_directory_matches(
@@ -203,17 +215,18 @@ def _check_directory_matches(
         if expected in dir_name and expected not in found_dirs:
             if expected != "metadata_and_annual_results":
                 found_dirs.add(expected)
-            _process_directory_match(s3_client, bucket_name, current_prefix, expected, found_dirs)
+            _process_directory_match(s3_client, bucket_name, current_prefix, expected, found_dirs, expected_dirs)
 
 
 def _find_available_data(s3_client: Any, bucket_name: str, prefix: str) -> list[str]:
     """
     Find the available data directories (building_energy_model, metadata, timeseries_individual_buildings).
-    Returns a list of directories that exist, searching up to depth 3.
+    Returns a list of directories that exist, searching up to depth 2.
     """
     found_dirs: set[str] = set()
     expected_dirs = [
         "building_energy_model",
+        "model_and_schedule_files",
         "metadata",
         "timeseries_individual_buildings",
         "metadata_and_annual_results",
@@ -224,9 +237,9 @@ def _find_available_data(s3_client: Any, bucket_name: str, prefix: str) -> list[
     queue = [(prefix, 0)]
     visited = set()
 
-    while queue and len(found_dirs) < len(expected_dirs):
+    while queue and len(expected_dirs) > 0:
         current_prefix, depth = queue.pop(0)
-        if depth > 2 or current_prefix in visited:
+        if depth > 1 or current_prefix in visited:
             continue
 
         visited.add(current_prefix)
@@ -242,9 +255,13 @@ def _find_available_data(s3_client: Any, bucket_name: str, prefix: str) -> list[
 
                 # Then add subdirectories to queue for next level
                 for prefix_obj in page["CommonPrefixes"]:
+                    print(str(prefix_obj["Prefix"]))
+                    print(depth)
+                    print(found_dirs)
                     queue.append((str(prefix_obj["Prefix"]), depth + 1))
 
     found_dirs.discard("building_energy_model")
+    found_dirs.discard("model_and_schedule_files")
     found_dirs.discard("timeseries_individual_buildings")
     return list(found_dirs)
 
