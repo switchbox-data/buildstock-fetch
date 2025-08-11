@@ -1,6 +1,5 @@
 import concurrent.futures
 import json
-import os
 import zipfile
 from dataclasses import asdict, dataclass
 from importlib.resources import files
@@ -212,8 +211,7 @@ def _validate_release_name(release_name: str) -> bool:
     """
     # Read the valid release names from the JSON file
     releases_file = files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")
-    with open(str(releases_file)) as f:
-        releases_data = json.load(f)
+    releases_data = json.loads(Path(str(releases_file)).read_text(encoding="utf-8"))
 
     # Get the top-level keys as valid release names
     valid_release_names = list(releases_data.keys())
@@ -304,7 +302,8 @@ def _download_with_progress(url: str, output_file: Path, progress: Progress, tas
 
     downloaded_size = 0
 
-    with open(output_file, "wb") as file:
+    # For streaming downloads, we still need the traditional approach for progress tracking
+    with open(str(output_file), "wb") as file:
         for chunk in response.iter_content(chunk_size=8192):
             if chunk:
                 file.write(chunk)
@@ -337,7 +336,7 @@ def download_bldg_data(
     if isinstance(output_dir, str):
         output_dir = Path(output_dir)
     if not output_dir.exists():
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     # Create a unique temporary directory for this building to avoid race conditions
     temp_dir = output_dir / f"temp_{str(bldg_id.bldg_id).zfill(7)}_{bldg_id.upgrade_id}"
@@ -361,8 +360,7 @@ def download_bldg_data(
         else:
             response = requests.get(download_url, timeout=30)
             response.raise_for_status()
-            with open(output_file, "wb") as file:
-                file.write(response.content)
+            output_file.write_bytes(response.content)
 
         # Extract specific files based on file_type
         with zipfile.ZipFile(output_file, "r") as zip_ref:
@@ -419,8 +417,7 @@ def download_metadata(bldg_id: BuildingID, output_dir: Path) -> Path:
     response.raise_for_status()
     output_file = output_dir / bldg_id.get_release_name() / "metadata" / bldg_id.state / "metadata.parquet"
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, "wb") as file:
-        file.write(response.content)
+    output_file.write_bytes(response.content)
     return output_file
 
 
@@ -446,8 +443,7 @@ def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, "wb") as file:
-        file.write(response.content)
+    output_file.write_bytes(response.content)
     return output_file
 
 
@@ -485,8 +481,7 @@ def download_15min_load_curve_with_progress(
     else:
         response = requests.get(download_url, timeout=30)
         response.raise_for_status()
-        with open(output_file, "wb") as file:
-            file.write(response.content)
+        output_file.write_bytes(response.content)
 
     return output_file
 
