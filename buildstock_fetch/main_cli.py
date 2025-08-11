@@ -219,16 +219,14 @@ def _get_file_type_options_grouped(release_name: str) -> list[dict]:
 
 def _get_available_releases_names() -> list[str]:
     # Read the buildstock releases JSON file
-    with open(BUILDSTOCK_RELEASES_FILE) as f:
-        buildstock_releases = json.load(f)
+    buildstock_releases = json.loads(Path(BUILDSTOCK_RELEASES_FILE).read_text(encoding="utf-8"))
 
     # Return the top-level keys as release options
     return list(buildstock_releases.keys())
 
 
 def _get_all_available_releases() -> dict[str, dict]:
-    with open(BUILDSTOCK_RELEASES_FILE) as f:
-        buildstock_releases = json.load(f)
+    buildstock_releases = json.loads(Path(BUILDSTOCK_RELEASES_FILE).read_text(encoding="utf-8"))
     return cast(dict[str, dict], buildstock_releases)
 
 
