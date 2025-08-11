@@ -42,7 +42,7 @@ def resolve_weather_station_id(
 
     # Prepare data for DataFrame
     data = []
-    total_buildings = len(bldg_ids[:10])
+    total_buildings = len(bldg_ids)
 
     print(f"Processing {total_buildings} building IDs...")
 
@@ -59,7 +59,9 @@ def resolve_weather_station_id(
     ) as progress:
         task = progress.add_task("Processing buildings", total=total_buildings, current="", weather_station="")
 
-        for bldg_id in bldg_ids[:10]:
+        start_time = time.time()
+
+        for count, bldg_id in enumerate(bldg_ids):
             weather_station_name = download_and_extract_weather_station(bldg_id)
 
             data.append({
@@ -73,12 +75,21 @@ def resolve_weather_station_id(
                 "weather_station_name": weather_station_name,
             })
 
+            elapsed_time = time.time() - start_time
+            avg_time_per_building = elapsed_time / count if count > 0 else 0
+
             # Update progress bar
             progress.update(
                 task,
                 advance=1,
                 current=f"Current: {bldg_id.bldg_id}",
                 weather_station=f"Weather: {weather_station_name}",
+            )
+
+            # Show progress count and average time in description
+            progress.update(
+                task,
+                description=f"Processing buildings ({count}/{total_buildings}) - Avg: {avg_time_per_building:.2f}s/building",
             )
 
     # Create Polars DataFrame
