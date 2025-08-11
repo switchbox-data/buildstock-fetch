@@ -63,6 +63,7 @@ class NoDateRangeError(Exception):
     pass
 
 
+
 @dataclass
 class EVDemandConfig:
     state: str
@@ -75,11 +76,7 @@ class EVDemandConfig:
 
     def __post_init__(self) -> None:
         if self.metadata_path is None:
-            self.metadata_path = str(
-                files("buildstock_fetch")
-                .joinpath("data")
-                .joinpath(f"{self.release}/metadata/{self.state}/metadata.parquet")
-            )
+            self.metadata_path = f"{BASEPATH}/ev_data/inputs/{self.release}/metadata/{self.state}/metadata.parquet"
         if self.pums_path is None:
             self.pums_path = f"{BASEPATH}/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
         if self.weather_path is None:
@@ -291,10 +288,10 @@ class EVDemandCalculator:
         predictions_decoded = self.target_encoder.inverse_transform(predictions_encoded)
 
         # Add predictions to original DataFrame
-        result_df = df.with_columns(pl.Series(predictions_decoded).alias("vehicles"))
+        bldg_veh_df = df.with_columns(
+            pl.Series(predictions_decoded).alias("vehicles"))
 
-        return result_df
-
+        return bldg_veh_df
     def find_best_match(
         self, target_income: int, target_occupants: int, target_vehicles: int, weekday: bool = True
     ) -> tuple[str, str]:
@@ -367,7 +364,7 @@ class EVDemandCalculator:
         Returns:
             Dict mapping (building_id, vehicle_id) to sampled trip profile parameters
         """
-        df = self.metadata_df if metadata_df is None else metadata_df
+        df = bldg_veh_df
         if df is None:
             raise MetadataDataFrameError()
 
