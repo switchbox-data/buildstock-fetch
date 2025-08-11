@@ -96,3 +96,4 @@ if __name__ == "__main__":
 
     bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
     print(bldg_ids[:10])
+    print(download_and_process_temporary_hpxml(bldg_ids[0]))
