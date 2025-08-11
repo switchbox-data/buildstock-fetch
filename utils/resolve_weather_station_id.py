@@ -6,6 +6,7 @@ import zipfile
 import polars as pl
 import requests
 import xmltodict
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
 from buildstock_fetch.main import BuildingID, fetch_bldg_ids
 
@@ -41,19 +42,44 @@ def resolve_weather_station_id(
 
     # Prepare data for DataFrame
     data = []
-    for bldg_id in bldg_ids[:10]:
-        weather_station_name = download_and_extract_weather_station(bldg_id)
+    total_buildings = len(bldg_ids[:10])
 
-        data.append({
-            "bldg_id": bldg_id.bldg_id,
-            "product": product,
-            "release_year": release_year,
-            "weather_file": weather_file,
-            "release_version": release_version,
-            "state": state,
-            "upgrade_id": upgrade_id,
-            "weather_station_name": weather_station_name,
-        })
+    print(f"Processing {total_buildings} building IDs...")
+
+    # Create rich progress bar with time tracking
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TextColumn("[progress.description]{task.fields[current]}"),
+        TextColumn("[progress.description]{task.fields[weather_station]}"),
+        expand=True,
+    ) as progress:
+        task = progress.add_task("Processing buildings", total=total_buildings, current="", weather_station="")
+
+        for bldg_id in bldg_ids[:10]:
+            weather_station_name = download_and_extract_weather_station(bldg_id)
+
+            data.append({
+                "bldg_id": bldg_id.bldg_id,
+                "product": product,
+                "release_year": release_year,
+                "weather_file": weather_file,
+                "release_version": release_version,
+                "state": state,
+                "upgrade_id": upgrade_id,
+                "weather_station_name": weather_station_name,
+            })
+
+            # Update progress bar
+            progress.update(
+                task,
+                advance=1,
+                current=f"Current: {bldg_id.bldg_id}",
+                weather_station=f"Weather: {weather_station_name}",
+            )
 
     # Create Polars DataFrame
     df = pl.DataFrame(data)
