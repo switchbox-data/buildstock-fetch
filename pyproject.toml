@@ -33,7 +33,7 @@ Documentation = "https://switchbox-data.github.io/buildstock-fetch/"
 [project.scripts]
 bsf = "buildstock_fetch.main_cli:app"
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
     "pytest>=7.2.0",
     "pre-commit>=2.20.0",
@@ -65,8 +65,8 @@ include-package-data = true
 packages = ["buildstock_fetch"]
 
 [tool.setuptools.package-data]
-"buildstock_fetch" = ["*.json", "building_data/*"]
-"buildstock_fetch.data.building_data" = ["combined_metadata.parquet"]
+"buildstock_fetch" = ["*.json", "data/building_data/*"]
+
 
 
 [tool.mypy]
