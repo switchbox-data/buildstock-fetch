@@ -1,7 +1,9 @@
 import os
 import tempfile
+import time
 import zipfile
 
+import polars as pl
 import requests
 import xmltodict
 
@@ -34,12 +36,31 @@ def _check_weather_station_found(weather_station_name):
 
 def resolve_weather_station_id(
     product: str, release_year: str, weather_file: str, release_version: str, state: str, upgrade_id: str
-) -> str:
+) -> pl.DataFrame:
     bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
-    return bldg_ids
+
+    # Prepare data for DataFrame
+    data = []
+    for bldg_id in bldg_ids[:10]:
+        weather_station_name = download_and_extract_weather_station(bldg_id)
+
+        data.append({
+            "bldg_id": bldg_id.bldg_id,
+            "product": product,
+            "release_year": release_year,
+            "weather_file": weather_file,
+            "release_version": release_version,
+            "state": state,
+            "upgrade_id": upgrade_id,
+            "weather_station_name": weather_station_name,
+        })
+
+    # Create Polars DataFrame
+    df = pl.DataFrame(data)
+    return df
 
 
-def download_and_process_temporary_hpxml(bldg_id: BuildingID) -> str:
+def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
     """
     Download building data zip file, extract XML file, process it, and clean up temporary files.
 
@@ -172,6 +193,7 @@ def find_weather_station_name(data, path=""):
 
 
 if __name__ == "__main__":
+    start_time = time.time()
     product = "resstock"
     release_year = "2022"
     weather_file = "amy2012"
@@ -179,6 +201,24 @@ if __name__ == "__main__":
     state = "NY"
     upgrade_id = "0"
 
-    bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
-    # print(bldg_ids[:10])
-    print(download_and_process_temporary_hpxml(bldg_ids[0]))
+    df = resolve_weather_station_id(product, release_year, weather_file, release_version, state, upgrade_id)
+
+    # Create output directory if it doesn't exist
+    output_dir = "buildstock_fetch/data/weather_station_map"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Sort by building ID for better organization
+    if "bldg_id" in df.columns:
+        df = df.sort("bldg_id")
+
+    # Save as partitioned parquet file
+    output_path = os.path.join(output_dir, "weather_station_map.parquet")
+    df.write_parquet(
+        str(output_path),  # Convert Path to string for Polars
+        use_pyarrow=True,
+        partition_by=["product", "release_year", "weather_file", "release_version", "state"],
+    )
+    elapsed_time = time.time() - start_time
+    print(f"Time taken: {elapsed_time:.2f} seconds")
+    print(f"Successfully saved partitioned weather station mapping to {output_path}")
+    print(f"\nDataFrame shape: {df.shape}")
