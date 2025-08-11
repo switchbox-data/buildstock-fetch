@@ -3,8 +3,33 @@ import tempfile
 import zipfile
 
 import requests
+import xmltodict
 
 from buildstock_fetch.main import BuildingID, fetch_bldg_ids
+
+
+class NoXMLFileError(ValueError):
+    """Raised when no XML file is found in the zip file."""
+
+    pass
+
+
+class NoWeatherStationNameError(ValueError):
+    """Raised when no weather station name is found in the XML file."""
+
+    pass
+
+
+def _check_xml_files_exist(xml_files):
+    """Check if XML files exist in the zip file."""
+    if not xml_files:
+        raise NoXMLFileError()
+
+
+def _check_weather_station_found(weather_station_name):
+    """Check if weather station name was found in XML."""
+    if not weather_station_name:
+        raise NoWeatherStationNameError()
 
 
 def resolve_weather_station_id(
@@ -45,9 +70,7 @@ def download_and_process_temporary_hpxml(bldg_id: BuildingID) -> str:
             with zipfile.ZipFile(zip_temp_path, "r") as zip_ref:
                 # Find the first XML file in the zip
                 xml_files = [f for f in zip_ref.namelist() if f.endswith(".xml")]
-                if not xml_files:
-                    print("No XML files found in zip")
-                    return ""
+                _check_xml_files_exist(xml_files)
 
                 # Extract the first (and only) XML file
                 xml_filename = xml_files[0]
@@ -59,7 +82,7 @@ def download_and_process_temporary_hpxml(bldg_id: BuildingID) -> str:
                 xml_content = xml_file.read()
 
             # Process the XML content here
-            processed_content = process_xml_content(xml_content)
+            processed_content = extract_weather_station_name(xml_content)
 
         except Exception as e:
             print(f"Error processing building data: {e}")
@@ -68,7 +91,7 @@ def download_and_process_temporary_hpxml(bldg_id: BuildingID) -> str:
             return processed_content
 
 
-def process_xml_content(xml_content: str) -> str:
+def extract_weather_station_name(xml_content: str) -> str:
     """
     Process the XML content extracted from the building data file.
 
@@ -76,14 +99,76 @@ def process_xml_content(xml_content: str) -> str:
         xml_content: Raw XML content as string
 
     Returns:
-        str: Processed content or extracted information
+        str: Weather station name or empty string if not found
     """
-    # Add your XML processing logic here
-    # For example, you might want to parse the XML and extract specific data
+    try:
+        buildingXML = xmltodict.parse(xml_content)
 
-    # For now, just return the content length as a placeholder
-    # You can replace this with actual XML processing
-    return f"XML content length: {len(xml_content)} characters"
+        # Search for weather station name in the XML file
+        weather_station_name = find_weather_station_name(buildingXML)
+        _check_weather_station_found(weather_station_name)
+
+    except Exception as e:
+        print(f"Error parsing XML content: {e}")
+        return ""
+
+    else:
+        return weather_station_name
+
+
+def _extract_name_from_weather_station(weather_station):
+    """Extract name from weather station data."""
+    if isinstance(weather_station, dict) and "Name" in weather_station:
+        return weather_station["Name"]
+    elif isinstance(weather_station, list):
+        for item in weather_station:
+            if isinstance(item, dict) and "Name" in item:
+                return item["Name"]
+    return None
+
+
+def _search_dict_for_weather_station(data, path=""):
+    """Search dictionary for weather station."""
+    if "WeatherStation" in data:
+        weather_station = data["WeatherStation"]
+        name = _extract_name_from_weather_station(weather_station)
+        if name:
+            return name
+
+    # Recursively search all values in the dict
+    for key, value in data.items():
+        result = find_weather_station_name(value, f"{path}.{key}" if path else key)
+        if result:
+            return result
+    return None
+
+
+def _search_list_for_weather_station(data, path=""):
+    """Search list for weather station."""
+    for i, item in enumerate(data):
+        result = find_weather_station_name(item, f"{path}[{i}]" if path else f"[{i}]")
+        if result:
+            return result
+    return None
+
+
+def find_weather_station_name(data, path=""):
+    """
+    Recursively search for WeatherStation tag and extract the Name value.
+
+    Args:
+        data: The data structure to search (dict, list, or primitive)
+        path: Current path for debugging (optional)
+
+    Returns:
+        str: Weather station name if found, None otherwise
+    """
+    if isinstance(data, dict):
+        return _search_dict_for_weather_station(data, path)
+    elif isinstance(data, list):
+        return _search_list_for_weather_station(data, path)
+
+    return None
 
 
 if __name__ == "__main__":
@@ -95,5 +180,5 @@ if __name__ == "__main__":
     upgrade_id = "0"
 
     bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
-    print(bldg_ids[:10])
+    # print(bldg_ids[:10])
     print(download_and_process_temporary_hpxml(bldg_ids[0]))
