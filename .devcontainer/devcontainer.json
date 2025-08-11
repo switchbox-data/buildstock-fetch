@@ -29,7 +29,10 @@
                 "python.testing.unittestEnabled": false,
                 "python.testing.pytestEnabled": true,
                 "python.defaultInterpreterPath": "/workspaces/buildstock-fetch/.venv/bin/python",
-                "python.testing.pytestPath": "/workspaces/buildstock-fetch/.venv/bin/pytest"
+                "python.testing.pytestPath": "/workspaces/buildstock-fetch/.venv/bin/pytest",
+                "terminal.integrated.env.linux": {
+                    "PATH": "/workspaces/buildstock-fetch/.venv/bin:${env:PATH}"
+                }
             }
         }
     }

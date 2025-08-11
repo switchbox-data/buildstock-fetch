@@ -382,7 +382,7 @@ def find_all_parquet_files(base_file_key: str, s3_client: Any, bucket_name: str)
 
 if __name__ == "__main__":
     # Load the release data
-    releases_file = files("buildstock_fetch.utils").joinpath("buildstock_releases.json")
+    releases_file = files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")
     with open(str(releases_file)) as file:
         data = json.load(file)
 

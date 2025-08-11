@@ -22,6 +22,70 @@ __all__ = [
 ]
 
 
+STATE_TO_CENSUS_DIVISION: dict[str, int] = {
+    # New England (1)
+    "CT": 1,
+    "ME": 1,
+    "MA": 1,
+    "NH": 1,
+    "RI": 1,
+    "VT": 1,
+    # Middle Atlantic (2)
+    "NJ": 2,
+    "NY": 2,
+    "PA": 2,
+    # East North Central (3)
+    "IL": 3,
+    "IN": 3,
+    "MI": 3,
+    "OH": 3,
+    "WI": 3,
+    # West North Central (4)
+    "IA": 4,
+    "KS": 4,
+    "MN": 4,
+    "MO": 4,
+    "NE": 4,
+    "ND": 4,
+    "SD": 4,
+    # South Atlantic (5)
+    "DE": 5,
+    "DC": 5,
+    "FL": 5,
+    "GA": 5,
+    "MD": 5,
+    "NC": 5,
+    "SC": 5,
+    "VA": 5,
+    "WV": 5,
+    # East South Central (6)
+    "AL": 6,
+    "KY": 6,
+    "MS": 6,
+    "TN": 6,
+    # West South Central (7)
+    "AR": 7,
+    "LA": 7,
+    "OK": 7,
+    "TX": 7,
+    # Mountain (8)
+    "AZ": 8,
+    "CO": 8,
+    "ID": 8,
+    "MT": 8,
+    "NV": 8,
+    "NM": 8,
+    "UT": 8,
+    "WY": 8,
+    # Pacific (9)
+    "AK": 9,
+    "CA": 9,
+    "HI": 9,
+    "OR": 9,
+    "WA": 9,
+}
+
+
 def get_census_division_for_state(state: str) -> int:
     """
     Get the census division number for a given state.
@@ -35,24 +99,11 @@ def get_census_division_for_state(state: str) -> int:
     Raises:
         ValueError: If the state is not found in any census division
     """
-    census_divisions = {
-        1: ["CT", "ME", "MA", "NH", "RI", "VT"],  # New England
-        2: ["NJ", "NY", "PA"],  # Middle Atlantic
-        3: ["IL", "IN", "MI", "OH", "WI"],  # East North Central
-        4: ["IA", "KS", "MN", "MO", "NE", "ND", "SD"],  # West North Central
-        5: ["DE", "DC", "FL", "GA", "MD", "NC", "SC", "VA", "WV"],  # South Atlantic
-        6: ["AL", "KY", "MS", "TN"],  # East South Central
-        7: ["AR", "LA", "OK", "TX"],  # West South Central
-        8: ["AZ", "CO", "ID", "MT", "NV", "NM", "UT", "WY"],  # Mountain
-        9: ["AK", "CA", "HI", "OR", "WA"],  # Pacific
-    }
-
-    for division, states in census_divisions.items():
-        if state in states:
-            return division
-
-    msg = f"State {state} not found in any census division"
-    raise ValueError(msg)
+    try:
+        return STATE_TO_CENSUS_DIVISION[state]
+    except KeyError as e:
+        msg = f"State {state} not found in any census division"
+        raise ValueError(msg) from e
 
 
 def assign_income_midpoints(income_str: str) -> int:
@@ -75,7 +126,7 @@ def assign_income_midpoints(income_str: str) -> int:
         max_val = int(parts[1])
         return (min_val + max_val) // 2
 
-    # If it's not a range, return the value as-is
+    # If it's not a range (<10,000, 200,000+), return the value as-is
     return int(income_str)
 
 
@@ -132,7 +183,7 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
         metadata_path: Path to the metadata parquet file
 
     Returns:
-        DataFrame with columns including 'bldg_id', 'occupants', 'income', 'metro', 'puma.
+        DataFrame with columns including 'bldg_id', 'occupants', 'income', 'metro', 'puma'.
 
     Raises:
         FileNotFoundError: If the metadata file doesn't exist
@@ -141,60 +192,46 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
         msg = f"Metadata file not found: {metadata_path}"
         raise FileNotFoundError(msg)
 
-    metadata_df = pl.read_parquet(metadata_path)
-
-    # Select and rename columns
-    metadata_df = metadata_df.select([
-        pl.col("bldg_id"),
-        pl.col("weight"),
-        pl.col("in.puma_metro_status").alias("metro"),
-        pl.col("in.puma").alias("puma"),
-        pl.col("in.income").alias("income"),
-        pl.col("in.occupants").alias("occupants"),
-    ])
-
-    # Process household size - replace "10+" with "10" and convert to numeric
-    metadata_df = metadata_df.with_columns([
-        pl.when(pl.col("occupants") == "10+").then(pl.lit("10")).otherwise(pl.col("occupants")).alias("occupants_temp")
-    ])
-
-    # Now cast to numeric
-    metadata_df = metadata_df.with_columns([pl.col("occupants_temp").cast(pl.Int64).alias("occupants")]).drop(
-        "occupants_temp"
+    # Scan parquet file and ensure bldg_id is properly formatted with leading zeros
+    metadata_df = (
+        pl.scan_parquet(metadata_path)
+        .with_columns([
+            pl.col("bldg_id").cast(str).str.zfill(5)  # Ensure 5-digit string with leading zeros
+        ])
+        # Select and rename columns
+        .select([
+            pl.col("bldg_id"),
+            pl.col("weight"),
+            pl.col("in.puma_metro_status").alias("metro"),
+            pl.col("in.puma").alias("puma"),
+            pl.col("in.income").alias("income"),
+            pl.col("in.occupants").alias("occupants"),
+        ])
+        # Process household size - replace "10+" with "10" and cast to numeric
+        .with_columns([
+            pl.when(pl.col("occupants") == "10+")
+            .then(pl.lit("10"))
+            .otherwise(pl.col("occupants"))
+            .cast(pl.Int64)
+            .alias("occupants")
+        ])
+        # Process income categories - convert to standard ranges first
+        .with_columns([
+            pl.when(pl.col("income") == "<10000")
+            .then(pl.lit("0-10000"))
+            .when(pl.col("income") == "200000+")
+            .then(pl.lit("200000-400000"))
+            .when(pl.col("income") == "Not Available")
+            .then(pl.lit(None))
+            .otherwise(pl.col("income"))
+            .alias("income")
+        ])
+        # Convert income ranges to numeric midpoints
+        .with_columns([pl.col("income").map_elements(assign_income_midpoints, return_dtype=pl.Int64).alias("income")])
+        # Extract last 5 characters from PUMA
+        .with_columns([pl.col("puma").str.slice(-5).alias("puma")])
+        .collect()
     )
-
-    # # Create household size bins
-    # metadata_df = metadata_df.with_columns([
-    #     pl.when(pl.col("occupants") > 1)
-    #     .then(pl.lit("2+ ppl"))
-    #     .when(pl.col("occupants") == 1)
-    #     .then(pl.lit("1 person"))
-    #     .otherwise(pl.lit(None))
-    #     .alias("hhsize_bins")
-    # ])
-
-    # Process income categories - convert to standard ranges first
-    metadata_df = metadata_df.with_columns([
-        pl.when(pl.col("income") == "<10000")
-        .then(pl.lit("0-10000"))
-        .when(pl.col("income") == "200000+")
-        .then(pl.lit("200000-400000"))
-        .when(pl.col("income") == "Not Available")
-        .then(pl.lit(None))
-        .otherwise(pl.col("income"))
-        .alias("income")
-    ])
-
-    # Convert income ranges to numeric midpoints
-    metadata_df = metadata_df.with_columns([pl.col("income").map_elements(assign_income_midpoints).alias("income")])
-
-    # Convert income ranges to numeric midpoints
-    metadata_df = metadata_df.with_columns([
-        pl.col("income").map_elements(assign_nhts_income_bucket).alias("income_bucket")
-    ])
-
-    # Extract last 5 characters from PUMA
-    metadata_df = metadata_df.with_columns([pl.col("puma").str.slice(-5).alias("puma")])
 
     return metadata_df
 
@@ -292,10 +329,9 @@ def load_pums_data(pums_path: str, metadata_path: str) -> pl.DataFrame:
     # Convert vehicles to numeric (Int64)
     pums_df = pums_df.with_columns([pl.col("vehicles").cast(pl.Int64)])
 
-    # If metadata_path is provided, join with metro-PUMA mapping
-    if metadata_path and Path(metadata_path).exists():
-        metro_puma_df = load_metro_puma_map(metadata_path)
-        pums_df = pums_df.join(metro_puma_df, on="puma", how="left")
+    # join with metro-puma mapping
+    metro_puma_df = load_metro_puma_map(metadata_path)
+    pums_df = pums_df.join(metro_puma_df, on="puma", how="left")
 
     return pums_df
 
@@ -327,16 +363,20 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
         msg = f"Metadata file not found: {metadata_path}"
         raise FileNotFoundError(msg)
 
-    metro_lookup_df = pl.read_parquet(metadata_path, columns=["in.puma_metro_status", "in.puma"])
-
-    # Select and rename columns
-    metro_lookup_df = metro_lookup_df.select([
-        pl.col("in.puma_metro_status").alias("metro"),
-        pl.col("in.puma").alias("puma"),
-    ])
-
-    # Extract last 5 characters from PUMA and get distinct values
-    metro_lookup_df = metro_lookup_df.with_columns([pl.col("puma").str.slice(-5).alias("puma")]).unique()
+    # Load metadata file lazily and process
+    metro_lookup_df = (
+        pl.scan_parquet(metadata_path)
+        # Select and rename only needed columns
+        .select([
+            pl.col("in.puma_metro_status").alias("metro"),
+            pl.col("in.puma").alias("puma"),
+        ])
+        # Extract last 5 characters from PUMA
+        .with_columns([pl.col("puma").str.slice(-5).alias("puma")])
+        # Drop duplicates
+        .unique()
+        .collect()
+    )
 
     return metro_lookup_df
 

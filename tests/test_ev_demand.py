@@ -4,7 +4,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from buildstock_fetch.ev_demand import (
+from utils.ev_demand import (
     EVDemandCalculator,
     MetadataDataFrameError,
     VehicleOwnershipModelError,
@@ -27,7 +27,7 @@ def sample_pums_data():
 def sample_metadata():
     """Create sample metadata for testing."""
     return pl.DataFrame({
-        "bldg_id": [1, 2, 3, 4, 5],
+        "bldg_id": ["00001", "00002", "00003", "00004", "00005"],
         "occupants": [1, 2, 3, 4, 2],
         "income": [30000, 50000, 75000, 100000, 45000],
         "metro": ["urban", "urban", "suburban", "suburban", "rural"],
@@ -100,6 +100,14 @@ def test_fit_vehicle_ownership_model_caps_vehicles_at_2(calculator):
 
 def test_fit_vehicle_ownership_model_with_sample_weights(calculator):
     """Test model fitting with sample weights."""
+    from pytest import approx
+
+    # With fixed random_state=42 and fixed input data, coefficients should be exactly:
+    expected_coef = np.array([
+        [-0.6273701443561746, -0.5479382238614515, 0.14318094439321308],
+        [0.20244784926329684, 0.11506717219026819, 0.4769219156039682],
+        [0.42492229509287793, 0.4328710516711835, -0.6201028599971814],
+    ])
     pums_data = pl.DataFrame({
         "occupants": [1, 2, 3, 4],
         "income": [30000, 50000, 75000, 100000],
@@ -109,10 +117,9 @@ def test_fit_vehicle_ownership_model_with_sample_weights(calculator):
     })
 
     model = calculator.fit_vehicle_ownership_model(pums_data)
-
-    # Check that model was fitted successfully
-    assert model is not None
     assert calculator.vehicle_ownership_model is not None
+    # Check that model was fitted successfully and has expected coefficients
+    assert model.coef_ == approx(expected_coef, rel=1e-6)
 
 
 def test_fit_vehicle_ownership_model_handles_missing_values(calculator, caplog):
@@ -168,6 +175,8 @@ def test_predict_num_vehicles_without_fitted_model(calculator, sample_metadata):
 def test_predict_num_vehicles_without_metadata(calculator, sample_pums_data):
     """Test that error is raised when no metadata is provided."""
     calculator.fit_vehicle_ownership_model(sample_pums_data)
+    # Clear the metadata_df to test the None case properly
+    calculator.metadata_df = None
 
     with pytest.raises(MetadataDataFrameError):
         calculator.predict_num_vehicles(None)

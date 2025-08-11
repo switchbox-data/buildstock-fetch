@@ -1,6 +1,8 @@
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+import os
+import sys
 from pathlib import Path
 from typing import Any, Final, Optional
 
@@ -9,9 +11,12 @@ import polars as pl
 from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # type: ignore[import-untyped]
 
-from buildstock_fetch.utils import ev_utils
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+from importlib.resources import files
 
-BASEPATH: Final[Path] = Path(__file__).resolve().parents[1]
+from utils import ev_utils
+
+BASEPATH: Final[Path] = Path(__file__).resolve().parent  # just one level up
 
 
 class MetadataPathError(Exception):
@@ -64,17 +69,21 @@ class EVDemandConfig:
     release: str
     metadata_path: Optional[str] = None
     pums_path: Optional[str] = None
-    nhts_path: str = f"{BASEPATH}/utils/ev_data/inputs/NHTS_v2_1_trip_surveys.csv"
+    nhts_path: str = f"{BASEPATH}/ev_data/inputs/NHTS_v2_1_trip_surveys.csv"
     weather_path: Optional[str] = None
     output_dir: Optional[Path] = None
 
     def __post_init__(self) -> None:
         if self.metadata_path is None:
-            self.metadata_path = f"{Path(__file__).parent}/data/{self.release}/metadata/{self.state}/metadata.parquet"
+            self.metadata_path = str(
+                files("buildstock_fetch")
+                .joinpath("data")
+                .joinpath(f"{self.release}/metadata/{self.state}/metadata.parquet")
+            )
         if self.pums_path is None:
-            self.pums_path = f"{BASEPATH}/utils/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
+            self.pums_path = f"{BASEPATH}/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
         if self.weather_path is None:
-            self.weather_path = f"{BASEPATH}//data/{self.release}/weather.csv"
+            self.weather_path = f"{BASEPATH}/ev_data/inputs/weather.csv"  # move weather data here too
 
 
 @dataclass
@@ -163,6 +172,9 @@ class EVDemandCalculator:
         self.vehicle_ownership_model: Optional[Any] = None
         self.random_state = random_state
 
+        # Features used for vehicle assignment
+        self.veh_assign_features = ["occupants", "income", "metro"]
+
         # Available battery capacities in kWh
         self.battery_capacities = [12, 40, 60, 90, 120]
 
@@ -197,7 +209,7 @@ class EVDemandCalculator:
         )
 
         # Drop rows with missing values in required features
-        feature_columns = ["occupants", "income", "metro"]
+        feature_columns = self.veh_assign_features
 
         # Drop rows with missing values in required features and target variable
         initial_count = len(pums_df)
@@ -241,7 +253,7 @@ class EVDemandCalculator:
         Returns:
             DataFrame with an added 'vehicles' column
         """
-        df = metadata_df
+        df = self.metadata_df if metadata_df is None else metadata_df
         if df is None:
             raise MetadataDataFrameError()
 
@@ -249,7 +261,7 @@ class EVDemandCalculator:
             raise VehicleOwnershipModelError()
 
         # Step 1: Prepare features from metadata
-        feature_columns = ["occupants", "income", "metro"]
+        feature_columns = self.veh_assign_features
         X = df.select(["bldg_id", *feature_columns])
 
         # Validate no missing values in required features
@@ -355,7 +367,7 @@ class EVDemandCalculator:
         Returns:
             Dict mapping (building_id, vehicle_id) to sampled trip profile parameters
         """
-        df = bldg_veh_df
+        df = self.metadata_df if metadata_df is None else metadata_df
         if df is None:
             raise MetadataDataFrameError()
 
