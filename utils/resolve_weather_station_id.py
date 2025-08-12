@@ -221,6 +221,9 @@ class ProfilingData:
 # Global profiling data instance
 profiling_data = ProfilingData()
 
+# Global tracking of processed building IDs across all phases
+processed_bldg_ids_global = set()
+
 
 def _check_xml_files_exist(xml_files):
     """Check if XML files exist in the zip file."""
@@ -245,8 +248,9 @@ def resolve_weather_station_id(
     progress_update_interval: int = 50,
     max_workers: int = 5,  # Reduced from 10 to 5 to prevent server overload
 ) -> pl.DataFrame:
-    global profiling_data
+    global profiling_data, processed_bldg_ids_global
     profiling_data = ProfilingData()  # Reset profiling data
+    processed_bldg_ids_global.clear()  # Reset global tracking
     profiling_data.update_interval = status_update_interval  # Set custom update interval
 
     bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
@@ -338,6 +342,8 @@ def process_buildings_phase(
     progress_update_interval,
 ):
     """Process a batch of buildings and return results and failed buildings."""
+    global processed_bldg_ids_global
+
     data = []
     failed_bldg_ids = []
     total_buildings = len(bldg_ids)
@@ -365,8 +371,14 @@ def process_buildings_phase(
             print(f"ThreadPoolExecutor created with {max_workers} workers")
 
             # Submit all tasks
-            future_to_bldg = {
-                executor.submit(
+            future_to_bldg = {}
+            for bldg_id in bldg_ids:
+                # Skip if this building ID has already been processed globally
+                if bldg_id.bldg_id in processed_bldg_ids_global:
+                    print(f"Skipping duplicate building ID: {bldg_id.bldg_id}")
+                    continue
+
+                future = executor.submit(
                     process_single_building,
                     bldg_id,
                     product,
@@ -375,17 +387,19 @@ def process_buildings_phase(
                     release_version,
                     state,
                     upgrade_id,
-                ): bldg_id
-                for bldg_id in bldg_ids
-            }
+                )
+                future_to_bldg[future] = bldg_id
 
             print(f"Submitted {len(future_to_bldg)} tasks to executor")
 
             # Process completed futures with timeout
             try:
-                for future in concurrent.futures.as_completed(future_to_bldg):  # Remove overall timeout
+                for future in concurrent.futures.as_completed(future_to_bldg):
                     bldg_id = future_to_bldg[future]
                     completed_count += 1
+
+                    # Mark this building ID as processed globally
+                    processed_bldg_ids_global.add(bldg_id.bldg_id)
 
                     try:
                         result = future.result(timeout=30)  # 30 second timeout per result
