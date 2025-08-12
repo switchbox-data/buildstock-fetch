@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import sys
 from importlib.resources import files
 from pathlib import Path
@@ -383,13 +382,12 @@ def find_all_parquet_files(base_file_key: str, s3_client: Any, bucket_name: str)
 if __name__ == "__main__":
     # Load the release data
     releases_file = files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")
-    with open(str(releases_file)) as file:
-        data = json.load(file)
+    data = json.loads(Path(str(releases_file)).read_text(encoding="utf-8"))
 
     # Directory to save the data
     data_dir = Path(__file__).parent.parent / "data"
     downloaded_paths: list[str] = []
-    os.makedirs(data_dir, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
 
     # List to collect all DataFrames
     all_dataframes = []
@@ -535,9 +533,9 @@ if __name__ == "__main__":
             final_df = final_df.sort("county")
 
         # Save as partitioned parquet file
-        output_file = f"{data_dir}/building_data/combined_metadata.parquet"
+        output_file = data_dir / "building_data" / "combined_metadata.parquet"
         final_df.write_parquet(
-            output_file,
+            str(output_file),  # Convert Path to string for Polars
             use_pyarrow=True,
             partition_by=["product", "release_year", "weather_file", "release_version", "state"],
         )
