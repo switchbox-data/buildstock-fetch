@@ -243,6 +243,7 @@ class EVDemandCalculator:
     def predict_num_vehicles(self, metadata_df: Optional[pl.DataFrame] = None) -> pl.DataFrame:
         """
         Predict number of vehicles for each household in the metadata using the fitted model.
+        If the model hasn't been fitted yet, it will be fitted automatically using the PUMS data.
 
         Args:
             metadata_df: DataFrame with ResStock metadata.
@@ -254,8 +255,10 @@ class EVDemandCalculator:
         if df is None:
             raise MetadataDataFrameError()
 
+        # Automatically fit the model if it hasn't been fitted yet
         if self.vehicle_ownership_model is None:
-            raise VehicleOwnershipModelError()
+            logging.info("Vehicle ownership model not fitted yet. Fitting model...")
+            self.fit_vehicle_ownership_model(self.pums_df)
 
         # Step 1: Prepare features from metadata
         feature_columns = self.veh_assign_features
@@ -450,7 +453,7 @@ class EVDemandCalculator:
 
         return profiles
 
-    def generate_trip_schedules(self, profile: VehicleProfile) -> list[TripSchedule]:
+    def generate_daily_schedules(self, profile: VehicleProfile) -> list[TripSchedule]:
         """Generate trip schedules for all days in the date range."""
         schedules = []
 
@@ -569,7 +572,7 @@ class EVDemandCalculator:
             return float(daily_consumption_kwh)
         return float(daily_consumption_kwh)
 
-    def generate_annual_trip_schedule(
+    def _generate_annual_trip_schedule(
         self,
         profile_params: dict[tuple[str, int], VehicleProfile],
         start_date: Optional[datetime] = None,
@@ -597,7 +600,7 @@ class EVDemandCalculator:
 
         # Generate schedules for each vehicle
         for profile in profile_params.values():
-            schedules = self.generate_trip_schedules(profile)
+            schedules = self.generate_daily_schedules(profile)
             all_schedules.extend(schedules)
 
         # Convert to DataFrame
@@ -631,67 +634,26 @@ class EVDemandCalculator:
 
         return pl.Series(assigned_capacities)
 
-    # def run_complete_workflow(
-    #     self, pums_path: str, nhts_path: str, weather_path: str, output_dir: Optional[Path] = None
-    # ) -> dict[str, Union[pl.DataFrame, pl.Series]]:
-    #     """
-    #     Run the complete EV demand workflow.
+    def generate_trip_schedules(self) -> pl.DataFrame:
+        """
+        Generate trip schedules for all vehicles in the metadata.
+        """
+        # assign cars to metadata buildings
+        bldg_veh_df = self.predict_num_vehicles()
+        # Get all vehicle profiles
+        vehicle_profiles = self.sample_vehicle_profiles(bldg_veh_df, self.nhts_df)
 
-    #     Args:
-    #         pums_path: Path to PUMS data file
-    #         nhts_path: Path to NHTS data file
-    #         weather_path: Path to weather data file
-    #         output_dir: Directory to save output files
+        # Generate trip schedules for each vehicle
+        trip_schedules = self._generate_annual_trip_schedule(vehicle_profiles)
 
-    #     Returns:
-    #         Dictionary containing all output DataFrames and Series
-    #     """
-    #     # Step 1: Load metadata
-    #     metadata_df = self.load_metadata()
-
-    #     # Step 2: Load PUMS data and fit vehicle ownership model
-    #     pums_df = pl.read_csv(pums_path)  # TODO: Adjust based on actual PUMS format
-    #     self.fit_vehicle_ownership_model(pums_df)
-
-    #     # Step 3: Predict number of vehicles
-    #     metadata_with_vehicles = self.predict_num_vehicles(metadata_df)
-
-    #     # Step 4: Load NHTS data
-    #     self.load_nhts_data(nhts_path)
-
-    #     # Step 5: Load weather data
-    #     self.load_weather_data(weather_path)
-
-    #     # Step 6: Sample vehicle profiles
-    #     vehicle_profiles = self.sample_vehicle_profiles(metadata_with_vehicles)
-
-    #     # Step 7: Generate annual trip schedules
-    #     trip_schedules = self.generate_annual_trip_schedule(vehicle_profiles)
-
-    #     # Step 8: Assign battery capacities
-    #     max_daily_kwh = trip_schedules.group_by(["building_id", "vehicle_id"]).agg(pl.col("kwh_consumed").max())
-    #     battery_capacities = self.assign_battery_capacity(max_daily_kwh.get_column("kwh_consumed"))
-
-    #     # Save outputs if output_dir is provided
-    #     if output_dir:
-    #         output_dir = Path(output_dir)
-    #         output_dir.mkdir(exist_ok=True)
-
-    #         metadata_with_vehicles.write_csv(output_dir / "metadata_with_vehicles.csv")
-    #         trip_schedules.write_csv(output_dir / "trip_schedules.csv")
-    #         battery_capacities.to_frame().write_csv(output_dir / "battery_capacities.csv")
-
-    #     return {
-    #         "metadata_with_vehicles": metadata_with_vehicles,
-    #         "trip_schedules": trip_schedules,
-    #         "battery_capacities": battery_capacities,
-    #     }
+        # Drop temperature and energy consumption columns
+        return trip_schedules.drop(["avg_temp_while_away", "kwh_consumed"])
 
 
 # # Example usage
 if __name__ == "__main__":
     # Step 1: Create configuration
-    config = EVDemandConfig(state="NY", release="resstock_tmy3_release_1")
+    config = EVDemandConfig(state="NY", release="res_2022_tmy3_1.1")
 
     # Step 2: Load all data
     metadata_df, nhts_df, pums_df, weather_df = ev_utils.load_all_input_data(config)
@@ -709,76 +671,5 @@ if __name__ == "__main__":
         end_date=datetime(2022, 1, 7),
     )
 
-    # Fit the vehicle ownership model
-    calculator.fit_vehicle_ownership_model(pums_df)
-
-    # Test predictions on a small sample
-    sample_metadata = metadata_df.head(200)
-    predictions_df = calculator.predict_num_vehicles(sample_metadata)
-
-    # sample vehicle profiles
-    vehicle_profiles = calculator.sample_vehicle_profiles(predictions_df, nhts_df)
-
-    # generate annual trip schedules
-    trip_schedules = calculator.generate_annual_trip_schedule(vehicle_profiles)
-
-    # # assign battery capacities
-    # battery_capacities = calculator.assign_battery_capacity(trip_schedules.get_column("kwh_consumed"))
-
-
-# EDA
-
-# nhts_df_eda = nhts_df.with_columns(
-#     pl.when(pl.col("vehicles") > 2)
-#     .then(2)
-#     .otherwise(pl.col("vehicles"))
-#     .alias("vehicles")
-# )
-
-# nhts_df_eda.group_by(["income_bucket", "occupants", "vehicles"]).agg(pl.col("hh_vehicle_id").count()).sort("hh_vehicle_id")
-# EDA for NHTS data coverage
-# Create complete grid of expected combinations
-# expected_combinations = (
-#     pl.DataFrame({
-#         'income_bucket': np.repeat(np.arange(1, 12), 16),  # 1-11
-#         'occupants': np.tile(np.repeat(np.arange(1, 9), 2), 11),  # 1-8
-#         'vehicles': np.tile(np.arange(1, 3), 88)  # 1-2
-#     })
-# )
-
-# # Cap vehicles in NHTS data
-# nhts_df_eda = nhts_df.with_columns(
-#     pl.when(pl.col("vehicles") > 2)
-#     .then(2)
-#     .otherwise(pl.col("vehicles"))
-#     .alias("vehicles")
-# )
-
-# # Get actual combinations and their counts
-# actual_combinations = (
-#     nhts_df_eda
-#     .group_by(["income_bucket", "occupants", "vehicles"])
-#     .agg([
-#         pl.col("hh_vehicle_id").n_unique().alias("unique_vehicles"),
-#         pl.count().alias("total_trips")
-#     ])
-# )
-
-# # Find missing combinations
-# missing_combinations = expected_combinations.join(
-#     actual_combinations,
-#     on=["income_bucket", "occupants"],
-#     how="left"
-# ).filter(
-#     pl.col("unique_vehicles").is_null()
-# )
-
-# print("\nMissing combinations:")
-# print(missing_combinations.sort(["income_bucket", "occupants", "vehicles"]))
-
-# # Check max occupants in metadata
-# max_occupants = metadata_df.get_column("occupants").max()
-# print(f"\nMax occupants in metadata: {max_occupants}")
-# if max_occupants > 8:
-#     print("WARNING: Need to cap occupants at 8 in metadata!")
-#     print(f"Number of records with > 8 occupants: {metadata_df.filter(pl.col('occupants') > 8).height}")
+    trip_schedules = calculator.generate_trip_schedules()
+    print(trip_schedules)
