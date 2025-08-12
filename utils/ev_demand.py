@@ -1,8 +1,8 @@
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 import os
 import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, Optional
 
@@ -12,7 +12,6 @@ from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyp
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # type: ignore[import-untyped]
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from importlib.resources import files
 
 from utils import ev_utils
 
@@ -61,7 +60,6 @@ class NoDateRangeError(Exception):
     """Raised when no start_date or end_date is provided."""
 
     pass
-
 
 
 @dataclass
@@ -291,10 +289,10 @@ class EVDemandCalculator:
         predictions_decoded = self.target_encoder.inverse_transform(predictions_encoded)
 
         # Add predictions to original DataFrame
-        bldg_veh_df = df.with_columns(
-            pl.Series(predictions_decoded).alias("vehicles"))
+        bldg_veh_df = df.with_columns(pl.Series(predictions_decoded).alias("vehicles"))
 
         return bldg_veh_df
+
     def find_best_match(
         self, target_income: int, target_occupants: int, target_vehicles: int, weekday: bool = True
     ) -> tuple[str, str]:
