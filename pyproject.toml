@@ -134,4 +134,18 @@ ignore = [
 preview = true
 
 [tool.deptry]
-exclude = ["utils/", "tests/", ".venv/"]
+
+per_rule_ignores.DEP002 = [
+    "pre-commit",
+    "tox-uv",
+    "deptry",
+    "mypy",
+    "ruff",
+    "mkdocs",
+    "mkdocs-material",
+    "mkdocstrings",
+    "types-requests",
+    "types-boto3",
+    "pandas-stubs",
+    "pytest"
+]
