@@ -2,6 +2,7 @@ import os
 import tempfile
 import time
 import zipfile
+from collections import defaultdict
 
 import polars as pl
 import requests
@@ -23,6 +24,187 @@ class NoWeatherStationNameError(ValueError):
     pass
 
 
+class ProfilingData:
+    """Class to collect and manage profiling data for the three main tasks."""
+
+    def __init__(self):
+        self.download_times = []
+        self.extract_times = []
+        self.process_times = []
+        self.total_times = []
+        self.error_counts = defaultdict(int)
+        self.last_update_time = time.time()
+        self.update_interval = 10  # Update every 10 seconds
+
+    def add_timing(self, download_time, extract_time, process_time, total_time, error_type=None):
+        """Add timing data for one building processing."""
+        self.download_times.append(download_time)
+        self.extract_times.append(extract_time)
+        self.process_times.append(process_time)
+        self.total_times.append(total_time)
+
+        if error_type:
+            self.error_counts[error_type] += 1
+
+        # Check if it's time for a status update
+        current_time = time.time()
+        if current_time - self.last_update_time >= self.update_interval:
+            self.print_status_update()
+            self.last_update_time = current_time
+
+    def get_current_summary(self):
+        """Get summary statistics for current timing data."""
+        if not self.total_times:
+            return "No timing data available"
+
+        summary = {
+            "total_buildings": len(self.total_times),
+            "download": {
+                "total": sum(self.download_times),
+                "avg": sum(self.download_times) / len(self.download_times),
+                "min": min(self.download_times),
+                "max": max(self.download_times),
+                "pct_of_total": (sum(self.download_times) / sum(self.total_times)) * 100,
+            },
+            "extract": {
+                "total": sum(self.extract_times),
+                "avg": sum(self.extract_times) / len(self.extract_times),
+                "min": min(self.extract_times),
+                "max": max(self.extract_times),
+                "pct_of_total": (sum(self.extract_times) / sum(self.total_times)) * 100,
+            },
+            "process": {
+                "total": sum(self.process_times),
+                "avg": sum(self.process_times) / len(self.process_times),
+                "min": min(self.process_times),
+                "max": max(self.process_times),
+                "pct_of_total": (sum(self.process_times) / sum(self.total_times)) * 100,
+            },
+            "total_time": sum(self.total_times),
+            "errors": dict(self.error_counts),
+        }
+        return summary
+
+    def print_status_update(self):
+        """Print a real-time status update of the profiling data."""
+        summary = self.get_current_summary()
+        if isinstance(summary, str):
+            return
+
+        print("\n" + "=" * 60)
+        print(f"REAL-TIME PROFILING STATUS - {time.strftime('%H:%M:%S')}")
+        print("=" * 60)
+        print(f"Buildings processed: {summary['total_buildings']}")
+        print(f"Total time elapsed: {summary['total_time']:.2f} seconds")
+        print(f"Average time per building: {summary['total_time'] / summary['total_buildings']:.3f} seconds")
+        print()
+
+        print("CURRENT TASK BREAKDOWN:")
+        print("-" * 40)
+        print(
+            f"Download:  {summary['download']['total']:.2f}s total, {summary['download']['avg']:.3f}s avg, {summary['download']['pct_of_total']:.1f}% of total"
+        )
+        print(
+            f"Extract:   {summary['extract']['total']:.2f}s total, {summary['extract']['avg']:.3f}s avg, {summary['extract']['pct_of_total']:.1f}% of total"
+        )
+        print(
+            f"Process:   {summary['process']['total']:.2f}s total, {summary['process']['avg']:.3f}s avg, {summary['process']['pct_of_total']:.1f}% of total"
+        )
+        print()
+
+        print("TIMING RANGES:")
+        print("-" * 40)
+        print(f"Download:  {summary['download']['min']:.3f}s - {summary['download']['max']:.3f}s")
+        print(f"Extract:   {summary['extract']['min']:.3f}s - {summary['extract']['max']:.3f}s")
+        print(f"Process:   {summary['process']['min']:.3f}s - {summary['process']['max']:.3f}s")
+        print()
+
+        if summary["errors"]:
+            print("ERRORS SO FAR:")
+            print("-" * 40)
+            for error_type, count in summary["errors"].items():
+                print(f"{error_type}: {count}")
+        print("=" * 60)
+
+    def get_summary(self):
+        """Get summary statistics for all timing data."""
+        if not self.total_times:
+            return "No timing data available"
+
+        summary = {
+            "total_buildings": len(self.total_times),
+            "download": {
+                "total": sum(self.download_times),
+                "avg": sum(self.download_times) / len(self.download_times),
+                "min": min(self.download_times),
+                "max": max(self.download_times),
+                "pct_of_total": (sum(self.download_times) / sum(self.total_times)) * 100,
+            },
+            "extract": {
+                "total": sum(self.extract_times),
+                "avg": sum(self.extract_times) / len(self.extract_times),
+                "min": min(self.extract_times),
+                "max": max(self.extract_times),
+                "pct_of_total": (sum(self.extract_times) / sum(self.total_times)) * 100,
+            },
+            "process": {
+                "total": sum(self.process_times),
+                "avg": sum(self.process_times) / len(self.process_times),
+                "min": min(self.process_times),
+                "max": max(self.process_times),
+                "pct_of_total": (sum(self.process_times) / sum(self.total_times)) * 100,
+            },
+            "total_time": sum(self.total_times),
+            "errors": dict(self.error_counts),
+        }
+        return summary
+
+    def print_summary(self):
+        """Print a formatted summary of the profiling data."""
+        summary = self.get_summary()
+        if isinstance(summary, str):
+            print(summary)
+            return
+
+        print("\n" + "=" * 60)
+        print("FINAL PROFILING SUMMARY")
+        print("=" * 60)
+        print(f"Total buildings processed: {summary['total_buildings']}")
+        print(f"Total time: {summary['total_time']:.2f} seconds")
+        print()
+
+        print("FINAL TASK BREAKDOWN:")
+        print("-" * 40)
+        print(
+            f"Download:  {summary['download']['total']:.2f}s total, {summary['download']['avg']:.3f}s avg, {summary['download']['pct_of_total']:.1f}% of total"
+        )
+        print(
+            f"Extract:   {summary['extract']['total']:.2f}s total, {summary['extract']['avg']:.3f}s avg, {summary['extract']['pct_of_total']:.1f}% of total"
+        )
+        print(
+            f"Process:   {summary['process']['total']:.2f}s total, {summary['process']['avg']:.3f}s avg, {summary['process']['pct_of_total']:.1f}% of total"
+        )
+        print()
+
+        print("FINAL TIMING RANGES:")
+        print("-" * 40)
+        print(f"Download:  {summary['download']['min']:.3f}s - {summary['download']['max']:.3f}s")
+        print(f"Extract:   {summary['extract']['min']:.3f}s - {summary['extract']['max']:.3f}s")
+        print(f"Process:   {summary['process']['min']:.3f}s - {summary['process']['max']:.3f}s")
+        print()
+
+        if summary["errors"]:
+            print("TOTAL ERRORS:")
+            print("-" * 40)
+            for error_type, count in summary["errors"].items():
+                print(f"{error_type}: {count}")
+        print("=" * 60)
+
+
+# Global profiling data instance
+profiling_data = ProfilingData()
+
+
 def _check_xml_files_exist(xml_files):
     """Check if XML files exist in the zip file."""
     if not xml_files:
@@ -36,8 +218,19 @@ def _check_weather_station_found(weather_station_name):
 
 
 def resolve_weather_station_id(
-    product: str, release_year: str, weather_file: str, release_version: str, state: str, upgrade_id: str
+    product: str,
+    release_year: str,
+    weather_file: str,
+    release_version: str,
+    state: str,
+    upgrade_id: str,
+    status_update_interval: int = 10,
+    progress_update_interval: int = 50,
 ) -> pl.DataFrame:
+    global profiling_data
+    profiling_data = ProfilingData()  # Reset profiling data
+    profiling_data.update_interval = status_update_interval  # Set custom update interval
+
     bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
 
     # Prepare data for DataFrame
@@ -45,6 +238,8 @@ def resolve_weather_station_id(
     total_buildings = len(bldg_ids)
 
     print(f"Processing {total_buildings} building IDs...")
+    print(f"Status updates every {status_update_interval} seconds or every {progress_update_interval} buildings")
+    print("=" * 60)
 
     # Create rich progress bar with time tracking
     with Progress(
@@ -92,8 +287,16 @@ def resolve_weather_station_id(
                 description=f"Processing buildings ({count}/{total_buildings}) - Avg: {avg_time_per_building:.2f}s/building",
             )
 
+            # Force status update every N buildings (in addition to time-based updates)
+            if (count + 1) % progress_update_interval == 0:
+                profiling_data.print_status_update()
+
     # Create Polars DataFrame
     df = pl.DataFrame(data)
+
+    # Print final profiling summary
+    profiling_data.print_summary()
+
     return df
 
 
@@ -113,8 +316,13 @@ def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
 
     # Create temporary directory for all temporary files
     with tempfile.TemporaryDirectory() as temp_dir:
+        download_start = time.time()
+        extract_start = None
+        process_start = None
+        error_type = None
+
         try:
-            # Download the zip file to a temporary file
+            # TASK 1: Download the zip file to a temporary file
             response = requests.get(building_data_url, timeout=30)
             response.raise_for_status()
 
@@ -123,7 +331,10 @@ def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
             with open(zip_temp_path, "wb") as zip_file:
                 zip_file.write(response.content)
 
-            # Extract XML file from zip
+            download_time = time.time() - download_start
+            extract_start = time.time()
+
+            # TASK 2: Extract XML file from zip
             xml_temp_path = os.path.join(temp_dir, "building.xml")
             with zipfile.ZipFile(zip_temp_path, "r") as zip_ref:
                 # Find the first XML file in the zip
@@ -139,14 +350,50 @@ def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
             with open(xml_temp_path, encoding="utf-8") as xml_file:
                 xml_content = xml_file.read()
 
-            # Process the XML content here
+            extract_time = time.time() - extract_start
+            process_start = time.time()
+
+            # TASK 3: Process the XML content here
             processed_content = extract_weather_station_name(xml_content)
 
+            process_time = time.time() - process_start
+            total_time = download_time + extract_time + process_time
+
+            # Record timing data
+            profiling_data.add_timing(download_time, extract_time, process_time, total_time)
+
+        except requests.RequestException as e:
+            error_type = "download_error"
+            print(f"Download error for building {bldg_id.bldg_id}: {e}")
+            return ""
+        except NoXMLFileError as e:
+            error_type = "no_xml_error"
+            print(f"No XML file found for building {bldg_id.bldg_id}: {e}")
+            return ""
         except Exception as e:
-            print(f"Error processing building data: {e}")
+            error_type = "processing_error"
+            print(f"Error processing building {bldg_id.bldg_id}: {e}")
             return ""
         else:
             return processed_content
+
+        finally:
+            # Record timing data even for errors
+            if extract_start is None:
+                download_time = time.time() - download_start
+                extract_time = 0
+                process_time = 0
+            elif process_start is None:
+                download_time = time.time() - download_start
+                extract_time = time.time() - extract_start
+                process_time = 0
+            else:
+                download_time = time.time() - download_start
+                extract_time = time.time() - extract_start
+                process_time = time.time() - process_start
+
+            total_time = download_time + extract_time + process_time
+            profiling_data.add_timing(download_time, extract_time, process_time, total_time, error_type)
 
 
 def extract_weather_station_name(xml_content: str) -> str:
@@ -238,7 +485,19 @@ if __name__ == "__main__":
     state = "NY"
     upgrade_id = "0"
 
-    df = resolve_weather_station_id(product, release_year, weather_file, release_version, state, upgrade_id)
+    # You can customize the update intervals:
+    # status_update_interval: How often to print status updates (in seconds)
+    # progress_update_interval: Force status update every N buildings
+    df = resolve_weather_station_id(
+        product,
+        release_year,
+        weather_file,
+        release_version,
+        state,
+        upgrade_id,
+        status_update_interval=15,  # Update every 15 seconds
+        progress_update_interval=25,  # Also update every 25 buildings
+    )
 
     # Create output directory if it doesn't exist
     output_dir = "buildstock_fetch/data/weather_station_map"
