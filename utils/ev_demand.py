@@ -294,8 +294,7 @@ class EVDemandCalculator:
         return bldg_veh_df
 
     def find_best_matches(
-        self, target_income: int, target_occupants: int, target_vehicles: int,
-        num_samples: int, weekday: bool = True
+        self, target_income: int, target_occupants: int, target_vehicles: int, num_samples: int, weekday: bool = True
     ) -> tuple[str, list[str]]:
         """
         Find the best matching vehicles in NHTS data based on prioritized criteria.
@@ -330,10 +329,7 @@ class EVDemandCalculator:
 
         # Try matching only income and occupants
         income_occ_matches = (
-            trips.filter(
-                (pl.col("income_bucket") == target_income)
-                & (pl.col("occupants") == target_occupants)
-            )
+            trips.filter((pl.col("income_bucket") == target_income) & (pl.col("occupants") == target_occupants))
             .select(["hh_vehicle_id"])
             .unique()
         )
@@ -342,11 +338,7 @@ class EVDemandCalculator:
             return "income_occupants", income_occ_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
 
         # Try matching only income
-        income_matches = (
-            trips.filter(pl.col("income_bucket") == target_income)
-            .select(["hh_vehicle_id"])
-            .unique()
-        )
+        income_matches = trips.filter(pl.col("income_bucket") == target_income).select(["hh_vehicle_id"]).unique()
 
         if income_matches.height >= num_samples:
             return "income_only", income_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
@@ -355,11 +347,7 @@ class EVDemandCalculator:
         all_incomes = trips.select("income_bucket").unique().sort("income_bucket")
         closest_income = min(all_incomes.get_column("income_bucket"), key=lambda x: abs(x - target_income))
 
-        fallback_matches = (
-            trips.filter(pl.col("income_bucket") == closest_income)
-            .select(["hh_vehicle_id"])
-            .unique()
-        )
+        fallback_matches = trips.filter(pl.col("income_bucket") == closest_income).select(["hh_vehicle_id"]).unique()
 
         return "closest_income", fallback_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
 
@@ -409,7 +397,7 @@ class EVDemandCalculator:
                 target_income=row["income_bucket"],
                 target_occupants=row["occupants"],
                 target_vehicles=num_vehicles,
-                num_samples=num_vehicles
+                num_samples=num_vehicles,
             )
 
             # Create profiles for each vehicle

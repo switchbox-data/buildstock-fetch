@@ -7,7 +7,6 @@ import pytest
 from utils.ev_demand import (
     EVDemandCalculator,
     MetadataDataFrameError,
-    VehicleOwnershipModelError,
 )
 
 
@@ -177,7 +176,7 @@ def test_predict_num_vehicles_without_fitted_model(calculator, sample_metadata, 
 
     # Verify model was fitted
     assert calculator.vehicle_ownership_model is not None
-    
+
     # Verify predictions are reasonable
     assert "vehicles" in result.columns
     assert len(result) == len(sample_metadata)

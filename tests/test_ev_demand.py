@@ -63,16 +63,14 @@ def calculator(mock_nhts_data, mock_metadata):
 def test_find_best_matches(calculator):
     # Test exact match for single vehicle
     match_type, vehicle_ids = calculator.find_best_matches(
-        target_income=1, target_occupants=2, target_vehicles=1, 
-        num_samples=1, weekday=True
+        target_income=1, target_occupants=2, target_vehicles=1, num_samples=1, weekday=True
     )
     assert match_type == "exact"
     assert vehicle_ids == ["v1"]
 
     # Test exact match for multiple vehicles
     match_type, vehicle_ids = calculator.find_best_matches(
-        target_income=2, target_occupants=3, target_vehicles=2,
-        num_samples=2, weekday=True
+        target_income=2, target_occupants=3, target_vehicles=2, num_samples=2, weekday=True
     )
     assert match_type == "exact"
     assert len(vehicle_ids) == 2
@@ -131,7 +129,7 @@ def test_sample_vehicle_profiles(calculator):
             "weekend_miles": [],
             "weekend_trip_weights": [],
             "weekday_trip_ids": [1],
-            "weekend_trip_ids": []
+            "weekend_trip_ids": [],
         },
         ("b2", 1): {  # Building 2 first vehicle (matches v2)
             "weekday_departure_hour": [9],
@@ -143,7 +141,7 @@ def test_sample_vehicle_profiles(calculator):
             "weekend_miles": [],
             "weekend_trip_weights": [],
             "weekday_trip_ids": [1],
-            "weekend_trip_ids": []
+            "weekend_trip_ids": [],
         },
         ("b2", 2): {  # Building 2 second vehicle (matches v3)
             "weekday_departure_hour": [10],
@@ -155,7 +153,7 @@ def test_sample_vehicle_profiles(calculator):
             "weekend_miles": [],
             "weekend_trip_weights": [],
             "weekday_trip_ids": [1],
-            "weekend_trip_ids": []
+            "weekend_trip_ids": [],
         },
         ("b3", 1): {  # Building 3 has 1 vehicle (matches v3)
             "weekday_departure_hour": [8, 13],  # Two trips on weekdays
@@ -167,8 +165,8 @@ def test_sample_vehicle_profiles(calculator):
             "weekend_miles": [],
             "weekend_trip_weights": [],
             "weekday_trip_ids": [1, 2],
-            "weekend_trip_ids": []
-        }
+            "weekend_trip_ids": [],
+        },
     }
 
     # Check that we got all expected profiles
@@ -181,21 +179,21 @@ def test_sample_vehicle_profiles(calculator):
         # Check that profile matches its key values
         assert profile.building_id == bldg_id
         assert profile.vehicle_id == vehicle_id
-        
+
         # Check exact values for weekday trips
         assert len(profile.weekday_departure_hour) == len(expected["weekday_departure_hour"])
         assert profile.weekday_departure_hour == expected["weekday_departure_hour"]
         assert profile.weekday_arrival_hour == expected["weekday_arrival_hour"]
         assert profile.weekday_miles == expected["weekday_miles"]
         assert profile.weekday_trip_weights == expected["weekday_trip_weights"]
-        
+
         # Check exact values for weekend trips
         assert len(profile.weekend_departure_hour) == len(expected["weekend_departure_hour"])
         assert profile.weekend_departure_hour == expected["weekend_departure_hour"]
         assert profile.weekend_arrival_hour == expected["weekend_arrival_hour"]
         assert profile.weekend_miles == expected["weekend_miles"]
         assert profile.weekend_trip_weights == expected["weekend_trip_weights"]
-        
+
         # Check trip IDs
         assert profile.weekday_trip_ids == expected["weekday_trip_ids"]
         assert profile.weekend_trip_ids == expected["weekend_trip_ids"]
@@ -211,16 +209,16 @@ def test_sample_vehicle_profiles_zero_vehicles(calculator, mock_nhts_data, mock_
         end_date=datetime(2022, 1, 7),
         random_state=42,
     )
-    
+
     profiles = calculator.sample_vehicle_profiles(calculator.metadata_df, calculator.nhts_df)
 
     # Check that we got profiles for each vehicle (excluding the 0-vehicle building)
     expected_vehicle_count = mock_metadata_with_zero["vehicles"].sum()  # Should be 4 (b1:1, b2:2, b3:1, b4:0)
     assert len(profiles) == expected_vehicle_count
-    
+
     # Verify b4 has no profiles
-    assert not any(bldg_id == "b4" for (bldg_id, _) in profiles.keys())
-    
+    assert not any(bldg_id == "b4" for (bldg_id, _) in profiles)
+
     # Verify other buildings still have their profiles
     assert ("b1", 1) in profiles
     assert ("b2", 1) in profiles
