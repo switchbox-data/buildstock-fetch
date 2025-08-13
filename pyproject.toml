@@ -53,6 +53,7 @@ dev = [
     "pandas-stubs>=2.2.0",
     "types-boto3>=1.33.0",
     "scikit-learn>=1.6.1",
+    "xmltodict>=0.14.2",
 ]
 
 [build-system]
