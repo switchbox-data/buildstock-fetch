@@ -109,8 +109,8 @@ class TripSchedule:
     departure_hour: int
     arrival_hour: int
     miles_driven: float
-    avg_temp_while_away: float
-    kwh_consumed: float
+    # avg_temp_while_away: float #TBD if this will be added here or in rdp
+    # kwh_consumed: float
 
 
 class EVDemandCalculator:
@@ -293,28 +293,29 @@ class EVDemandCalculator:
 
         return bldg_veh_df
 
-    def find_best_match(
-        self, target_income: int, target_occupants: int, target_vehicles: int, weekday: bool = True
-    ) -> tuple[str, str]:
+    def find_best_matches(
+        self, target_income: int, target_occupants: int, target_vehicles: int,
+        num_samples: int, weekday: bool = True
+    ) -> tuple[str, list[str]]:
         """
-        Find the best matching vehicle in NHTS data based on prioritized criteria.
-        First tries exact match, then relaxes constraints in order of least to most important:
-        vehicles -> occupants -> income_bucket
+        Find the best matching vehicles in NHTS data based on prioritized criteria.
+        Will return num_samples different vehicles, falling back to less exact matches if needed.
 
         Args:
             target_income: Target income bucket to match
             target_occupants: Target number of occupants to match
             target_vehicles: Target number of vehicles to match
+            num_samples: Number of different vehicles to sample
             weekday: Whether to match against weekday (True) or weekend (False) trips
 
         Returns:
-            Tuple of (match_type, matched_vehicle_id) where match_type indicates how the match was found
+            Tuple of (match_type, list of matched_vehicle_ids)
         """
         # Select weekday or weekend trips
         trips = self.nhts_df.filter(pl.col("weekday") == (2 if weekday else 1))
 
         # Try exact match first
-        exact_match = (
+        exact_matches = (
             trips.filter(
                 (pl.col("income_bucket") == target_income)
                 & (pl.col("occupants") == target_occupants)
@@ -324,39 +325,49 @@ class EVDemandCalculator:
             .unique()
         )
 
-        if exact_match.height > 0:
-            # Randomly select one vehicle from exact matches
-            return "exact", exact_match.sample(1).row(0)[0]
+        if exact_matches.height >= num_samples:
+            return "exact", exact_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
 
         # Try matching only income and occupants
-        income_occ_match = (
-            trips.filter((pl.col("income_bucket") == target_income) & (pl.col("occupants") == target_occupants))
+        income_occ_matches = (
+            trips.filter(
+                (pl.col("income_bucket") == target_income)
+                & (pl.col("occupants") == target_occupants)
+            )
             .select(["hh_vehicle_id"])
             .unique()
         )
 
-        if income_occ_match.height > 0:
-            return "income_occupants", income_occ_match.sample(1).row(0)[0]
+        if income_occ_matches.height >= num_samples:
+            return "income_occupants", income_occ_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
 
-        # Try matching only income (most important criteria)
-        income_match = trips.filter(pl.col("income_bucket") == target_income).select(["hh_vehicle_id"]).unique()
+        # Try matching only income
+        income_matches = (
+            trips.filter(pl.col("income_bucket") == target_income)
+            .select(["hh_vehicle_id"])
+            .unique()
+        )
 
-        if income_match.height > 0:
-            return "income_only", income_match.sample(1).row(0)[0]
+        if income_matches.height >= num_samples:
+            return "income_only", income_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
 
         # If still no match, find closest income bucket
         all_incomes = trips.select("income_bucket").unique().sort("income_bucket")
         closest_income = min(all_incomes.get_column("income_bucket"), key=lambda x: abs(x - target_income))
 
-        fallback_match = trips.filter(pl.col("income_bucket") == closest_income).select(["hh_vehicle_id"]).unique()
+        fallback_matches = (
+            trips.filter(pl.col("income_bucket") == closest_income)
+            .select(["hh_vehicle_id"])
+            .unique()
+        )
 
-        return "closest_income", fallback_match.sample(1).row(0)[0]
+        return "closest_income", fallback_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
 
     def sample_vehicle_profiles(
         self, bldg_veh_df: pl.DataFrame, nhts_df: pl.DataFrame
     ) -> dict[tuple[str, int], VehicleProfile]:
         """
-        For each household and vehicle, sample weekday and weekend trip profiles from NHTS.
+        For each household and vehicle, select a weekday and weekend trip profiles from NHTS.
 
         Args:
             bldg_veh_df: DataFrame with household and vehicle info.
@@ -388,18 +399,25 @@ class EVDemandCalculator:
 
         for row in df.iter_rows(named=True):
             bldg_id = row["bldg_id"]
-            num_vehicles = row["vehicles"]  # This comes from predict_num_vehicles
+            num_vehicles = row["vehicles"]
 
-            # Skip households with no vehicles
             if num_vehicles == 0:
                 continue
 
-            # For each vehicle in the household
-            for vehicle_id in range(1, num_vehicles + 1):  # Start from 1 to match example
+            # Get all vehicle matches at once
+            match_type, matched_vehicle_ids = self.find_best_matches(
+                target_income=row["income_bucket"],
+                target_occupants=row["occupants"],
+                target_vehicles=num_vehicles,
+                num_samples=num_vehicles
+            )
+
+            # Create profiles for each vehicle
+            for vehicle_id, matched_vehicle_id in enumerate(matched_vehicle_ids, start=1):
                 # Find best matching vehicle based on our criteria
-                match_type, matched_vehicle_id = self.find_best_match(
-                    target_income=row["income_bucket"], target_occupants=row["occupants"], target_vehicles=num_vehicles
-                )
+                # match_type, matched_vehicle_id = self.find_best_match(
+                #     target_income=row["income_bucket"], target_occupants=row["occupants"], target_vehicles=num_vehicles
+                # )
 
                 # Get all weekday trips for this vehicle
                 weekday_samples = weekday_trips.filter(pl.col("hh_vehicle_id") == matched_vehicle_id).select([
@@ -436,7 +454,7 @@ class EVDemandCalculator:
                 # Create VehicleProfile for this specific vehicle
                 profiles[(bldg_id, vehicle_id)] = VehicleProfile(
                     building_id=bldg_id,
-                    vehicle_id=vehicle_id,
+                    vehicle_id=vehicle_id,  # Now vehicle_id is already 1-based
                     weekday_departure_hour=weekday_departures,
                     weekday_arrival_hour=weekday_arrivals,
                     weekday_miles=weekday_miles,
@@ -500,9 +518,9 @@ class EVDemandCalculator:
                 # Add variance to miles only (keep original departure/arrival times)
                 miles = np.random.normal(base_miles, base_miles * 0.1)
 
-                # Get temperature and calculate energy consumption
-                avg_temp = self.get_avg_temp_while_away(departure, arrival, current_date)
-                kwh = self.miles_to_kwh(miles, avg_temp)
+                # # Get temperature and calculate energy consumption - TODO: decide if we do this here or in rdp
+                # avg_temp = self.get_avg_temp_while_away(departure, arrival, current_date)
+                # kwh = self.miles_to_kwh(miles, avg_temp)
 
                 schedules.append(
                     TripSchedule(
@@ -512,8 +530,8 @@ class EVDemandCalculator:
                         departure_hour=departure,
                         arrival_hour=arrival,
                         miles_driven=miles,
-                        avg_temp_while_away=avg_temp,
-                        kwh_consumed=kwh,
+                        # avg_temp_while_away=avg_temp,
+                        # kwh_consumed=kwh,
                     )
                 )
 
@@ -644,8 +662,7 @@ class EVDemandCalculator:
         # Generate trip schedules for each vehicle
         trip_schedules = self._generate_annual_trip_schedule(vehicle_profiles)
 
-        # Drop temperature and energy consumption columns
-        return trip_schedules.drop(["avg_temp_while_away", "kwh_consumed"])
+        return trip_schedules
 
 
 # # Example usage
@@ -670,4 +687,3 @@ if __name__ == "__main__":
     )
 
     trip_schedules = calculator.generate_trip_schedules()
-    print(trip_schedules)
