@@ -142,11 +142,10 @@ cython_debug/
 # Mac
 .DS_Store
 
-# Data folder
-data/
 
 # Test output directories
 **/test_output/
 
 # EV data
 utils/ev_data/inputs/*.csv
+utils/ev_data/inputs/**/*.parquet
