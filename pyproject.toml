@@ -33,26 +33,43 @@ Documentation = "https://switchbox-data.github.io/buildstock-fetch/"
 [project.scripts]
 bsf = "buildstock_fetch.main_cli:app"
 
-[dependency-groups]
-dev = [
+[project.optional-dependencies]
+# Core testing dependencies
+test = [
     "pytest>=7.2.0",
+]
+
+# Documentation dependencies
+docs = [
+    "mkdocs>=1.4.2",
+    "mkdocs-material>=8.5.10",
+    "mkdocstrings[python]>=0.26.1",
+]
+
+# Code quality and linting dependencies
+lint = [
     "pre-commit>=2.20.0",
+    "mypy>=0.991",
+    "ruff>=0.11.5",
+    "deptry>=0.23.0",
+    "types-requests>=2.31.0",
+    "types-boto3>=1.33.0",
+    "pandas-stubs>=2.2.0",
+]
+
+# Development utilities dependencies (only for utils/ directory)
+dev-utils = [
     "boto3>=1.33.0",
     "botocore>=1.33.0",
     "pyarrow>=14.0.1",
     "numpy>=1.26.4",
-    "tox-uv>=1.11.3",
-    "deptry>=0.23.0",
-    "mypy>=0.991",
-    "ruff>=0.11.5",
-    "mkdocs>=1.4.2",
-    "mkdocs-material>=8.5.10",
-    "mkdocstrings[python]>=0.26.1",
-    "types-requests>=2.31.0",
-    "types-boto3>=1.33.0",
-    "pandas-stubs>=2.2.0",
-    "types-boto3>=1.33.0",
     "scikit-learn>=1.6.1",
+]
+
+# All development dependencies (convenience group)
+dev = [
+    "buildstock-fetch[test,docs,lint,dev-utils]",
+    "tox-uv>=1.11.3",
 ]
 
 [build-system]
@@ -65,8 +82,8 @@ include-package-data = true
 packages = ["buildstock_fetch"]
 
 [tool.setuptools.package-data]
-"buildstock_fetch" = ["*.json", "building_data/*"]
-"buildstock_fetch.data.building_data" = ["combined_metadata.parquet"]
+"buildstock_fetch" = ["*.json", "data/building_data/*"]
+
 
 
 [tool.mypy]
@@ -134,4 +151,34 @@ ignore = [
 preview = true
 
 [tool.deptry]
-exclude = ["utils/", "tests/", ".venv/"]
+# Exclude directories that shouldn't be analyzed
+exclude = [
+    "utils",
+    "\\.venv"
+]
+
+# Ignore dev-only dependencies that are not used in main package code
+per_rule_ignores.DEP002 = [
+    # Testing framework
+    "pytest",
+    # Documentation tools
+    "mkdocs",
+    "mkdocs-material",
+    "mkdocstrings",
+    # Code quality tools
+    "pre-commit",
+    "tox-uv",
+    "deptry",
+    "mypy",
+    "ruff",
+    # Type stubs
+    "types-requests",
+    "types-boto3",
+    "pandas-stubs",
+    # Development utilities (only used in utils/)
+    "boto3",
+    "botocore",
+    "pyarrow",
+    "numpy",
+    "scikit-learn",
+]

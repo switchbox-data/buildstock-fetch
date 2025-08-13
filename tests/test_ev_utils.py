@@ -2,6 +2,8 @@ import pytest
 
 from utils.ev_demand import EVDemandConfig
 from utils.ev_utils import (
+    assign_income_midpoints,
+    assign_nhts_income_bucket,
     get_census_division_for_state,
 )
 
@@ -20,53 +22,21 @@ def test_get_census_division_for_state():
     assert get_census_division_for_state("OH") == 3
 
 
-# # THESE ARE COMMENTED OUT BECAUSE I HAVE NOT SET UP TESTING DATA YET - TESTS ARE HELPING WITH DEV
-# def test_load_metadata(test_config):
-#     metadata_df = load_metadata(test_config.metadata_path)
+def test_assign_nhts_income_bucket():
+    """Test the assign_nhts_income_bucket function with key income values."""
 
-#     assert len(metadata_df) > 0
-#     assert "bldg_id" in metadata_df.columns
-#     assert "weight" in metadata_df.columns
-#     assert "metro" in metadata_df.columns
-#     assert "puma" in metadata_df.columns
-#     assert "income" in metadata_df.columns
-#     assert "occupants" in metadata_df.columns
-#     assert "hhsize_bins" in metadata_df.columns
+    # Test 4 key cases covering different buckets
+    assert assign_nhts_income_bucket(5000) == 1  # Low income
+    assert assign_nhts_income_bucket(50000) == 6  # Middle income
+    assert assign_nhts_income_bucket(150000) == 10  # High income
+    assert assign_nhts_income_bucket(250000) == 11  # Very high income
 
 
-# def test_load_nhts_data(test_config):
-#     print(test_config.nhts_path)
-#     nhts_df = load_nhts_data(test_config.nhts_path, test_config.state)
+def test_assign_income_midpoints():
+    """Test the assign_income_midpoints function with various income range strings."""
 
-#     assert len(nhts_df) > 0
-#     assert "vehicle_id" in nhts_df.columns
-#     assert "start_time" in nhts_df.columns
-#     assert "end_time" in nhts_df.columns
-#     assert "miles_driven" in nhts_df.columns
-#     assert "weekday" in nhts_df.columns
-#     assert "occupants" in nhts_df.columns
-#     assert "income" in nhts_df.columns
-#     assert "vehicles" in nhts_df.columns
-#     assert "urban" in nhts_df.columns
-
-
-# def test_load_pums_data(test_config):
-#     pums_df = load_pums_data(test_config.pums_path, test_config.metadata_path)
-
-#     assert len(pums_df) > 0
-#     assert "income" in pums_df.columns
-#     assert "occupants" in pums_df.columns
-#     assert "vehicles" in pums_df.columns
-#     assert "puma" in pums_df.columns
-#     assert "hh_weight" in pums_df.columns
-#     assert "metro" in pums_df.columns
-
-
-# def test_load_metro_puma_map(test_config):
-#     metro_pums_df = load_metro_puma_map(test_config.metadata_path)
-
-#     assert len(metro_pums_df) > 0
-#     assert "metro" in metro_pums_df.columns
-#     assert "puma" in metro_pums_df.columns
-#     # Check that PUMA values are 5 characters (after str.slice(-5))
-#     assert all(metro_pums_df["puma"].str.len_chars() == 5)
+    # Test 4 key cases covering different scenarios
+    assert assign_income_midpoints("60000-69999") == 64999  # Range midpoint
+    assert assign_income_midpoints("0-10000") == 5000  # Low range
+    assert assign_income_midpoints("200000") == 200000  # Single value
+    assert assign_income_midpoints(None) is None  # None input

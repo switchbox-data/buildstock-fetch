@@ -130,6 +130,51 @@ def assign_income_midpoints(income_str: str) -> int:
     return int(income_str)
 
 
+def assign_nhts_income_bucket(income: int) -> int:
+    """
+    Assign an income bucket to an NHTS income value.
+
+    Args:
+        income: Annual household income in dollars
+
+    Returns:
+        NHTS income bucket number (1-11)
+
+    NHTS Income Buckets:
+        01 = Less than $10,000
+        02 = $10,000 to $14,999
+        03 = $15,000 to $24,999
+        04 = $25,000 to $34,999
+        05 = $35,000 to $49,999
+        06 = $50,000 to $74,999
+        07 = $75,000 to $99,999
+        08 = $100,000 to $124,999
+        09 = $125,000 to $149,999
+        10 = $150,000 to $199,999
+        11 = $200,000 or more
+    """
+    # List of (threshold, bucket) pairs
+    income_buckets = [
+        (10000, 1),
+        (15000, 2),
+        (25000, 3),
+        (35000, 4),
+        (50000, 5),
+        (75000, 6),
+        (100000, 7),
+        (125000, 8),
+        (150000, 9),
+        (200000, 10),
+        (float("inf"), 11),  # Catch all for $200,000 or more
+    ]
+
+    for threshold, bucket in income_buckets:
+        if income < threshold:
+            return bucket
+
+    return 11  # Should never reach here due to inf threshold, but makes mypy happy
+
+
 def load_metadata(metadata_path: str) -> pl.DataFrame:
     """
     Load and parse the ResStock metadata parquet file.
@@ -183,6 +228,9 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
         ])
         # Convert income ranges to numeric midpoints
         .with_columns([pl.col("income").map_elements(assign_income_midpoints, return_dtype=pl.Int64).alias("income")])
+        .with_columns([
+            pl.col("income").map_elements(assign_nhts_income_bucket, return_dtype=pl.Int64).alias("income_bucket")
+        ])
         # Extract last 5 characters from PUMA
         .with_columns([pl.col("puma").str.slice(-5).alias("puma")])
         .collect()
@@ -210,6 +258,7 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
     needed_columns = [
         "CENSUS_D",  # census division (needed for filtering)
         "VEHCASEID",  # unique hh/vehicle id
+        "VEHID",  # vehicle id
         "STRTTIME",  # start time
         "ENDTIME",  # end time
         "TRPMILES",  # miles driven
@@ -218,30 +267,38 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         "HHFAMINC",  # household income
         "HHVEHCNT",  # total number of vehicles
         "URBRUR",  # urban/rural status urban(1)/rural(2)
+        "WTTRDFIN",  # trip weight
     ]
 
     # Load only the needed columns
-    nhts_df = pl.read_csv(nhts_path, columns=needed_columns)
+    nhts_df = pl.read_csv(nhts_path, columns=needed_columns, schema_overrides={"VEHCASEID": pl.Utf8})
 
     # Get the census division for this state
     state_division = get_census_division_for_state(state)
 
     # Filter to only keep census division for this state
-    nhts_df = nhts_df.filter(pl.col("CENSUS_D") == state_division)
+    nhts_df = nhts_df.filter(
+        pl.col("CENSUS_D") == state_division,
+        pl.col("HHVEHCNT") > 0,
+        pl.col("VEHCASEID") != "-1",
+        pl.col("HHFAMINC") > 0,
+    )  # -7, -8 are not valid income bucket values
 
     # Remove the CENSUS_D column since we don't need it anymore
     nhts_df = nhts_df.drop("CENSUS_D")
 
     nhts_df = nhts_df.rename({
         "HHSIZE": "occupants",
-        "HHFAMINC": "income",
+        "HHFAMINC": "income_bucket",
         "HHVEHCNT": "vehicles",
         "URBRUR": "urban",
         "TDWKND": "weekday",
-        "VEHCASEID": "vehicle_id",
+        "VEHCASEID": "hh_vehicle_id",
+        "VEHID": "vehicle_id",
         "STRTTIME": "start_time",
         "ENDTIME": "end_time",
         "TRPMILES": "miles_driven",
+        "WTTRDFIN": "trip_weight",
     })
 
     return nhts_df
