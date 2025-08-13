@@ -61,7 +61,7 @@ class NoAnnualLoadCurveError(ValueError):
 METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
-RELEASE_JSON_FILE = Path(str(files("buildstock_fetch.utils").joinpath("buildstock_releases.json")))
+RELEASE_JSON_FILE = Path(str(files("buildstock_fetch.data").joinpath("buildstock_releases.json")))
 
 
 @dataclass
