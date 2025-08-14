@@ -109,8 +109,7 @@ class TripSchedule:
     departure_hour: int
     arrival_hour: int
     miles_driven: float
-    # avg_temp_while_away: float #TBD if this will be added here or in rdp
-    # kwh_consumed: float
+
 
 
 class EVDemandCalculator:
@@ -392,7 +391,7 @@ class EVDemandCalculator:
             if num_vehicles == 0:
                 continue
 
-            # Get all vehicle matches at once
+            # Find best vehicle matches for all cars at this building
             match_type, matched_vehicle_ids = self.find_best_matches(
                 target_income=row["income_bucket"],
                 target_occupants=row["occupants"],
@@ -402,10 +401,6 @@ class EVDemandCalculator:
 
             # Create profiles for each vehicle
             for vehicle_id, matched_vehicle_id in enumerate(matched_vehicle_ids, start=1):
-                # Find best matching vehicle based on our criteria
-                # match_type, matched_vehicle_id = self.find_best_match(
-                #     target_income=row["income_bucket"], target_occupants=row["occupants"], target_vehicles=num_vehicles
-                # )
 
                 # Get all weekday trips for this vehicle
                 weekday_samples = weekday_trips.filter(pl.col("hh_vehicle_id") == matched_vehicle_id).select([
@@ -506,9 +501,6 @@ class EVDemandCalculator:
                 # Add variance to miles only (keep original departure/arrival times)
                 miles = np.random.normal(base_miles, base_miles * 0.1)
 
-                # # Get temperature and calculate energy consumption - TODO: decide if we do this here or in rdp
-                # avg_temp = self.get_avg_temp_while_away(departure, arrival, current_date)
-                # kwh = self.miles_to_kwh(miles, avg_temp)
 
                 schedules.append(
                     TripSchedule(
@@ -664,9 +656,9 @@ if __name__ == "__main__":
     print(f"✓ Loaded NHTS data: {len(nhts_df)} rows")
     print(f"✓ Loaded weather data: {len(weather_df)} rows")
 
-    # Test the multinomial model
+
     calculator = EVDemandCalculator(
-        metadata_df=metadata_df[0:2, :],
+        metadata_df=metadata_df,
         nhts_df=nhts_df,
         pums_df=pums_df,
         weather_df=weather_df,
