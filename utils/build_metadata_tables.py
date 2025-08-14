@@ -385,7 +385,7 @@ if __name__ == "__main__":
     data = json.loads(Path(str(releases_file)).read_text(encoding="utf-8"))
 
     # Directory to save the data
-    data_dir = Path(__file__).parent.parent / "data"
+    data_dir = files("buildstock_fetch").joinpath("data")
     downloaded_paths: list[str] = []
     data_dir.mkdir(parents=True, exist_ok=True)
 
