@@ -627,7 +627,7 @@ def main_callback(
     product: str = PRODUCT_OPTION,
     release_year: str = RELEASE_YEAR_OPTION,
     weather_file: str = WEATHER_FILE_OPTION,
-    release_version: int = RELEASE_VERSION_OPTION,
+    release_version: float = RELEASE_VERSION_OPTION,
     states: str = STATES_OPTION,
     file_type: str = FILE_TYPE_OPTION,
     upgrade_id: str = UPGRADE_ID_OPTION,
