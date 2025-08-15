@@ -5,11 +5,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any, Union
 
-import boto3
 import polars as pl
-import pyarrow.fs as fs  # type: ignore[import-untyped]
-from botocore import UNSIGNED
-from botocore.config import Config
 
 # Configure logging
 logging.basicConfig(
@@ -340,6 +336,111 @@ def _extract_upgrade_number(filename: str) -> Union[str, None]:
     return upgrade_part[:dot_index]
 
 
+def convert_state_names_to_abbreviations(data_dir: Path, skip_sorting: bool = False) -> None:
+    """
+    Convert full state names to abbreviations in partitioned parquet files.
+
+    ONLY renames state directory names from full names to abbreviations.
+    Does NOT change any data or partition structure.
+
+    Args:
+        data_dir (Path): Directory containing the building_data folder
+        skip_sorting (bool): Ignored, kept for compatibility
+    """
+    import os
+
+    # State name to abbreviation mapping
+    state_mapping = {
+        "Alabama": "AL",
+        "Alaska": "AK",
+        "Arizona": "AZ",
+        "Arkansas": "AR",
+        "California": "CA",
+        "Colorado": "CO",
+        "Connecticut": "CT",
+        "Delaware": "DE",
+        "Florida": "FL",
+        "Georgia": "GA",
+        "Hawaii": "HI",
+        "Idaho": "ID",
+        "Illinois": "IL",
+        "Indiana": "IN",
+        "Iowa": "IA",
+        "Kansas": "KS",
+        "Kentucky": "KY",
+        "Louisiana": "LA",
+        "Maine": "ME",
+        "Maryland": "MD",
+        "Massachusetts": "MA",
+        "Michigan": "MI",
+        "Minnesota": "MN",
+        "Mississippi": "MS",
+        "Missouri": "MO",
+        "Montana": "MT",
+        "Nebraska": "NE",
+        "Nevada": "NV",
+        "New Hampshire": "NH",
+        "New Jersey": "NJ",
+        "New Mexico": "NM",
+        "New York": "NY",
+        "North Carolina": "NC",
+        "North Dakota": "ND",
+        "Ohio": "OH",
+        "Oklahoma": "OK",
+        "Oregon": "OR",
+        "Pennsylvania": "PA",
+        "Rhode Island": "RI",
+        "South Carolina": "SC",
+        "South Dakota": "SD",
+        "Tennessee": "TN",
+        "Texas": "TX",
+        "Utah": "UT",
+        "Vermont": "VT",
+        "Virginia": "VA",
+        "Washington": "WA",
+        "West Virginia": "WV",
+        "Wisconsin": "WI",
+        "Wyoming": "WY",
+        "District of Columbia": "DC",
+        # Handle URL-encoded versions
+        "New%20Hampshire": "NH",
+        "New%20Jersey": "NJ",
+        "New%20Mexico": "NM",
+        "New%20York": "NY",
+        "North%20Carolina": "NC",
+        "North%20Dakota": "ND",
+        "Rhode%20Island": "RI",
+        "South%20Carolina": "SC",
+        "South%20Dakota": "SD",
+        "West%20Virginia": "WV",
+        "District%20of%20Columbia": "DC",
+    }
+
+    parquet_dir = data_dir / "building_data" / "combined_metadata.parquet"
+
+    if not parquet_dir.exists():
+        logger.error(f"Parquet directory not found: {parquet_dir}")
+        return
+
+    logger.info("Starting state directory name conversion")
+
+    # Walk through all directories and rename state directories
+    for root, dirs, _files in os.walk(parquet_dir):
+        for dir_name in dirs:
+            if dir_name.startswith("state="):
+                state_name = dir_name[6:]  # Remove "state=" prefix
+                if state_name in state_mapping:
+                    old_path = os.path.join(root, dir_name)
+                    new_dir_name = f"state={state_mapping[state_name]}"
+                    new_path = os.path.join(root, new_dir_name)
+
+                    if old_path != new_path:
+                        logger.info(f"Renaming: {old_path} -> {new_path}")
+                        os.rename(old_path, new_path)
+
+    logger.info("Successfully completed state directory name conversion")
+
+
 def find_all_parquet_files(base_file_key: str, s3_client: Any, bucket_name: str) -> dict:
     """
     Find all parquet files in the S3 bucket and organize them by upgrade type.
@@ -389,156 +490,4 @@ if __name__ == "__main__":
     downloaded_paths: list[str] = []
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    # List to collect all DataFrames
-    all_dataframes = []
-
-    # S3 bucket and filesystem
-    bucket_name = "oedi-data-lake"
-    s3 = fs.S3FileSystem(anonymous=True, region="us-west-2")
-    s3_client = boto3.client("s3", region_name="us-west-2", config=Config(signature_version=UNSIGNED))
-
-    for release_name, release in data.items():
-        release_year = release["release_year"]
-        res_com = release["res_com"]
-        weather = release["weather"]
-        release_version = release["release_number"]
-        upgrade_ids = release.get("upgrade_ids", [])
-
-        if release_year == "2021":
-            file_key = (
-                f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/metadata.parquet"
-            )
-            df = process_parquet_file(
-                file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
-            )
-            if df is not None and df.height > 0:
-                all_dataframes.append(df)
-            else:
-                logger.exception(
-                    f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
-                )
-                logger.exception("Exiting script...")
-                sys.exit(1)
-
-        elif (
-            release_year == "2022"
-            or release_year == "2023"
-            or (release_year == "2024" and release_name != "com_2024_amy2018_2")
-        ):
-            # Process only the first upgrade_id
-            if upgrade_ids:
-                upgrade_id = int(upgrade_ids[0])
-                if upgrade_id == 0:
-                    file_key = (
-                        f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                        f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/baseline.parquet"
-                    )
-                else:
-                    file_key = (
-                        f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                        f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/"
-                        f"upgrade{upgrade_id:02d}.parquet"
-                    )
-
-                df = process_parquet_file(
-                    file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
-                )
-                if df is not None and df.height > 0:
-                    all_dataframes.append(df)
-                else:
-                    logger.exception(
-                        f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
-                    )
-                    logger.exception("Exiting script...")
-                    sys.exit(1)
-
-        elif release_name == "com_2024_amy2018_2" or release_name == "com_2025_amy2018_1":
-            base_file_key = (
-                f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                f"{release_year}/{res_com}_{weather}_release_{release_version}/"
-                f"metadata_and_annual_results/by_state_and_county/full/parquet/"
-            )
-
-            # Find all available parquet files at once
-            all_parquet_files = find_all_parquet_files(base_file_key, s3_client, bucket_name)
-            logger.info(f"Found parquet files: {list(all_parquet_files.keys())}")
-
-            # Process only the first upgrade_id
-            if upgrade_ids:
-                upgrade_id = int(upgrade_ids[0])
-                if upgrade_id == 0 and release_name == "com_2024_amy2018_2":
-                    file_key_suffix = "baseline.parquet"
-                    available_files = all_parquet_files.get("baseline", [])
-                elif release_name == "com_2025_amy2018_1":
-                    file_key_suffix = f"upgrade{upgrade_id}.parquet"
-                    available_files = all_parquet_files.get(f"upgrade_{upgrade_id}", [])
-                else:
-                    file_key_suffix = f"upgrade{upgrade_id:02d}.parquet"
-                    available_files = all_parquet_files.get(f"upgrade_{upgrade_id:02d}", [])
-
-                logger.info(f"Found {len(available_files)} {file_key_suffix} files:")
-
-                if available_files:
-                    # Combine all parquet files for this upgrade
-                    combined_dfs = []
-                    files_to_process = available_files  # Process all available files
-
-                    for i, file_key in enumerate(files_to_process, 1):
-                        logger.info(f"Processing file {i} out of {len(files_to_process)}")
-                        df = process_parquet_file(
-                            file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
-                        )
-                        if df is not None and df.height > 0:
-                            combined_dfs.append(df)
-                        else:
-                            logger.exception(
-                                f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
-                            )
-                            logger.exception("Exiting script...")
-                            sys.exit(1)
-
-                    if combined_dfs:
-                        # Concatenate all DataFrames for this release
-                        combined_df = pl.concat(combined_dfs)
-                        logger.info(
-                            f"Combined {len(combined_dfs)} files into {combined_df.height} total rows in {release_name}"
-                        )
-                        all_dataframes.append(combined_df)
-                    else:
-                        logger.warning(f"No valid data found for {file_key_suffix} in {release_name}")
-                else:
-                    logger.warning(f"No files found for {file_key_suffix} in {release_name}")
-
-    # Combine all DataFrames and save as partitioned parquet
-    if all_dataframes:
-        logger.info(f"Combining {len(all_dataframes)} DataFrames...")
-
-        # Ensure consistent schema across all DataFrames
-        logger.info("Ensuring consistent schema across DataFrames...")
-        normalized_dataframes = []
-        for i, df in enumerate(all_dataframes):
-            # Convert categorical columns to string to ensure compatibility
-            df_normalized = df.with_columns([
-                pl.col(col).cast(pl.Utf8) for col in df.columns if df.schema[col] == pl.Categorical
-            ])
-            normalized_dataframes.append(df_normalized)
-            logger.info(f"Normalized DataFrame {i + 1} schema: {df_normalized.schema}")
-
-        final_df = pl.concat(normalized_dataframes)
-        logger.info(f"Final DataFrame has {final_df.height} rows and {len(final_df.columns)} columns")
-
-        # Sort by county
-        if "county" in final_df.columns:
-            final_df = final_df.sort("county")
-
-        # Save as partitioned parquet file
-        output_file = data_dir / "building_data" / "combined_metadata.parquet"
-        final_df.write_parquet(
-            str(output_file),  # Convert Path to string for Polars
-            use_pyarrow=True,
-            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
-        )
-        logger.info(f"Successfully saved combined DataFrame to {output_file}")
-    else:
-        logger.warning("No data to save")
+    convert_state_names_to_abbreviations(data_dir, skip_sorting=True)
