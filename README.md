@@ -21,7 +21,7 @@ pip install buildstock-fetch
 or
 
 ```bash
-uv pip install buildstock-fetch
+uv add buildstock-fetch
 ```
 
 ## Using the library
