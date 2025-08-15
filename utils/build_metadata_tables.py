@@ -340,6 +340,111 @@ def _extract_upgrade_number(filename: str) -> Union[str, None]:
     return upgrade_part[:dot_index]
 
 
+def convert_state_names_to_abbreviations(data_dir: Path, skip_sorting: bool = False) -> None:
+    """
+    Convert full state names to abbreviations in partitioned parquet files.
+
+    ONLY renames state directory names from full names to abbreviations.
+    Does NOT change any data or partition structure.
+
+    Args:
+        data_dir (Path): Directory containing the building_data folder
+        skip_sorting (bool): Ignored, kept for compatibility
+    """
+    import os
+
+    # State name to abbreviation mapping
+    state_mapping = {
+        "Alabama": "AL",
+        "Alaska": "AK",
+        "Arizona": "AZ",
+        "Arkansas": "AR",
+        "California": "CA",
+        "Colorado": "CO",
+        "Connecticut": "CT",
+        "Delaware": "DE",
+        "Florida": "FL",
+        "Georgia": "GA",
+        "Hawaii": "HI",
+        "Idaho": "ID",
+        "Illinois": "IL",
+        "Indiana": "IN",
+        "Iowa": "IA",
+        "Kansas": "KS",
+        "Kentucky": "KY",
+        "Louisiana": "LA",
+        "Maine": "ME",
+        "Maryland": "MD",
+        "Massachusetts": "MA",
+        "Michigan": "MI",
+        "Minnesota": "MN",
+        "Mississippi": "MS",
+        "Missouri": "MO",
+        "Montana": "MT",
+        "Nebraska": "NE",
+        "Nevada": "NV",
+        "New Hampshire": "NH",
+        "New Jersey": "NJ",
+        "New Mexico": "NM",
+        "New York": "NY",
+        "North Carolina": "NC",
+        "North Dakota": "ND",
+        "Ohio": "OH",
+        "Oklahoma": "OK",
+        "Oregon": "OR",
+        "Pennsylvania": "PA",
+        "Rhode Island": "RI",
+        "South Carolina": "SC",
+        "South Dakota": "SD",
+        "Tennessee": "TN",
+        "Texas": "TX",
+        "Utah": "UT",
+        "Vermont": "VT",
+        "Virginia": "VA",
+        "Washington": "WA",
+        "West Virginia": "WV",
+        "Wisconsin": "WI",
+        "Wyoming": "WY",
+        "District of Columbia": "DC",
+        # Handle URL-encoded versions
+        "New%20Hampshire": "NH",
+        "New%20Jersey": "NJ",
+        "New%20Mexico": "NM",
+        "New%20York": "NY",
+        "North%20Carolina": "NC",
+        "North%20Dakota": "ND",
+        "Rhode%20Island": "RI",
+        "South%20Carolina": "SC",
+        "South%20Dakota": "SD",
+        "West%20Virginia": "WV",
+        "District%20of%20Columbia": "DC",
+    }
+
+    parquet_dir = data_dir / "building_data" / "combined_metadata.parquet"
+
+    if not parquet_dir.exists():
+        logger.error(f"Parquet directory not found: {parquet_dir}")
+        return
+
+    logger.info("Starting state directory name conversion")
+
+    # Walk through all directories and rename state directories
+    for root, dirs, _files in os.walk(parquet_dir):
+        for dir_name in dirs:
+            if dir_name.startswith("state="):
+                state_name = dir_name[6:]  # Remove "state=" prefix
+                if state_name in state_mapping:
+                    old_path = os.path.join(root, dir_name)
+                    new_dir_name = f"state={state_mapping[state_name]}"
+                    new_path = os.path.join(root, new_dir_name)
+
+                    if old_path != new_path:
+                        logger.info(f"Renaming: {old_path} -> {new_path}")
+                        os.rename(old_path, new_path)
+
+    logger.info("Successfully completed state directory name conversion")
+
+
 def find_all_parquet_files(base_file_key: str, s3_client: Any, bucket_name: str) -> dict:
     """
     Find all parquet files in the S3 bucket and organize them by upgrade type.
@@ -385,7 +490,7 @@ if __name__ == "__main__":
     data = json.loads(Path(str(releases_file)).read_text(encoding="utf-8"))
 
     # Directory to save the data
-    data_dir = Path(__file__).parent.parent / "data"
+    data_dir = files("buildstock_fetch").joinpath("data")
     downloaded_paths: list[str] = []
     data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -540,5 +645,9 @@ if __name__ == "__main__":
             partition_by=["product", "release_year", "weather_file", "release_version", "state"],
         )
         logger.info(f"Successfully saved combined DataFrame to {output_file}")
+
+        # Convert state names to abbreviations
+        logger.info("Starting state name abbreviation conversion...")
+        convert_state_names_to_abbreviations(data_dir, skip_sorting=True)
     else:
         logger.warning("No data to save")
