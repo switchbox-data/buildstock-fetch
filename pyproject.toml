@@ -82,7 +82,11 @@ include-package-data = true
 packages = ["buildstock_fetch"]
 
 [tool.setuptools.package-data]
-"buildstock_fetch" = ["*.json", "data/building_data/*"]
+"buildstock_fetch" = [
+    "data/buildstock_releases.json",
+    "data/building_data/**/*",
+    "data/**/*.parquet"
+]
 
 
 
