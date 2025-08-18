@@ -22,6 +22,7 @@ BASEPATH: Final[Path] = Path(__file__).resolve().parent  # just one level up
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
 class MetadataPathError(Exception):
     """Raised when no metadata path is provided."""
 
@@ -44,8 +45,6 @@ class NHTSDataError(Exception):
     """Raised when NHTS data is not loaded."""
 
     pass
-
-
 
 
 class InsufficientVehiclesError(Exception):
@@ -106,7 +105,6 @@ class TripSchedule:
     departure_hour: int
     arrival_hour: int
     miles_driven: float
-
 
 
 class EVDemandCalculator:
@@ -176,11 +174,10 @@ class EVDemandCalculator:
         #     -2.0659e-10,  # a_5 (quintic term)
         # ])
 
-    
     def _log_progress(self, current: int, total: int, description: str, progress_interval: int = 10000) -> None:
         """
         Log progress if at the right interval or at completion.
-        
+
         Args:
             current: Current number of items processed
             total: Total number of items to process
@@ -394,7 +391,7 @@ class EVDemandCalculator:
         profiles = {}
         total_buildings = len(df)
         processed_buildings = 0
-        
+
         logging.info(f"Sampling vehicle profiles for {total_buildings} buildings...")
 
         for row in df.iter_rows(named=True):
@@ -417,7 +414,6 @@ class EVDemandCalculator:
 
             # Create profiles for each vehicle
             for vehicle_id, matched_vehicle_id in enumerate(matched_vehicle_ids, start=1):
-
                 # Get all weekday trips for this vehicle
                 weekday_samples = weekday_trips.filter(pl.col("hh_vehicle_id") == matched_vehicle_id).select([
                     "start_time",
@@ -465,90 +461,136 @@ class EVDemandCalculator:
                     weekday_trip_ids=weekday_trip_ids,
                     weekend_trip_ids=weekend_trip_ids,
                 )
-            
+
             # Log progress for buildings with vehicles
             self._log_progress(processed_buildings, total_buildings, "Building progress")
 
         logging.info(f"Generated {len(profiles)} vehicle profiles from {total_buildings} buildings")
         return profiles
 
-    def generate_daily_schedules(self, profile: VehicleProfile, rng: Optional[np.random.RandomState] = None) -> list[TripSchedule]:
+    def generate_daily_schedules(
+        self, profile: VehicleProfile, rng: Optional[np.random.RandomState] = None
+    ) -> list[TripSchedule]:
         """Generate trip schedules for all days in the date range."""
         if rng is None:
             rng = np.random  # Use global numpy random if no rng provided
+
+        # Pre-compute constants (move outside loops)
+        time_offsets = np.array([-2, -1, 0, 1, 2])
+        time_probabilities = np.array([0.05, 0.10, 0.70, 0.10, 0.05])
+
+        # Pre-process weekday data
+        weekday_available = len(profile.weekday_trip_ids)
+        weekday_weights = None
+        weekday_departures = None
+        weekday_arrivals = None
+        weekday_miles = None
+
+        if weekday_available > 0:
+            weekday_weights = np.array(profile.weekday_trip_weights)
+            weekday_weights = weekday_weights / weekday_weights.sum()  # Pre-normalize
+            weekday_departures = np.array(profile.weekday_departure_hour)
+            weekday_arrivals = np.array(profile.weekday_arrival_hour)
+            weekday_miles = np.array(profile.weekday_miles)
+
+        # Pre-process weekend data
+        weekend_available = len(profile.weekend_trip_ids)
+        weekend_weights = None
+        weekend_departures = None
+        weekend_arrivals = None
+        weekend_miles = None
+
+        if weekend_available > 0:
+            weekend_weights = np.array(profile.weekend_trip_weights)
+            weekend_weights = weekend_weights / weekend_weights.sum()  # Pre-normalize
+            weekend_departures = np.array(profile.weekend_departure_hour)
+            weekend_arrivals = np.array(profile.weekend_arrival_hour)
+            weekend_miles = np.array(profile.weekend_miles)
+
+        # Calculate number of days and pre-compute date information
+        days = (self.end_date - self.start_date).days + 1
         schedules = []
 
-        # Calculate number of days between start and end dates
-        days = (self.end_date - self.start_date).days + 1
+        # Pre-allocate lists for batch operations
+        building_ids = []
+        vehicle_ids = []
+        dates = []
+        departure_hours = []
+        arrival_hours = []
+        miles_driven = []
 
         for day_offset in range(days):
             current_date = self.start_date + timedelta(days=day_offset)
             is_weekday = current_date.weekday() < 5  # Monday-Friday are weekdays
 
-            # Get available trips and weights for this day type
+            # Select pre-processed data based on day type
             if is_weekday:
-                available_trips = len(profile.weekday_trip_ids)
-                weights = np.array(profile.weekday_trip_weights)
+                available_trips = weekday_available
+                weights = weekday_weights
+                departures = weekday_departures
+                arrivals = weekday_arrivals
+                base_miles_array = weekday_miles
             else:
-                available_trips = len(profile.weekend_trip_ids)
-                weights = np.array(profile.weekend_trip_weights)
+                available_trips = weekend_available
+                weights = weekend_weights
+                departures = weekend_departures
+                arrivals = weekend_arrivals
+                base_miles_array = weekend_miles
 
             if available_trips == 0:
                 continue  # Skip days where we have no trips
 
-            # Randomly determine number of trips for this day (1 to max available)
+            # Randomly determine number of trips for this day
             num_trips = rng.randint(1, available_trips + 1)
 
-            # Normalize weights for numpy's choice function
-            weights = weights / weights.sum()
-
-            # Sample trip indices using the weights
+            # Sample trip indices using the pre-normalized weights
             trip_indices = rng.choice(
                 available_trips,
                 size=num_trips,
-                replace=False,  # Don't use the same trip twice
+                replace=False,
                 p=weights,
             )
 
-            for idx in trip_indices:
-                if is_weekday:
-                    departure = profile.weekday_departure_hour[idx]
-                    arrival = profile.weekday_arrival_hour[idx]
-                    base_miles = profile.weekday_miles[idx]
-                else:
-                    departure = profile.weekend_departure_hour[idx]
-                    arrival = profile.weekend_arrival_hour[idx]
-                    base_miles = profile.weekend_miles[idx]
+            # Vectorized operations for all trips in this day
+            selected_departures = departures[trip_indices]
+            selected_arrivals = arrivals[trip_indices]
+            selected_base_miles = base_miles_array[trip_indices]
 
-                # Add variance to miles
-                miles = rng.normal(base_miles, base_miles * 0.1)
-                
-                # Discrete distribution for time offsets (Figure 5.1)
-                # 70% = no change, 10% each for ±1 hour, 5% each for ±2 hours
-                time_offsets = [-2, -1, 0, 1, 2]
-                time_probabilities = [0.05, 0.10, 0.70, 0.10, 0.05]
-                
-                # Apply discrete variance to departure time (bounded to 0-23 hours)
-                departure_offset = rng.choice(time_offsets, p=time_probabilities)
-                departure_with_variance = max(0, min(23, departure + departure_offset))
-                
-                # Apply discrete variance to arrival time (bounded to 0-23 hours)
-                arrival_offset = rng.choice(time_offsets, p=time_probabilities)
-                arrival_with_variance = max(0, min(23, arrival + arrival_offset))
+            # Vectorized variance calculations
+            miles_variance = rng.normal(selected_base_miles, selected_base_miles * 0.1)
 
-                schedules.append(
-                    TripSchedule(
-                        building_id=profile.building_id,
-                        vehicle_id=profile.vehicle_id,
-                        date=current_date,
-                        departure_hour=int(departure_with_variance),
-                        arrival_hour=int(arrival_with_variance),
-                        miles_driven=miles,
-                    )
-                )
+            # Vectorized time offset sampling
+            departure_offsets = rng.choice(time_offsets, size=num_trips, p=time_probabilities)
+            arrival_offsets = rng.choice(time_offsets, size=num_trips, p=time_probabilities)
+
+            # Apply offsets with bounds checking
+            departures_with_variance = np.clip(selected_departures + departure_offsets, 0, 23)
+            arrivals_with_variance = np.clip(selected_arrivals + arrival_offsets, 0, 23)
+
+            # Batch append to lists
+            building_ids.extend([profile.building_id] * num_trips)
+            vehicle_ids.extend([profile.vehicle_id] * num_trips)
+            dates.extend([current_date] * num_trips)
+            departure_hours.extend(departures_with_variance.astype(int))
+            arrival_hours.extend(arrivals_with_variance.astype(int))
+            miles_driven.extend(miles_variance)
+
+        # Create all TripSchedule objects at once
+        schedules = [
+            TripSchedule(
+                building_id=bid,
+                vehicle_id=vid,
+                date=date,
+                departure_hour=dep,
+                arrival_hour=arr,
+                miles_driven=miles,
+            )
+            for bid, vid, date, dep, arr, miles in zip(
+                building_ids, vehicle_ids, dates, departure_hours, arrival_hours, miles_driven
+            )
+        ]
 
         return schedules
-
 
     def _generate_annual_trip_schedule(
         self,
@@ -588,20 +630,22 @@ class EVDemandCalculator:
 
         total_profiles = len(profiles_list)
         logging.info(f"Processing {total_profiles} vehicle profiles...")
-        
+
         # Use parallel processing if we have multiple profiles and max_workers != 1
         if len(profiles_list) > 1 and self.max_workers != 1:
             logging.info(f"Using parallel processing with {self.max_workers or 'all available'} workers")
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = [executor.submit(process_profile_with_seed, profile_and_index) 
-                          for profile_and_index in profiles_with_index]
-                
+                futures = [
+                    executor.submit(process_profile_with_seed, profile_and_index)
+                    for profile_and_index in profiles_with_index
+                ]
+
                 completed = 0
                 for future in as_completed(futures):
                     schedules = future.result()
                     all_schedules.extend(schedules)
                     completed += 1
-                    
+
                     # Log progress every 5%
                     self._log_progress(completed, total_profiles, "Progress")
         else:
@@ -610,7 +654,7 @@ class EVDemandCalculator:
             for i, profile_and_index in enumerate(profiles_with_index, 1):
                 schedules = process_profile_with_seed(profile_and_index)
                 all_schedules.extend(schedules)
-                
+
                 # Log progress every 5%
                 self._log_progress(i, total_profiles, "Progress")
 
@@ -618,8 +662,6 @@ class EVDemandCalculator:
         total_schedules = len(all_schedules)
         logging.info(f"Generated {total_schedules} trip schedules from {total_profiles} vehicle profiles")
         return pl.DataFrame([vars(schedule) for schedule in all_schedules])
-
-
 
     def generate_trip_schedules(self) -> pl.DataFrame:
         """
@@ -650,13 +692,12 @@ if __name__ == "__main__":
     print(f"✓ Loaded NHTS data: {len(nhts_df)} rows")
     print(f"✓ Loaded PUMS data: {len(pums_df)} rows")
 
-
     calculator = EVDemandCalculator(
         metadata_df=metadata_df,
         nhts_df=nhts_df,
         pums_df=pums_df,
         start_date=datetime(2018, 1, 1),
-        end_date=datetime(2018, 1, 31),
+        end_date=datetime(2018, 12, 31),
         max_workers=8,  # Use  worker threads for parallel processing
     )
 
