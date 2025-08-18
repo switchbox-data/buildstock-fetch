@@ -9,6 +9,7 @@ This module contains:
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import polars as pl
 
 __all__ = [
