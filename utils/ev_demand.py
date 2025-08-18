@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,6 +18,9 @@ from utils import ev_utils
 
 BASEPATH: Final[Path] = Path(__file__).resolve().parent  # just one level up
 
+# Set up logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 class MetadataPathError(Exception):
     """Raised when no metadata path is provided."""
@@ -42,10 +46,6 @@ class NHTSDataError(Exception):
     pass
 
 
-class WeatherDataError(Exception):
-    """Raised when weather data is not loaded."""
-
-    pass
 
 
 class InsufficientVehiclesError(Exception):
@@ -69,7 +69,6 @@ class EVDemandConfig:
     metadata_path: Optional[str] = None
     pums_path: Optional[str] = None
     nhts_path: str = f"{BASEPATH}/ev_data/inputs/NHTS_v2_1_trip_surveys.csv"
-    weather_path: Optional[str] = None
     output_dir: Optional[Path] = None
 
     def __post_init__(self) -> None:
@@ -77,8 +76,6 @@ class EVDemandConfig:
             self.metadata_path = f"{BASEPATH}/ev_data/inputs/{self.release}/metadata/{self.state}/metadata.parquet"
         if self.pums_path is None:
             self.pums_path = f"{BASEPATH}/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
-        if self.weather_path is None:
-            self.weather_path = f"{BASEPATH}/ev_data/inputs/weather.csv"  # move weather data here too
 
 
 @dataclass
@@ -122,8 +119,6 @@ class EVDemandCalculator:
     3. Predict number of vehicles per household
     4. Sample vehicle driving profiles from NHTS
     5. Generate annual trip schedules
-    6. Convert miles to kWh using temperature-dependent efficiency
-    7. Assign battery capacities
     """
 
     def __init__(
@@ -135,7 +130,7 @@ class EVDemandCalculator:
         end_date: datetime,
         max_vehicles: int = 2,
         random_state: int = 42,
-        weather_df: Optional[pl.DataFrame] = None,
+        max_workers: Optional[int] = None,
     ):
         """
         Initialize the EV demand calculator.
@@ -144,10 +139,11 @@ class EVDemandCalculator:
             metadata_df: ResStock metadata DataFrame
             nhts_df: NHTS trip data DataFrame
             pums_df: PUMS data DataFrame
-            weather_df: Weather data DataFrame (optional)
             start_date: Start date for trip generation
             end_date: End date for trip generation
+            max_vehicles: Maximum number of vehicles per household
             random_state: Random seed for reproducible results
+            max_workers: Maximum number of worker threads for parallel execution (None = use all cores)
         """
         # Set random seed for reproducible results
         np.random.seed(random_state)
@@ -157,7 +153,6 @@ class EVDemandCalculator:
         self.metadata_df = metadata_df
         self.nhts_df = nhts_df
         self.pums_df = pums_df
-        self.weather_df = weather_df
 
         self.start_date = start_date
         self.end_date = end_date
@@ -165,23 +160,37 @@ class EVDemandCalculator:
 
         self.vehicle_ownership_model: Optional[Any] = None
         self.random_state = random_state
+        self.max_workers = max_workers
 
         # Features used for vehicle assignment
         self.veh_assign_features = ["occupants", "income", "metro"]
 
-        # Available battery capacities in kWh
-        self.battery_capacities = [12, 40, 60, 90, 120]
-
         # Yuksel and Michalek (2015) polynomial coefficients for energy consumption
         # c(T) = sum(a_n * T^n) for n=0 to 5, units: kWh/mi/°F^n
-        self.efficiency_coefficients = np.array([
-            0.3950,  # a_0 (constant term)
-            -0.0022,  # a_1 (linear term)
-            9.1978e-5,  # a_2 (quadratic term)
-            -3.9249e-6,  # a_3 (cubic term)
-            5.2918e-8,  # a_4 (quartic term)
-            -2.0659e-10,  # a_5 (quintic term)
-        ])
+        # self.efficiency_coefficients = np.array([
+        #     0.3950,  # a_0 (constant term)
+        #     -0.0022,  # a_1 (linear term)
+        #     9.1978e-5,  # a_2 (quadratic term)
+        #     -3.9249e-6,  # a_3 (cubic term)
+        #     5.2918e-8,  # a_4 (quartic term)
+        #     -2.0659e-10,  # a_5 (quintic term)
+        # ])
+
+    
+    def _log_progress(self, current: int, total: int, description: str, progress_interval: int = 10000) -> None:
+        """
+        Log progress if at the right interval or at completion.
+        
+        Args:
+            current: Current number of items processed
+            total: Total number of items to process
+            description: Description for the progress message
+            progress_interval: Interval for logging (calculated if None)
+        """
+
+        if current % progress_interval == 0 or current == total:
+            percent_complete = (current / total) * 100
+            logging.info(f"{description}: {current}/{total} ({percent_complete:.1f}%)")
 
     def fit_vehicle_ownership_model(self, pums_df: pl.DataFrame) -> Any:
         """
@@ -383,12 +392,19 @@ class EVDemandCalculator:
         weekend_trips = nhts_df.filter(pl.col("weekday") == 1)
 
         profiles = {}
+        total_buildings = len(df)
+        processed_buildings = 0
+        
+        logging.info(f"Sampling vehicle profiles for {total_buildings} buildings...")
 
         for row in df.iter_rows(named=True):
             bldg_id = row["bldg_id"]
             num_vehicles = row["vehicles"]
+            processed_buildings += 1
 
             if num_vehicles == 0:
+                # Log progress for zero-vehicle buildings too
+                self._log_progress(processed_buildings, total_buildings, "Building progress")
                 continue
 
             # Find best vehicle matches for all cars at this building
@@ -449,11 +465,17 @@ class EVDemandCalculator:
                     weekday_trip_ids=weekday_trip_ids,
                     weekend_trip_ids=weekend_trip_ids,
                 )
+            
+            # Log progress for buildings with vehicles
+            self._log_progress(processed_buildings, total_buildings, "Building progress")
 
+        logging.info(f"Generated {len(profiles)} vehicle profiles from {total_buildings} buildings")
         return profiles
 
-    def generate_daily_schedules(self, profile: VehicleProfile) -> list[TripSchedule]:
+    def generate_daily_schedules(self, profile: VehicleProfile, rng: Optional[np.random.RandomState] = None) -> list[TripSchedule]:
         """Generate trip schedules for all days in the date range."""
+        if rng is None:
+            rng = np.random  # Use global numpy random if no rng provided
         schedules = []
 
         # Calculate number of days between start and end dates
@@ -475,13 +497,13 @@ class EVDemandCalculator:
                 continue  # Skip days where we have no trips
 
             # Randomly determine number of trips for this day (1 to max available)
-            num_trips = np.random.randint(1, available_trips + 1)
+            num_trips = rng.randint(1, available_trips + 1)
 
             # Normalize weights for numpy's choice function
             weights = weights / weights.sum()
 
             # Sample trip indices using the weights
-            trip_indices = np.random.choice(
+            trip_indices = rng.choice(
                 available_trips,
                 size=num_trips,
                 replace=False,  # Don't use the same trip twice
@@ -498,75 +520,35 @@ class EVDemandCalculator:
                     arrival = profile.weekend_arrival_hour[idx]
                     base_miles = profile.weekend_miles[idx]
 
-                # Add variance to miles only (keep original departure/arrival times)
-                miles = np.random.normal(base_miles, base_miles * 0.1)
-
+                # Add variance to miles
+                miles = rng.normal(base_miles, base_miles * 0.1)
+                
+                # Discrete distribution for time offsets (Figure 5.1)
+                # 70% = no change, 10% each for ±1 hour, 5% each for ±2 hours
+                time_offsets = [-2, -1, 0, 1, 2]
+                time_probabilities = [0.05, 0.10, 0.70, 0.10, 0.05]
+                
+                # Apply discrete variance to departure time (bounded to 0-23 hours)
+                departure_offset = rng.choice(time_offsets, p=time_probabilities)
+                departure_with_variance = max(0, min(23, departure + departure_offset))
+                
+                # Apply discrete variance to arrival time (bounded to 0-23 hours)
+                arrival_offset = rng.choice(time_offsets, p=time_probabilities)
+                arrival_with_variance = max(0, min(23, arrival + arrival_offset))
 
                 schedules.append(
                     TripSchedule(
                         building_id=profile.building_id,
                         vehicle_id=profile.vehicle_id,
                         date=current_date,
-                        departure_hour=departure,
-                        arrival_hour=arrival,
+                        departure_hour=int(departure_with_variance),
+                        arrival_hour=int(arrival_with_variance),
                         miles_driven=miles,
-                        # avg_temp_while_away=avg_temp,
-                        # kwh_consumed=kwh,
                     )
                 )
 
         return schedules
 
-    def get_avg_temp_while_away(self, departure_hour: int, arrival_hour: int, date: datetime) -> float:
-        """
-        Calculate the average outdoor temperature during the hours the vehicle is away from home.
-
-        Args:
-            departure_hour: Hour vehicle leaves home
-            arrival_hour: Hour vehicle returns home
-            date: The date for which to compute the average
-
-        Returns:
-            Average temperature during vehicle absence
-        """
-        if self.weather_df is None:
-            raise WeatherDataError()
-
-        # TODO: Implement temperature calculation logic
-        # This is a placeholder - replace with actual temperature calculation
-        return 70.0  # Placeholder: assume 70°F average
-
-    def miles_to_kwh(self, daily_miles: float, avg_temp: float) -> float:
-        """
-        Calculate daily electricity consumption for electric vehicles based on
-        temperature and daily miles driven using the Yuksel and Michalek (2015) regression. @yuksel_EffectsRegionalTemperature_2015
-
-        Args:
-            daily_miles: Number of miles driven in a day
-            avg_temp: Average outdoor temperature during driving hours (in °F)
-
-        Returns:
-            Daily electricity consumption in kWh
-        """
-        # Convert inputs to numpy arrays for vectorized operations
-        temp = np.asarray(avg_temp)
-        miles = np.asarray(daily_miles)
-
-        # Apply temperature bounds as described in the paper
-        temp_bounded = np.clip(temp, -15, 110)
-
-        # Calculate energy consumption per mile using polynomial regression
-        # c(T) = a_0 + a_1*T + a_2*T^2 + a_3*T^3 + a_4*T^4 + a_5*T^5
-        # polyval expects coefficients in reverse order
-        consumption_per_mile = np.polyval(self.efficiency_coefficients[::-1], temp_bounded)
-
-        # Calculate total daily energy consumption
-        daily_consumption_kwh = consumption_per_mile * miles
-
-        # Return scalar if input was scalar
-        if np.isscalar(daily_miles) and np.isscalar(avg_temp):
-            return float(daily_consumption_kwh)
-        return float(daily_consumption_kwh)
 
     def _generate_annual_trip_schedule(
         self,
@@ -592,54 +574,66 @@ class EVDemandCalculator:
         if start is None or end is None:
             raise NoDateRangeError()
 
+        def process_profile_with_seed(profile_and_index):
+            profile, index = profile_and_index
+            # Create unique seed for this profile
+            profile_seed = self.random_state + index
+            rng = np.random.RandomState(profile_seed)
+            return self.generate_daily_schedules(profile, rng=rng)
+
+        profiles_list = list(profile_params.values())
+        profiles_with_index = [(profile, i) for i, profile in enumerate(profiles_list)]
+
         all_schedules = []
 
-        # Generate schedules for each vehicle
-        for profile in profile_params.values():
-            schedules = self.generate_daily_schedules(profile)
-            all_schedules.extend(schedules)
+        total_profiles = len(profiles_list)
+        logging.info(f"Processing {total_profiles} vehicle profiles...")
+        
+        # Use parallel processing if we have multiple profiles and max_workers != 1
+        if len(profiles_list) > 1 and self.max_workers != 1:
+            logging.info(f"Using parallel processing with {self.max_workers or 'all available'} workers")
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = [executor.submit(process_profile_with_seed, profile_and_index) 
+                          for profile_and_index in profiles_with_index]
+                
+                completed = 0
+                for future in as_completed(futures):
+                    schedules = future.result()
+                    all_schedules.extend(schedules)
+                    completed += 1
+                    
+                    # Log progress every 5%
+                    self._log_progress(completed, total_profiles, "Progress")
+        else:
+            # Fall back to sequential processing
+            logging.info("Using sequential processing")
+            for i, profile_and_index in enumerate(profiles_with_index, 1):
+                schedules = process_profile_with_seed(profile_and_index)
+                all_schedules.extend(schedules)
+                
+                # Log progress every 5%
+                self._log_progress(i, total_profiles, "Progress")
 
         # Convert to DataFrame
+        total_schedules = len(all_schedules)
+        logging.info(f"Generated {total_schedules} trip schedules from {total_profiles} vehicle profiles")
         return pl.DataFrame([vars(schedule) for schedule in all_schedules])
 
-    def assign_battery_capacity(self, daily_kwh: pl.Series) -> pl.Series:
-        """
-        Assign the minimum EV battery capacity that covers the max daily kWh plus a 20% buffer.
 
-        Args:
-            daily_kwh: Series of max daily kWh for each vehicle
-
-        Returns:
-            Series of assigned battery capacities (12, 40, 60, 90, 120 kWh)
-        """
-        # Calculate required capacity with 20% buffer
-        required_capacity = daily_kwh * 1.2
-
-        # Find the minimum battery capacity that meets the requirement
-        battery_capacities = pl.Series(self.battery_capacities)
-        assigned_capacities: list[int] = []
-
-        for required in required_capacity:
-            # Find the smallest battery that can handle the required capacity
-            suitable_batteries = battery_capacities.filter(battery_capacities >= required)
-            if len(suitable_batteries) > 0:
-                assigned_capacities.append(int(suitable_batteries[0]))
-            else:
-                # If no battery is large enough, assign the largest available
-                assigned_capacities.append(int(battery_capacities[-1]))
-
-        return pl.Series(assigned_capacities)
 
     def generate_trip_schedules(self) -> pl.DataFrame:
         """
         Generate trip schedules for all vehicles in the metadata.
         """
         # assign cars to metadata buildings
+        logging.info("Assigning cars to metadata buildings")
         bldg_veh_df = self.predict_num_vehicles()
         # Get all vehicle profiles
+        logging.info("Assigning vehicle profiles")
         vehicle_profiles = self.sample_vehicle_profiles(bldg_veh_df, self.nhts_df)
 
         # Generate trip schedules for each vehicle
+        logging.info("Generating trip schedules")
         trip_schedules = self._generate_annual_trip_schedule(vehicle_profiles)
 
         return trip_schedules
@@ -651,19 +645,22 @@ if __name__ == "__main__":
     config = EVDemandConfig(state="NY", release="res_2022_tmy3_1.1")
 
     # Step 2: Load all data
-    metadata_df, nhts_df, pums_df, weather_df = ev_utils.load_all_input_data(config)
+    metadata_df, nhts_df, pums_df = ev_utils.load_all_input_data(config)
     print(f"✓ Loaded metadata: {len(metadata_df)} rows")
     print(f"✓ Loaded NHTS data: {len(nhts_df)} rows")
-    print(f"✓ Loaded weather data: {len(weather_df)} rows")
+    print(f"✓ Loaded PUMS data: {len(pums_df)} rows")
 
 
     calculator = EVDemandCalculator(
         metadata_df=metadata_df,
         nhts_df=nhts_df,
         pums_df=pums_df,
-        weather_df=weather_df,
-        start_date=datetime(2022, 1, 1),
-        end_date=datetime(2022, 1, 7),
+        start_date=datetime(2018, 1, 1),
+        end_date=datetime(2018, 1, 31),
+        max_workers=8,  # Use  worker threads for parallel processing
     )
 
     trip_schedules = calculator.generate_trip_schedules()
+
+    write_path = "trip_schedules.parquet"
+    trip_schedules.write_parquet(write_path)

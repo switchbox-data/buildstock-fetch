@@ -149,3 +149,4 @@ cython_debug/
 # EV data
 utils/ev_data/inputs/*.csv
 utils/ev_data/inputs/**/*.parquet
+trip_schedules.parquet

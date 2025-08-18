@@ -3,7 +3,7 @@ Utility functions for EV demand calculations.
 
 This module contains:
 - Census division mapping functions
-- Data loading functions for metadata, NHTS, and weather data
+- Data loading functions for metadata, NHTS, and PUMS data
 """
 
 from pathlib import Path
@@ -17,9 +17,7 @@ __all__ = [
     "load_metadata",
     "load_metro_puma_map",
     "load_nhts_data",
-    "load_pums_data",
-    "load_weather_data",
-]
+    "load_pums_data",]
 
 
 STATE_TO_CENSUS_DIVISION: dict[str, int] = {
@@ -339,23 +337,6 @@ def load_pums_data(pums_path: str, metadata_path: str) -> pl.DataFrame:
     return pums_df
 
 
-def load_weather_data(weather_path: str) -> pl.DataFrame:
-    """
-    Load hourly weather data (e.g., temperature) for a given location.
-
-    Args:
-        weather_path: Path to the weather data file (e.g., TMY3 CSV or EPW)
-
-    Returns:
-        DataFrame with at least columns ['datetime', 'temperature']
-    """
-    # if not Path(weather_path).exists():
-    #     msg = f"Weather file not found: {weather_path}"
-    #     raise FileNotFoundError(msg)
-
-    # TODO: Implement weather data loading
-    # This is a placeholder - replace with actual weather loading logic
-    return pl.DataFrame()  # Placeholder
 
 
 def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
@@ -389,11 +370,81 @@ def load_all_input_data(ev_demand_config: Any) -> tuple[pl.DataFrame, pl.DataFra
     Load all input data for the EV demand calculator.
 
     Returns:
-        Tuple of (metadata_df, nhts_df, pums_df, weather_df)
+        Tuple of (metadata_df, nhts_df, pums_df)
     """
     metadata_df = load_metadata(ev_demand_config.metadata_path)
     nhts_df = load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state)
     pums_df = load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path)
-    weather_df = load_weather_data(ev_demand_config.weather_path)
 
-    return metadata_df, nhts_df, pums_df, weather_df
+    return metadata_df, nhts_df, pums_df
+
+
+def assign_battery_capacity(battery_capacities, daily_kwh: pl.Series) -> pl.Series:
+    """
+    Assign the minimum EV battery capacity that covers the max daily kWh plus a 20% buffer.
+
+    Args:
+        daily_kwh: Series of max daily kWh for each vehicle
+
+    Returns:
+        Series of assigned battery capacities (12, 40, 60, 90, 120 kWh)
+    """
+    # Calculate required capacity with 20% buffer
+    required_capacity = daily_kwh * 1.2
+
+    # Find the minimum battery capacity that meets the requirement
+    battery_capacities = pl.Series(battery_capacities)
+    assigned_capacities: list[int] = []
+
+    for required in required_capacity:
+        # Find the smallest battery that can handle the required capacity
+        suitable_batteries = battery_capacities.filter(
+            battery_capacities >= required)
+        if len(suitable_batteries) > 0:
+            assigned_capacities.append(int(suitable_batteries[0]))
+        else:
+            # If no battery is large enough, assign the largest available
+            assigned_capacities.append(int(battery_capacities[-1]))
+
+    return pl.Series(assigned_capacities)
+
+def miles_to_kwh(self, daily_miles: float, avg_temp: float) -> float:
+    """
+    Calculate daily electricity consumption for electric vehicles based on
+    temperature and daily miles driven using the Yuksel and Michalek (2015) regression. @yuksel_EffectsRegionalTemperature_2015
+
+    Args:
+        daily_miles: Number of miles driven in a day
+        avg_temp: Average outdoor temperature during driving hours (in °F)
+
+    Returns:
+        Daily electricity consumption in kWh
+    """
+    # Convert inputs to numpy arrays for vectorized operations
+    temp = np.asarray(avg_temp)
+    miles = np.asarray(daily_miles)
+
+    # Apply temperature bounds as described in the paper
+    temp_bounded = np.clip(temp, -15, 110)
+
+    # Calculate energy consumption per mile using polynomial regression
+    # c(T) = a_0 + a_1*T + a_2*T^2 + a_3*T^3 + a_4*T^4 + a_5*T^5
+    # polyval expects coefficients in reverse order
+    efficiency_coefficients = np.array([
+        0.3950,  # a_0 (constant term)
+        -0.0022,  # a_1 (linear term)
+        9.1978e-5,  # a_2 (quadratic term)
+        -3.9249e-6,  # a_3 (cubic term)
+        5.2918e-8,  # a_4 (quartic term)
+        -2.0659e-10,  # a_5 (quintic term)
+    ])
+    consumption_per_mile = np.polyval(
+        efficiency_coefficients[::-1], temp_bounded)
+
+    # Calculate total daily energy consumption
+    daily_consumption_kwh = consumption_per_mile * miles
+
+    # Return scalar if input was scalar
+    if np.isscalar(daily_miles) and np.isscalar(avg_temp):
+        return float(daily_consumption_kwh)
+    return float(daily_consumption_kwh)
