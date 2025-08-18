@@ -640,11 +640,9 @@ class EVDemandCalculator:
                     for profile_and_index in profiles_with_index
                 ]
 
-                completed = 0
-                for future in as_completed(futures):
+                for completed, future in enumerate(as_completed(futures), 1):
                     schedules = future.result()
                     all_schedules.extend(schedules)
-                    completed += 1
 
                     # Log progress every 5%
                     self._log_progress(completed, total_profiles, "Progress")
