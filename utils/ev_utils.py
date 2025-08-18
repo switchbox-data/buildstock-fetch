@@ -17,7 +17,8 @@ __all__ = [
     "load_metadata",
     "load_metro_puma_map",
     "load_nhts_data",
-    "load_pums_data",]
+    "load_pums_data",
+]
 
 
 STATE_TO_CENSUS_DIVISION: dict[str, int] = {
@@ -173,7 +174,7 @@ def assign_nhts_income_bucket(income: int) -> int:
     return 11  # Should never reach here due to inf threshold, but makes mypy happy
 
 
-def load_metadata(metadata_path: str) -> pl.DataFrame:
+def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
     """
     Load and parse the ResStock metadata parquet file.
 
@@ -189,10 +190,10 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
     if not Path(metadata_path).exists():
         msg = f"Metadata file not found: {metadata_path}"
         raise FileNotFoundError(msg)
-
     # Scan parquet file and ensure bldg_id is properly formatted with leading zeros
     metadata_df = (
         pl.scan_parquet(metadata_path)
+        .filter(pl.col("in.state") == state)
         .with_columns([
             pl.col("bldg_id").cast(str).str.zfill(5)  # Ensure 5-digit string with leading zeros
         ])
@@ -337,8 +338,6 @@ def load_pums_data(pums_path: str, metadata_path: str) -> pl.DataFrame:
     return pums_df
 
 
-
-
 def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
     """
     Load the metro-puma mapping file. We need to assign the metro variable to the PUMS data based on a lookup of the puma code.
@@ -372,7 +371,7 @@ def load_all_input_data(ev_demand_config: Any) -> tuple[pl.DataFrame, pl.DataFra
     Returns:
         Tuple of (metadata_df, nhts_df, pums_df)
     """
-    metadata_df = load_metadata(ev_demand_config.metadata_path)
+    metadata_df = load_metadata(ev_demand_config.metadata_path, ev_demand_config.state)
     nhts_df = load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state)
     pums_df = load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path)
 
@@ -398,8 +397,7 @@ def assign_battery_capacity(battery_capacities, daily_kwh: pl.Series) -> pl.Seri
 
     for required in required_capacity:
         # Find the smallest battery that can handle the required capacity
-        suitable_batteries = battery_capacities.filter(
-            battery_capacities >= required)
+        suitable_batteries = battery_capacities.filter(battery_capacities >= required)
         if len(suitable_batteries) > 0:
             assigned_capacities.append(int(suitable_batteries[0]))
         else:
@@ -407,6 +405,7 @@ def assign_battery_capacity(battery_capacities, daily_kwh: pl.Series) -> pl.Seri
             assigned_capacities.append(int(battery_capacities[-1]))
 
     return pl.Series(assigned_capacities)
+
 
 def miles_to_kwh(self, daily_miles: float, avg_temp: float) -> float:
     """
@@ -438,8 +437,7 @@ def miles_to_kwh(self, daily_miles: float, avg_temp: float) -> float:
         5.2918e-8,  # a_4 (quartic term)
         -2.0659e-10,  # a_5 (quintic term)
     ])
-    consumption_per_mile = np.polyval(
-        efficiency_coefficients[::-1], temp_bounded)
+    consumption_per_mile = np.polyval(efficiency_coefficients[::-1], temp_bounded)
 
     # Calculate total daily energy consumption
     daily_consumption_kwh = consumption_per_mile * miles
