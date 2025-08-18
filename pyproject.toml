@@ -1,6 +1,6 @@
 [project]
 name = "buildstock-fetch"
-version = "1.0.3"
+version = "1.0.4"
 description = "This library simplifies downloading building characteristics and load curve data from NREL's ResStock and ComStock projects."
 authors = [{ name = "Switchbox", email = "hello@switch.box" }]
 readme = "README.md"
@@ -82,7 +82,11 @@ include-package-data = true
 packages = ["buildstock_fetch"]
 
 [tool.setuptools.package-data]
-"buildstock_fetch" = ["*.json", "data/building_data/*"]
+"buildstock_fetch" = [
+    "data/buildstock_releases.json",
+    "data/building_data/**/*",
+    "data/**/*.parquet"
+]
 
 
 

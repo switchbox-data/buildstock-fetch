@@ -94,6 +94,26 @@ def _get_weather_options(
     return available_releases, available_weather_files
 
 
+def _normalize_release_version(release_version: Union[str, float, int]) -> str:
+    """
+    Convert release_version to integer if it's a whole number, then to string.
+
+    Args:
+        release_version: The release version to normalize
+
+    Returns:
+        str: Normalized release version string
+    """
+    try:
+        release_version_float = float(release_version)
+        if release_version_float.is_integer():
+            return str(int(release_version_float))
+        else:
+            return str(release_version)
+    except (ValueError, TypeError):
+        return str(release_version)
+
+
 def _get_release_versions_options(
     available_releases: list[str], product_type: str, release_year: str, weather_file: str
 ) -> tuple[list[str], list[str]]:
@@ -627,7 +647,7 @@ def main_callback(
     product: str = PRODUCT_OPTION,
     release_year: str = RELEASE_YEAR_OPTION,
     weather_file: str = WEATHER_FILE_OPTION,
-    release_version: int = RELEASE_VERSION_OPTION,
+    release_version: float = RELEASE_VERSION_OPTION,
     states: str = STATES_OPTION,
     file_type: str = FILE_TYPE_OPTION,
     upgrade_id: str = UPGRADE_ID_OPTION,
@@ -657,7 +677,7 @@ def main_callback(
             "product": product,
             "release_year": release_year,
             "weather_file": weather_file,
-            "release_version": str(release_version),
+            "release_version": _normalize_release_version(release_version),
             "states": states_list,
             "file_type": file_type_list,
             "upgrade_ids": upgrade_ids_list,
