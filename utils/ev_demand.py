@@ -540,8 +540,8 @@ class EVDemandCalculator:
             if available_trips == 0:
                 continue  # Skip days where we have no trips
 
-            # Randomly determine number of trips for this day
-            num_trips = rng.randint(1, available_trips + 1)
+            # Replicate all available trips for this day
+            num_trips = available_trips
 
             # Sample trip indices using the pre-normalized weights
             trip_indices = rng.choice(
@@ -680,6 +680,7 @@ class EVDemandCalculator:
 
 
 # # Example usage
+# Example usage
 if __name__ == "__main__":
     # Step 1: Create configuration
     config = EVDemandConfig(state="NY", release="res_2022_tmy3_1.1")
@@ -690,16 +691,39 @@ if __name__ == "__main__":
     print(f"✓ Loaded NHTS data: {len(nhts_df)} rows")
     print(f"✓ Loaded PUMS data: {len(pums_df)} rows")
 
-    calculator = EVDemandCalculator(
-        metadata_df=metadata_df,
-        nhts_df=nhts_df,
-        pums_df=pums_df,
-        start_date=datetime(2018, 1, 1),
-        end_date=datetime(2018, 12, 31),
-        max_workers=8,  # Use  worker threads for parallel processing
-    )
+    # Process metadata in batches of 20,000 rows
+    batch_size = 20000
+    total_rows = len(metadata_df)
+    all_trip_schedules = []
 
-    trip_schedules = calculator.generate_trip_schedules()
+    for i in range(0, total_rows, batch_size):
+        batch_end = min(i + batch_size, total_rows)
+        batch_metadata = metadata_df[i:batch_end]
 
-    write_path = "trip_schedules.parquet"
-    trip_schedules.write_parquet(write_path)
+        print(f"Processing batch {i // batch_size + 1}: rows {i + 1} to {batch_end} ({len(batch_metadata)} rows)")
+
+        calculator = EVDemandCalculator(
+            metadata_df=batch_metadata,
+            nhts_df=nhts_df,
+            pums_df=pums_df,
+            start_date=datetime(2018, 1, 1),
+            end_date=datetime(2018, 12, 31),
+            max_workers=8,  # Use worker threads for parallel processing
+        )
+
+        batch_trip_schedules = calculator.generate_trip_schedules()
+        all_trip_schedules.append(batch_trip_schedules)
+
+        print(f"✓ Completed batch {i // batch_size + 1}: generated {len(batch_trip_schedules)} trip schedules")
+
+    # Combine all batches
+    print("Combining all batches...")
+    if all_trip_schedules:
+        combined_trip_schedules = pl.concat(all_trip_schedules)
+        print(f"✓ Combined all batches: {len(combined_trip_schedules)} total trip schedules")
+
+        write_path = "NY_2018_annual_trip_schedules.parquet"
+        combined_trip_schedules.write_parquet(write_path)
+        print(f"✓ Written results to {write_path}")
+    else:
+        print("No trip schedules generated")
