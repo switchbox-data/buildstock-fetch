@@ -85,6 +85,9 @@ download-pums:
         https://buildstock-fetch.s3.amazonaws.com/ev_demand/pums/NY_2021_pums_PUMA_HINCP_VEH_NP.csv
     echo "✅ PUMS data downloaded successfully"
 
-# ex: just ev-demand NY res_2022_tmy3_1.1 2018-01-01 2018-12-31
-ev-demand state release start_date end_date:
-    uv run python utils/ev_demand.py --state {{state}} --release {{release}} --start-date {{start_date}} --end-date {{end_date}}
+# Save locally (default)
+# just ev-demand NY res_2022_tmy3_1.1 2018-01-01 2018-12-31
+# Upload to S3 (requires --upload-s3 flag)
+# just ev-demand NY res_2022_tmy3_1.1 2018-01-01 2018-12-31 --upload-s3
+ev-demand state release start_date end_date *args="":
+    uv run python utils/ev_demand.py --state {{state}} --release {{release}} --start-date {{start_date}} --end-date {{end_date}} {{args}}

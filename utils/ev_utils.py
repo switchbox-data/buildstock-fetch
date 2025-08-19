@@ -8,6 +8,9 @@ This module contains:
 
 from pathlib import Path
 from typing import Any
+import io
+import boto3
+import logging
 
 import numpy as np
 import polars as pl
@@ -447,3 +450,25 @@ def miles_to_kwh(self, daily_miles: float, avg_temp: float) -> float:
     if np.isscalar(daily_miles) and np.isscalar(avg_temp):
         return float(daily_consumption_kwh)
     return float(daily_consumption_kwh)
+
+
+def upload_object_to_s3(file_content: bytes, file_name: str) -> bool:
+    """Upload file content directly to S3 bucket from memory."""
+    bucket_name = "buildstock-fetch"
+    s3_key = f"ev_demand/trip_schedules/{file_name}"
+
+    try:
+        s3_client = boto3.client('s3')
+        print(f"Uploading {file_name} to s3://{bucket_name}/{s3_key}...")
+
+        # Upload directly from memory
+        s3_client.put_object(Bucket=bucket_name, Key=s3_key, Body=file_content)
+
+        print(f"Successfully uploaded to s3://{bucket_name}/{s3_key}")
+        logging.info(f"Uploaded file to S3: s3://{bucket_name}/{s3_key}")
+        return True
+
+    except Exception as e:
+        print(f"Failed to upload to S3: {e}")
+        logging.error(f"S3 upload failed: {e}")
+        return False
