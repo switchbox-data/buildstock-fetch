@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 import sys
@@ -61,6 +62,13 @@ class NoDateRangeError(Exception):
     pass
 
 
+class InvalidDateFormatError(ValueError):
+    """Raised when date string is not in YYYY-MM-DD format."""
+
+    def __init__(self, date_str: str):
+        super().__init__(f"Invalid date format: {date_str}. Use YYYY-MM-DD format.")
+
+
 @dataclass
 class EVDemandConfig:
     state: str
@@ -75,6 +83,8 @@ class EVDemandConfig:
             self.metadata_path = f"{BASEPATH}/ev_data/inputs/{self.release}/metadata/{self.state}/metadata.parquet"
         if self.pums_path is None:
             self.pums_path = f"{BASEPATH}/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
+        if self.output_dir is None:
+            self.output_dir = f"{BASEPATH}/ev_data/outputs/{self.state}_{self.release}"
 
 
 @dataclass
@@ -679,17 +689,51 @@ class EVDemandCalculator:
         return trip_schedules
 
 
-# # Example usage
-# Example usage
-if __name__ == "__main__":
+def parse_arguments():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Generate EV demand trip schedules from ResStock metadata",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    # Required arguments
+    parser.add_argument("--state", required=True, help="State abbreviation (e.g., NY, CA, TX)")
+    parser.add_argument("--release", required=True, help="BuildStock release version (e.g., res_2022_tmy3_1.1)")
+    parser.add_argument("--start-date", required=True, help="Start date for simulation (YYYY-MM-DD format)")
+    parser.add_argument("--end-date", required=True, help="End date for simulation (YYYY-MM-DD format)")
+
+    return parser.parse_args()
+
+
+def parse_date(date_str: str) -> datetime:
+    """Parse date string in YYYY-MM-DD format."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError as e:
+        raise InvalidDateFormatError(date_str) from e
+
+
+def main():
+    """Main function to run EV demand calculation with command-line arguments."""
+    args = parse_arguments()
+
+    # Parse dates
+    start_date = parse_date(args.start_date)
+    end_date = parse_date(args.end_date)
+
+    # Validate date range
+    if start_date >= end_date:
+        print("Error: Start date must be before end date")
+        return 1
+
     # Step 1: Create configuration
-    config = EVDemandConfig(state="NY", release="res_2022_tmy3_1.1")
+    config = EVDemandConfig(state=args.state, release=args.release)
 
     # Step 2: Load all data
     metadata_df, nhts_df, pums_df = ev_utils.load_all_input_data(config)
-    print(f"✓ Loaded metadata: {len(metadata_df)} rows")
-    print(f"✓ Loaded NHTS data: {len(nhts_df)} rows")
-    print(f"✓ Loaded PUMS data: {len(pums_df)} rows")
+    print(f"Loaded metadata: {len(metadata_df)} rows")
+    print(f"Loaded NHTS data: {len(nhts_df)} rows")
+    print(f"Loaded PUMS data: {len(pums_df)} rows")
 
     # Process metadata in batches of 20,000 rows
     batch_size = 20000
@@ -706,8 +750,8 @@ if __name__ == "__main__":
             metadata_df=batch_metadata,
             nhts_df=nhts_df,
             pums_df=pums_df,
-            start_date=datetime(2018, 1, 1),
-            end_date=datetime(2018, 12, 31),
+            start_date=start_date,
+            end_date=end_date,
             max_workers=8,  # Use worker threads for parallel processing
         )
 
@@ -722,13 +766,20 @@ if __name__ == "__main__":
         combined_trip_schedules = pl.concat(all_trip_schedules)
         logging.info(f"Combined all batches: {len(combined_trip_schedules)} total trip schedules")
 
-        output_dir = f"{BASEPATH}/ev_data/outputs/{config.state}_{config.release}"
-        file_name = f"{config.state}_{config.release}_{calculator.start_date.year}_annual_trip_schedules.parquet"
+        file_name = f"{config.state}_{config.release}_{start_date.year}_annual_trip_schedules.parquet"
         # Create output directory if it doesn't exist
-        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(config.output_dir, exist_ok=True)
 
-        combined_trip_schedules.write_parquet(f"{output_dir}/{file_name}")
+        combined_trip_schedules.write_parquet(f"{config.output_dir}/{file_name}")
 
-        logging.info(f"Written results to {output_dir}/{file_name}")
+        logging.info(f"Written results to {config.output_dir}/{file_name}")
     else:
         logging.warning("No trip schedules generated")
+
+    return 0
+
+
+# # Example usage
+# Example usage
+if __name__ == "__main__":
+    exit(main())
