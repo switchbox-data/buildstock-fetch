@@ -1,4 +1,5 @@
 import argparse
+import io
 import logging
 import os
 import sys
@@ -91,7 +92,7 @@ class EVDemandConfig:
 class VehicleProfile:
     """Represents a vehicle's driving profile parameters."""
 
-    building_id: str
+    bldg_id: str
     vehicle_id: int
     weekday_departure_hour: list[int] = field(default_factory=list)  # List of departure hours for each weekday trip
     weekday_arrival_hour: list[int] = field(default_factory=list)  # List of arrival hours for each weekday trip
@@ -109,7 +110,7 @@ class VehicleProfile:
 class TripSchedule:
     """Represents a daily trip schedule for a vehicle."""
 
-    building_id: str  # Changed from int to str to match VehicleProfile
+    bldg_id: str  # Changed from int to str to match VehicleProfile
     vehicle_id: int
     date: datetime
     departure_hour: int
@@ -377,7 +378,7 @@ class EVDemandCalculator:
             nhts_df: NHTS trip data DataFrame with trip weights
 
         Returns:
-            Dict mapping (building_id, vehicle_id) to sampled trip profile parameters
+            Dict mapping (bldg_id, vehicle_id) to sampled trip profile parameters
         """
         df = bldg_veh_df
         if df is None:
@@ -458,7 +459,7 @@ class EVDemandCalculator:
 
                 # Create VehicleProfile for this specific vehicle
                 profiles[(bldg_id, vehicle_id)] = VehicleProfile(
-                    building_id=bldg_id,
+                    bldg_id=bldg_id,
                     vehicle_id=vehicle_id,  # Now vehicle_id is already 1-based
                     weekday_departure_hour=weekday_departures,
                     weekday_arrival_hour=weekday_arrivals,
@@ -522,7 +523,7 @@ class EVDemandCalculator:
         schedules = []
 
         # Pre-allocate lists for batch operations
-        building_ids = []
+        bldg_ids = []
         vehicle_ids = []
         dates = []
         departure_hours = []
@@ -578,7 +579,7 @@ class EVDemandCalculator:
             arrivals_with_variance = np.clip(selected_arrivals + arrival_offsets, 0, 23)
 
             # Batch append to lists
-            building_ids.extend([profile.building_id] * num_trips)
+            bldg_ids.extend([profile.bldg_id] * num_trips)
             vehicle_ids.extend([profile.vehicle_id] * num_trips)
             dates.extend([current_date] * num_trips)
             departure_hours.extend(departures_with_variance.astype(int))
@@ -588,7 +589,7 @@ class EVDemandCalculator:
         # Create all TripSchedule objects at once
         schedules = [
             TripSchedule(
-                building_id=bid,
+                bldg_id=bid,
                 vehicle_id=vid,
                 date=date,
                 departure_hour=dep,
@@ -596,7 +597,7 @@ class EVDemandCalculator:
                 miles_driven=miles,
             )
             for bid, vid, date, dep, arr, miles in zip(
-                building_ids, vehicle_ids, dates, departure_hours, arrival_hours, miles_driven
+                bldg_ids, vehicle_ids, dates, departure_hours, arrival_hours, miles_driven
             )
         ]
 
@@ -701,6 +702,9 @@ def parse_arguments():
     parser.add_argument("--release", required=True, help="BuildStock release version (e.g., res_2022_tmy3_1.1)")
     parser.add_argument("--start-date", required=True, help="Start date for simulation (YYYY-MM-DD format)")
     parser.add_argument("--end-date", required=True, help="End date for simulation (YYYY-MM-DD format)")
+    
+    # Optional S3 upload
+    parser.add_argument("--upload-s3", action="store_true", default=False, help="Upload results to S3 bucket instead of saving locally")
 
     return parser.parse_args()
 
@@ -735,8 +739,8 @@ def main():
     print(f"Loaded NHTS data: {len(nhts_df)} rows")
     print(f"Loaded PUMS data: {len(pums_df)} rows")
 
-    # Process metadata in batches of 20,000 rows
-    batch_size = 20000
+    # Process metadata in batches of 10,000 rows
+    batch_size = 10000
     total_rows = len(metadata_df)
     all_trip_schedules = []
 
@@ -767,12 +771,26 @@ def main():
         logging.info(f"Combined all batches: {len(combined_trip_schedules)} total trip schedules")
 
         file_name = f"{config.state}_{config.release}_{start_date.year}_annual_trip_schedules.parquet"
-        # Create output directory if it doesn't exist
-        os.makedirs(config.output_dir, exist_ok=True)
-
-        combined_trip_schedules.write_parquet(f"{config.output_dir}/{file_name}")
-
-        logging.info(f"Written results to {config.output_dir}/{file_name}")
+        
+        if args.upload_s3:
+            # Upload directly to S3
+            import io
+            buffer = io.BytesIO()
+            combined_trip_schedules.write_parquet(buffer) # write to memory, not to disk
+            file_content = buffer.getvalue()
+            
+            upload_success = ev_utils.upload_object_to_s3(file_content, file_name)
+            if not upload_success:
+                print("Error: S3 upload failed")
+                return 1
+        else:
+            # Save locally (default behavior)
+            os.makedirs(config.output_dir, exist_ok=True)
+            local_file_path = f"{config.output_dir}/{file_name}"
+            combined_trip_schedules.write_parquet(local_file_path)
+            print(f"Results written to: {local_file_path}")
+            logging.info(f"Written results to {local_file_path}")
+        
     else:
         logging.warning("No trip schedules generated")
 
