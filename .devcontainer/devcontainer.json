@@ -8,7 +8,18 @@
         // Install just
         "ghcr.io/guiyomh/features/just:0.1.0": {
             "version": "1.40.0"
-        }
+        },
+        // Install AWS CLI
+        "ghcr.io/devcontainers/features/aws-cli:1": {}
+    },
+
+    "initializeCommand": "mkdir -p ${localEnv:HOME}/.aws",  // Container won't start if .aws dir is missing
+    "mounts": [
+        "source=${localEnv:HOME}/.aws,target=/home/vscode/.aws,type=bind,consistency=cached"
+    ],
+
+    "remoteEnv": {
+        "AWS_REGION": "us-west-2"
     },
 
     // Use 'postCreateCommand' to run commands after the container is created.
