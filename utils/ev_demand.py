@@ -714,16 +714,21 @@ if __name__ == "__main__":
         batch_trip_schedules = calculator.generate_trip_schedules()
         all_trip_schedules.append(batch_trip_schedules)
 
-        print(f"✓ Completed batch {i // batch_size + 1}: generated {len(batch_trip_schedules)} trip schedules")
+        print(f"Completed batch {i // batch_size + 1}: generated {len(batch_trip_schedules)} trip schedules")
 
     # Combine all batches
     print("Combining all batches...")
     if all_trip_schedules:
         combined_trip_schedules = pl.concat(all_trip_schedules)
-        print(f"✓ Combined all batches: {len(combined_trip_schedules)} total trip schedules")
+        logging.info(f"Combined all batches: {len(combined_trip_schedules)} total trip schedules")
 
-        write_path = "NY_2018_annual_trip_schedules.parquet"
-        combined_trip_schedules.write_parquet(write_path)
-        print(f"✓ Written results to {write_path}")
+        output_dir = f"{BASEPATH}/ev_data/outputs/{config.state}_{config.release}"
+        file_name = f"{config.state}_{config.release}_{calculator.start_date.year}_annual_trip_schedules.parquet"
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+
+        combined_trip_schedules.write_parquet(f"{output_dir}/{file_name}")
+
+        logging.info(f"Written results to {output_dir}/{file_name}")
     else:
-        print("No trip schedules generated")
+        logging.warning("No trip schedules generated")
