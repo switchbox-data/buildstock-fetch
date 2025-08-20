@@ -7,15 +7,27 @@ import zipfile
 from collections import defaultdict
 
 import polars as pl
+import questionary
 import requests
 import urllib3
 import xmltodict
+from rich.console import Console
+from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
 from buildstock_fetch.main import BuildingID, fetch_bldg_ids
+from buildstock_fetch.main_cli import (
+    _get_available_releases_names,
+    _get_state_options,
+    _get_upgrade_ids_options,
+    _handle_cancellation,
+)
 
 # Disable SSL warnings for cleaner output
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Initialize Rich console
+console = Console()
 
 # Create a session with connection pooling and SSL settings
 session = requests.Session()
@@ -43,6 +55,12 @@ class NoBuildingDataError(ValueError):
 
 class MissingBldgIdError(ValueError):
     """Raised when bldg_id is missing from the DataFrame."""
+
+    pass
+
+
+class InvalidProductError(ValueError):
+    """Raised when an invalid product is provided."""
 
     pass
 
@@ -703,6 +721,64 @@ def _remove_duplicates(weather_map_df: pl.DataFrame) -> pl.DataFrame:
         print(f"Removed {original_count - final_count} duplicate bldg_id entries")
     weather_map_df = weather_map_df.sort("bldg_id")
     return weather_map_df
+
+
+def _interactive_mode():
+    console.print(Panel("Weather Station Mapping Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
+    console.print("Please select the release information and file type you would like to fetch:")
+
+    # Retrieve available releases
+    available_releases = _get_available_releases_names()
+
+    selected_release_name = questionary.select("Select release name:", choices=available_releases).ask()
+
+    product, release_year, weather_file, release_version = selected_release_name.split("_")
+
+    if product == "res":
+        product_full = "resstock"
+    elif product == "com":
+        product_full = "comstock"
+    else:
+        raise InvalidProductError()
+
+    # Retrieve upgrade ids
+    selected_upgrade_ids = _handle_cancellation(
+        questionary.select(
+            "Select upgrade id:",
+            choices=_get_upgrade_ids_options(selected_release_name),
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+        ).ask()
+    )
+
+    # Retrieve state
+    selected_states = _handle_cancellation(
+        questionary.select(
+            "Select state:",
+            choices=_get_state_options(),
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+        ).ask()
+    )
+
+    # Fetch building IDs
+    bldg_ids = fetch_bldg_ids(
+        product_full, release_year, weather_file, release_version, selected_states, selected_upgrade_ids
+    )
+
+    # Resolve weather station IDs
+    weather_map_df = resolve_weather_station_id(
+        bldg_ids, product_full, release_year, weather_file, release_version, selected_states, selected_upgrade_ids
+    )
+    clean_weather_map_df = _remove_duplicates(weather_map_df)
+    output_path = os.path.join(output_dir, "weather_station_map.parquet")
+    clean_weather_map_df.write_parquet(
+        str(output_path),  # Convert Path to string for Polars
+        use_pyarrow=True,
+        partition_by=["product", "release_year", "weather_file", "release_version", "state"],
+    )
+    elapsed_time = time.time() - start_time
+    print(f"Time taken: {elapsed_time:.2f} seconds")
+    print(f"Successfully saved partitioned weather station mapping to {output_path}")
+    print(f"\nDataFrame shape: {clean_weather_map_df.shape}")
 
 
 def find_weather_station_name(data, path=""):

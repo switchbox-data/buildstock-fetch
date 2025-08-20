@@ -84,3 +84,14 @@ download-pums:
     curl -L -o utils/ev_data/inputs/NY_2021_pums_PUMA_HINCP_VEH_NP.csv \
         https://buildstock-fetch.s3.amazonaws.com/ev_demand/pums/NY_2021_pums_PUMA_HINCP_VEH_NP.csv
     echo "✅ PUMS data downloaded successfully"
+
+
+# =============================================================================
+# Utility functions
+# =============================================================================
+# These commands help you create internal mapping and metadata tables
+
+# Create bldg_id to weather station id map
+build-weather-station-map:
+    echo "🔧 Starting interactive weather station mapping tool"
+    uv run python -c "from utils.resolve_weather_station_id import _interactive_mode; _interactive_mode()"
