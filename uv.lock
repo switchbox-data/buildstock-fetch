@@ -73,7 +73,7 @@ wheels = [
 
 [[package]]
 name = "buildstock-fetch"
-version = "1.0.3"
+version = "1.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "polars" },
@@ -83,7 +83,7 @@ dependencies = [
     { name = "typer" },
 ]
 
-[package.dev-dependencies]
+[package.optional-dependencies]
 dev = [
     { name = "boto3" },
     { name = "botocore" },
@@ -109,37 +109,65 @@ dev = [
     { name = "types-requests", version = "2.32.4.20250809", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "xmltodict" },
 ]
+dev-utils = [
+    { name = "boto3" },
+    { name = "botocore" },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
+    { name = "numpy", version = "2.3.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pyarrow" },
+    { name = "scikit-learn", version = "1.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "scikit-learn", version = "1.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "xmltodict" },
+]
+docs = [
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extra = ["python"] },
+]
+lint = [
+    { name = "deptry" },
+    { name = "mypy" },
+    { name = "pandas-stubs", version = "2.2.2.240807", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pandas-stubs", version = "2.3.0.250703", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pre-commit" },
+    { name = "ruff" },
+    { name = "types-boto3" },
+    { name = "types-requests", version = "2.31.0.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "types-requests", version = "2.32.4.20250809", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest" },
+]
 
 [package.metadata]
 requires-dist = [
+    { name = "boto3", marker = "extra == 'dev-utils'", specifier = ">=1.33.0" },
+    { name = "botocore", marker = "extra == 'dev-utils'", specifier = ">=1.33.0" },
+    { name = "buildstock-fetch", extras = ["test", "docs", "lint", "dev-utils"], marker = "extra == 'dev'" },
+    { name = "deptry", marker = "extra == 'lint'", specifier = ">=0.23.0" },
+    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.4.2" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=8.5.10" },
+    { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.26.1" },
+    { name = "mypy", marker = "extra == 'lint'", specifier = ">=0.991" },
+    { name = "numpy", marker = "extra == 'dev-utils'", specifier = ">=1.26.4" },
+    { name = "pandas-stubs", marker = "extra == 'lint'", specifier = ">=2.2.0" },
     { name = "polars", specifier = ">=0.20.0" },
+    { name = "pre-commit", marker = "extra == 'lint'", specifier = ">=2.20.0" },
+    { name = "pyarrow", marker = "extra == 'dev-utils'", specifier = ">=14.0.1" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.2.0" },
     { name = "questionary", specifier = ">=1.11.0" },
     { name = "requests", specifier = ">=2.32.3" },
     { name = "rich", specifier = ">=13.9.5" },
+    { name = "ruff", marker = "extra == 'lint'", specifier = ">=0.11.5" },
+    { name = "scikit-learn", marker = "extra == 'dev-utils'", specifier = ">=1.6.1" },
+    { name = "tox-uv", marker = "extra == 'dev'", specifier = ">=1.11.3" },
     { name = "typer", specifier = ">=0.9.0" },
+    { name = "types-boto3", marker = "extra == 'lint'", specifier = ">=1.33.0" },
+    { name = "types-requests", marker = "extra == 'lint'", specifier = ">=2.31.0" },
+    { name = "xmltodict", marker = "extra == 'dev-utils'", specifier = ">=0.14.2" },
 ]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "boto3", specifier = ">=1.33.0" },
-    { name = "botocore", specifier = ">=1.33.0" },
-    { name = "deptry", specifier = ">=0.23.0" },
-    { name = "mkdocs", specifier = ">=1.4.2" },
-    { name = "mkdocs-material", specifier = ">=8.5.10" },
-    { name = "mkdocstrings", extras = ["python"], specifier = ">=0.26.1" },
-    { name = "mypy", specifier = ">=0.991" },
-    { name = "numpy", specifier = ">=1.26.4" },
-    { name = "pandas-stubs", specifier = ">=2.2.0" },
-    { name = "pre-commit", specifier = ">=2.20.0" },
-    { name = "pyarrow", specifier = ">=14.0.1" },
-    { name = "pytest", specifier = ">=7.2.0" },
-    { name = "ruff", specifier = ">=0.11.5" },
-    { name = "scikit-learn", specifier = ">=1.6.1" },
-    { name = "tox-uv", specifier = ">=1.11.3" },
-    { name = "types-boto3", specifier = ">=1.33.0" },
-    { name = "types-requests", specifier = ">=2.31.0" },
-    { name = "xmltodict", specifier = ">=0.14.2" },
-]
+provides-extras = ["test", "docs", "lint", "dev-utils", "dev"]
 
 [[package]]
 name = "cachetools"

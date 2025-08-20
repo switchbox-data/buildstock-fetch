@@ -9,6 +9,9 @@ uv sync
 # Install the package in development mode so the CLI command is available
 uv pip install -e .
 
+# Install lint dependencies (including pre-commit)
+uv pip install -e ".[lint]"
+
 # Add the virtual environment to PATH so CLI commands are available
 echo 'export PATH="/workspaces/buildstock-fetch/.venv/bin:$PATH"' >> ~/.bashrc
 
