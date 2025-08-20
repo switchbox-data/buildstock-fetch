@@ -244,6 +244,7 @@ def _check_weather_station_found(weather_station_name):
 
 
 def resolve_weather_station_id(
+    bldg_ids: list[BuildingID],
     product: str,
     release_year: str,
     weather_file: str,
@@ -252,16 +253,13 @@ def resolve_weather_station_id(
     upgrade_id: str,
     status_update_interval_seconds: int = 10,
     status_update_interval_bldgs: int = 50,
-    max_workers: int = 5,  # Reduced from 10 to 5 to prevent server overload
+    max_workers: int = 5,
 ) -> pl.DataFrame:
     # Initialize global status tracking
     global profiling_data, processed_bldg_ids_global
     profiling_data = ProfilingData()
     processed_bldg_ids_global.clear()
     profiling_data.update_interval = status_update_interval_seconds  # Update every N seconds
-
-    # Fetch building IDs
-    bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
 
     # Prepare data for DataFrame
     data = []
@@ -720,7 +718,9 @@ if __name__ == "__main__":
     # status_update_interval_seconds: How often to print status updates (in seconds)
     # status_update_interval_bldgs: Force status update every N buildings
     # max_workers: Number of parallel threads for downloading
+    bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
     df = resolve_weather_station_id(
+        bldg_ids,
         product,
         release_year,
         weather_file,
