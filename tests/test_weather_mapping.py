@@ -19,6 +19,12 @@ WEATHER_STATION_MAP_FILE = Path(
 )
 
 
+@pytest.fixture(scope="module")
+def weather_station_map():
+    """Load the weather station map DataFrame once for all tests."""
+    return pl.read_parquet(WEATHER_STATION_MAP_FILE)
+
+
 @pytest.fixture(scope="function")
 def cleanup_downloads():
     # Setup - clean up any existing files before test
@@ -39,13 +45,12 @@ def cleanup_downloads():
         shutil.rmtree(test_output_dir)
 
 
-def test_weather_station_map_quality():
-    weather_station_map = pl.read_parquet(WEATHER_STATION_MAP_FILE)
+def test_weather_station_map_quality(weather_station_map):
     assert weather_station_map.select("bldg_id").n_unique() == weather_station_map.height
 
 
 # Test the dataframe that was already built
-def test_resolve_weather_station_id():
+def test_resolve_weather_station_id(weather_station_map):
     # Randomly select 10 buildings to test
     product = "resstock"
     release_year = "2022"
@@ -56,8 +61,6 @@ def test_resolve_weather_station_id():
 
     bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
     bldg_ids = random.sample(bldg_ids, 10)
-
-    weather_station_map = pl.read_parquet(WEATHER_STATION_MAP_FILE)
 
     for bldg_id in bldg_ids:
         weather_station_id = download_and_extract_weather_station(bldg_id)
