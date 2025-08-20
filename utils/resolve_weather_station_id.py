@@ -329,12 +329,12 @@ def resolve_weather_station_id(
         print("\nNo failed buildings to retry!")
 
     # Create Polars DataFrame
-    df = pl.DataFrame(data)
+    weather_map_df = pl.DataFrame(data)
 
     # Print final profiling summary
     profiling_data.print_summary()
 
-    return df
+    return weather_map_df
 
 
 def process_buildings_phase(
@@ -719,7 +719,7 @@ if __name__ == "__main__":
     # status_update_interval_bldgs: Force status update every N buildings
     # max_workers: Number of parallel threads for downloading
     bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
-    df = resolve_weather_station_id(
+    weather_map_df = resolve_weather_station_id(
         bldg_ids,
         product,
         release_year,
@@ -737,18 +737,18 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
 
     # Remove duplicates and sort by building ID for better organization
-    if "bldg_id" in df.columns:
-        original_count = len(df)
+    if "bldg_id" in weather_map_df.columns:
+        original_count = len(weather_map_df)
         # Remove duplicates based on bldg_id, keeping the first occurrence
-        df = df.unique(subset=["bldg_id"], maintain_order=False)
-        final_count = len(df)
+        weather_map_df = weather_map_df.unique(subset=["bldg_id"], maintain_order=False)
+        final_count = len(weather_map_df)
         if original_count != final_count:
             print(f"Removed {original_count - final_count} duplicate bldg_id entries")
-        df = df.sort("bldg_id")
+        weather_map_df = weather_map_df.sort("bldg_id")
 
     # Save as partitioned parquet file
     output_path = os.path.join(output_dir, "weather_station_map.parquet")
-    df.write_parquet(
+    weather_map_df.write_parquet(
         str(output_path),  # Convert Path to string for Polars
         use_pyarrow=True,
         partition_by=["product", "release_year", "weather_file", "release_version", "state"],
@@ -756,4 +756,4 @@ if __name__ == "__main__":
     elapsed_time = time.time() - start_time
     print(f"Time taken: {elapsed_time:.2f} seconds")
     print(f"Successfully saved partitioned weather station mapping to {output_path}")
-    print(f"\nDataFrame shape: {df.shape}")
+    print(f"\nDataFrame shape: {weather_map_df.shape}")
