@@ -18,7 +18,8 @@ WEATHER_STATION_MAP_FILE = Path(
 
 
 def test_weather_station_map_quality():
-    pass
+    weather_station_map = pl.read_parquet(WEATHER_STATION_MAP_FILE)
+    assert weather_station_map.select("bldg_id").n_unique() == weather_station_map.height
 
 
 # Test the dataframe that was already built
