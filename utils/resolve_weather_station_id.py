@@ -41,6 +41,12 @@ class NoBuildingDataError(ValueError):
     pass
 
 
+class MissingBldgIdError(ValueError):
+    """Raised when bldg_id is missing from the DataFrame."""
+
+    pass
+
+
 class ProfilingData:
     """Class to collect and manage profiling data for the three main tasks."""
 
@@ -686,6 +692,19 @@ def _search_list_for_weather_station(data, path=""):
     return None
 
 
+def _remove_duplicates(weather_map_df: pl.DataFrame) -> pl.DataFrame:
+    """Remove duplicates from the weather map DataFrame."""
+    if "bldg_id" not in weather_map_df.columns:
+        raise MissingBldgIdError()
+    original_count = len(weather_map_df)
+    weather_map_df = weather_map_df.unique(subset=["bldg_id"], maintain_order=False)
+    final_count = len(weather_map_df)
+    if original_count != final_count:
+        print(f"Removed {original_count - final_count} duplicate bldg_id entries")
+    weather_map_df = weather_map_df.sort("bldg_id")
+    return weather_map_df
+
+
 def find_weather_station_name(data, path=""):
     """
     Recursively search for WeatherStation tag and extract the Name value.
@@ -736,19 +755,11 @@ if __name__ == "__main__":
     output_dir = "buildstock_fetch/data/weather_station_map"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Remove duplicates and sort by building ID for better organization
-    if "bldg_id" in weather_map_df.columns:
-        original_count = len(weather_map_df)
-        # Remove duplicates based on bldg_id, keeping the first occurrence
-        weather_map_df = weather_map_df.unique(subset=["bldg_id"], maintain_order=False)
-        final_count = len(weather_map_df)
-        if original_count != final_count:
-            print(f"Removed {original_count - final_count} duplicate bldg_id entries")
-        weather_map_df = weather_map_df.sort("bldg_id")
+    weather_map_df_cleaned = _remove_duplicates(weather_map_df)
 
     # Save as partitioned parquet file
     output_path = os.path.join(output_dir, "weather_station_map.parquet")
-    weather_map_df.write_parquet(
+    weather_map_df_cleaned.write_parquet(
         str(output_path),  # Convert Path to string for Polars
         use_pyarrow=True,
         partition_by=["product", "release_year", "weather_file", "release_version", "state"],
@@ -756,4 +767,4 @@ if __name__ == "__main__":
     elapsed_time = time.time() - start_time
     print(f"Time taken: {elapsed_time:.2f} seconds")
     print(f"Successfully saved partitioned weather station mapping to {output_path}")
-    print(f"\nDataFrame shape: {weather_map_df.shape}")
+    print(f"\nDataFrame shape: {weather_map_df_cleaned.shape}")
