@@ -35,6 +35,12 @@ class NoWeatherStationNameError(ValueError):
     pass
 
 
+class NoBuildingDataError(ValueError):
+    """Raised when no building data is found."""
+
+    pass
+
+
 class ProfilingData:
     """Class to collect and manage profiling data for the three main tasks."""
 
@@ -244,15 +250,17 @@ def resolve_weather_station_id(
     release_version: str,
     state: str,
     upgrade_id: str,
-    status_update_interval: int = 10,
-    progress_update_interval: int = 50,
+    status_update_interval_seconds: int = 10,
+    status_update_interval_bldgs: int = 50,
     max_workers: int = 5,  # Reduced from 10 to 5 to prevent server overload
 ) -> pl.DataFrame:
+    # Initialize global status tracking
     global profiling_data, processed_bldg_ids_global
-    profiling_data = ProfilingData()  # Reset profiling data
-    processed_bldg_ids_global.clear()  # Reset global tracking
-    profiling_data.update_interval = status_update_interval  # Set custom update interval
+    profiling_data = ProfilingData()
+    processed_bldg_ids_global.clear()
+    profiling_data.update_interval = status_update_interval_seconds  # Update every N seconds
 
+    # Fetch building IDs
     bldg_ids = fetch_bldg_ids(product, release_year, weather_file, release_version, state, upgrade_id)
 
     # Prepare data for DataFrame
@@ -261,7 +269,9 @@ def resolve_weather_station_id(
     total_buildings = len(bldg_ids)
 
     print(f"Processing {total_buildings} building IDs with {max_workers} parallel workers...")
-    print(f"Status updates every {status_update_interval} seconds or every {progress_update_interval} buildings")
+    print(
+        f"Status updates every {status_update_interval_seconds} seconds or every {status_update_interval_bldgs} buildings"
+    )
     print("=" * 60)
 
     # Phase 1: Process all buildings, collect failures
@@ -275,8 +285,8 @@ def resolve_weather_station_id(
         state,
         upgrade_id,
         max_workers,
-        status_update_interval,
-        progress_update_interval,
+        status_update_interval_seconds,
+        status_update_interval_bldgs,
     )
 
     # Phase 2: Retry failed buildings
@@ -285,7 +295,7 @@ def resolve_weather_station_id(
         print("=" * 60)
 
         # Reset profiling for retry phase
-        profiling_data.update_interval = status_update_interval
+        profiling_data.update_interval = status_update_interval_seconds
 
         retry_data, still_failed = process_buildings_phase(
             failed_bldg_ids,
@@ -295,9 +305,9 @@ def resolve_weather_station_id(
             release_version,
             state,
             upgrade_id,
-            max_workers // 2,  # Use fewer workers for retries to be more conservative
-            status_update_interval,
-            progress_update_interval,
+            max_workers // 2,  # Use fewer workers for retries to be safer about server overload
+            status_update_interval_seconds,
+            status_update_interval_bldgs,
         )
 
         # Add retry results to main data
@@ -338,8 +348,8 @@ def process_buildings_phase(
     state,
     upgrade_id,
     max_workers,
-    status_update_interval,
-    progress_update_interval,
+    status_update_interval_seconds,
+    status_update_interval_bldgs,
 ):
     """Process a batch of buildings and return results and failed buildings."""
     global processed_bldg_ids_global
@@ -430,7 +440,7 @@ def process_buildings_phase(
                     )
 
                     # Force status update every N buildings (in addition to time-based updates)
-                    if completed_count % progress_update_interval == 0:
+                    if completed_count % status_update_interval_bldgs == 0:
                         profiling_data.print_status_update()
 
             except KeyboardInterrupt:
@@ -489,6 +499,19 @@ def download_with_retry(url: str, max_retries: int = 3, base_delay: float = 1.0)
     Raises:
         requests.RequestException: If all retries fail
     """
+
+    def _handle_retry_delay(attempt: int, error_type: str, error: Exception) -> None:
+        """Handle retry delay with exponential backoff and jitter."""
+        if attempt == max_retries:
+            print(f"{error_type} error after {max_retries + 1} attempts: {error}")
+            raise error
+
+        # Use time.time() for jitter instead of random.uniform
+        jitter = time.time() % 1.0  # Get fractional part of current time
+        delay = base_delay * (2**attempt) + jitter
+        print(f"{error_type} error (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.1f}s...")
+        time.sleep(delay)
+
     # Add a small delay to be respectful to the server
     time.sleep(0.1)  # 100ms delay between requests
 
@@ -498,32 +521,13 @@ def download_with_retry(url: str, max_retries: int = 3, base_delay: float = 1.0)
             response = session.get(url, timeout=30)
             response.raise_for_status()
         except requests.ConnectionError as e:
-            if attempt == max_retries:
-                print(f"Connection error after {max_retries + 1} attempts: {e}")
-                raise
-            # Use time.time() for jitter instead of random.uniform
-            jitter = time.time() % 1.0  # Get fractional part of current time
-            delay = base_delay * (2**attempt) + jitter
-            print(f"Connection error (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.1f}s...")
-            time.sleep(delay)
+            _handle_retry_delay(attempt, "Connection", e)
         except requests.Timeout as e:
-            if attempt == max_retries:
-                print(f"Timeout error after {max_retries + 1} attempts: {e}")
-                raise
-            # Use time.time() for jitter instead of random.uniform
-            jitter = time.time() % 1.0  # Get fractional part of current time
-            delay = base_delay * (2**attempt) + jitter
-            print(f"Timeout error (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.1f}s...")
-            time.sleep(delay)
+            _handle_retry_delay(attempt, "Timeout", e)
         except (requests.RequestException, requests.SSLError) as e:
-            if attempt == max_retries:
-                print(f"Request/SSL error after {max_retries + 1} attempts: {e}")
-                raise
-            # Use time.time() for jitter instead of random.uniform
-            jitter = time.time() % 1.0  # Get fractional part of current time
-            delay = base_delay * (2**attempt) + jitter
-            print(f"Request/SSL error (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.1f}s...")
-            time.sleep(delay)
+            _handle_retry_delay(attempt, "Request/SSL", e)
+        except Exception as e:
+            _handle_retry_delay(attempt, "Error", e)
         else:
             return response
 
@@ -540,7 +544,7 @@ def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
     """
     building_data_url = bldg_id.get_building_data_url()
     if building_data_url == "":
-        return ""
+        raise NoBuildingDataError()
 
     # Create temporary directory for all temporary files
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -713,8 +717,8 @@ if __name__ == "__main__":
     upgrade_id = "0"
 
     # You can customize the update intervals and parallel workers:
-    # status_update_interval: How often to print status updates (in seconds)
-    # progress_update_interval: Force status update every N buildings
+    # status_update_interval_seconds: How often to print status updates (in seconds)
+    # status_update_interval_bldgs: Force status update every N buildings
     # max_workers: Number of parallel threads for downloading
     df = resolve_weather_station_id(
         product,
@@ -723,8 +727,8 @@ if __name__ == "__main__":
         release_version,
         state,
         upgrade_id,
-        status_update_interval=15,  # Update every 15 seconds
-        progress_update_interval=25,  # Also update every 25 buildings
+        status_update_interval_seconds=15,  # Update every 15 seconds
+        status_update_interval_bldgs=25,  # Also update every 25 buildings
         max_workers=20,  # Use 20 parallel threads for downloading
     )
 
