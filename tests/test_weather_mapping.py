@@ -17,6 +17,10 @@ WEATHER_STATION_MAP_FILE = Path(
 )
 
 
+def test_weather_station_map_quality():
+    pass
+
+
 # Test the dataframe that was already built
 def test_resolve_weather_station_id():
     # Randomly select 10 buildings to test

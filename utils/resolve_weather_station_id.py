@@ -736,8 +736,14 @@ if __name__ == "__main__":
     output_dir = "buildstock_fetch/data/weather_station_map"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Sort by building ID for better organization
+    # Remove duplicates and sort by building ID for better organization
     if "bldg_id" in df.columns:
+        original_count = len(df)
+        # Remove duplicates based on bldg_id, keeping the first occurrence
+        df = df.unique(subset=["bldg_id"], maintain_order=False)
+        final_count = len(df)
+        if original_count != final_count:
+            print(f"Removed {original_count - final_count} duplicate bldg_id entries")
         df = df.sort("bldg_id")
 
     # Save as partitioned parquet file
