@@ -740,7 +740,7 @@ def main():
     print(f"Loaded PUMS data: {len(pums_df)} rows")
 
     # Process metadata in batches of 10,000 rows
-    batch_size = 10000
+    batch_size = 20000
     total_rows = len(metadata_df)
     all_trip_schedules = []
 

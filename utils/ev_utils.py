@@ -236,6 +236,11 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
         ])
         # Extract last 5 characters from PUMA
         .with_columns([pl.col("puma").str.slice(-5).alias("puma")])
+        .with_columns([
+            pl.col("occupants").cast(pl.UInt8),  # Instead of Int64
+            pl.col("income_bucket").cast(pl.UInt8),  # 1-11 fits in UInt8
+            pl.col("puma").cast(pl.Utf8), 
+        ])
         .collect()
     )
 
@@ -368,7 +373,7 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
     return metro_lookup_df
 
 
-def load_all_input_data(ev_demand_config: Any) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def load_all_input_data(ev_demand_config: Any) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """
     Load all input data for the EV demand calculator.
 
@@ -464,11 +469,11 @@ def upload_object_to_s3(file_content: bytes, file_name: str) -> bool:
         # Upload directly from memory
         s3_client.put_object(Bucket=bucket_name, Key=s3_key, Body=file_content)
 
-        print(f"Successfully uploaded to s3://{bucket_name}/{s3_key}")
-        logging.info(f"Uploaded file to S3: s3://{bucket_name}/{s3_key}")
+        logging.info(
+            f"Successfully uploaded file to S3: s3://{bucket_name}/{s3_key}")
         return True
 
     except Exception as e:
-        print(f"Failed to upload to S3: {e}")
-        logging.error(f"S3 upload failed: {e}")
+
+        logging.error(f"Failed to upload to S3: {e}")
         return False

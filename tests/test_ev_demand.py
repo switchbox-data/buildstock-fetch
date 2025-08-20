@@ -177,7 +177,7 @@ def test_sample_vehicle_profiles(calculator):
         print(profile)
         expected = expected_profiles[(bldg_id, vehicle_id)]
         # Check that profile matches its key values
-        assert profile.building_id == bldg_id
+        assert profile.bldg_id == bldg_id
         assert profile.vehicle_id == vehicle_id
 
         # Check exact values for weekday trips
@@ -229,7 +229,7 @@ def test_sample_vehicle_profiles_zero_vehicles(calculator, mock_nhts_data, mock_
 def test_generate_daily_schedules(calculator):
     # Create a sample profile with known values
     profile = VehicleProfile(
-        building_id="b1",
+        bldg_id="b1",
         vehicle_id=1,
         weekday_departure_hour=[8],
         weekday_arrival_hour=[17],
@@ -260,7 +260,7 @@ def test_generate_daily_schedules(calculator):
     assert len(schedules) == len(expected_schedules)
 
     for actual, expected in zip(schedules, expected_schedules):
-        assert actual.building_id == "b1"
+        assert actual.bldg_id == "b1"
         assert actual.vehicle_id == 1
         assert actual.date == expected["date"]
         assert actual.departure_hour == expected["departure_hour"]
@@ -277,7 +277,7 @@ def test_generate_trip_schedules(predict_vehicles, sample_profiles, generate_sch
     predict_vehicles.return_value = metadata
 
     profile = VehicleProfile(
-        building_id="b1",
+        bldg_id="b1",
         vehicle_id=1,
         weekday_departure_hour=[8],
         weekday_arrival_hour=[17],
@@ -294,7 +294,7 @@ def test_generate_trip_schedules(predict_vehicles, sample_profiles, generate_sch
 
     # Expected schedule data
     schedule_data = {
-        "building_id": ["b1", "b1"],
+        "bldg_id": ["b1", "b1"],
         "vehicle_id": [1, 1],
         "date": [datetime(2022, 1, 1), datetime(2022, 1, 2)],
         "departure_hour": [10, 10],
@@ -311,7 +311,7 @@ def test_generate_trip_schedules(predict_vehicles, sample_profiles, generate_sch
     assert result.shape == (2, 6)  # 2 rows, 6 columns
 
     # Check exact values
-    assert result["building_id"].to_list() == schedule_data["building_id"]
+    assert result["bldg_id"].to_list() == schedule_data["bldg_id"]
     assert result["vehicle_id"].to_list() == schedule_data["vehicle_id"]
     assert result["departure_hour"].to_list() == schedule_data["departure_hour"]
     assert result["arrival_hour"].to_list() == schedule_data["arrival_hour"]
