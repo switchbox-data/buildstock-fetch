@@ -11,17 +11,17 @@ from utils.ev_demand import EVDemandCalculator, VehicleProfile
 @pytest.fixture
 def mock_nhts_data():
     data = {
-        "hh_vehicle_id": ["v1", "v2", "v3", "v4", "v4"],  # v4 has multiple trips
-        "income_bucket": [1, 2, 2, 3, 3],  # v2 and v3 both match b2's income=2
-        "occupants": [2, 3, 3, 4, 4],  # v2 and v3 both match b2's occupants=3
-        "vehicles": [1, 2, 2, 1, 1],  # v2 and v3 both from 2-vehicle households
-        "weekday": [2, 2, 2, 2, 2],  # All weekday trips
-        "start_time": [800, 900, 1000, 800, 1300],
-        "end_time": [1700, 1800, 1900, 1200, 1700],
-        "miles_driven": [20.0, 30.0, 40.0, 10.0, 15.0],
-        "trip_weight": [1.0, 1.0, 1.0, 1.0, 1.0],
+        "hh_vehicle_id": ["v1", "v2", "v3", "v4", "v4", "v1", "v3"],  # Added weekend trips for v1 and v3
+        "income_bucket": [1, 2, 2, 3, 3, 1, 2],  # v2 and v3 both match b2's income=2
+        "occupants": [2, 3, 3, 4, 4, 2, 3],  # v2 and v3 both match b2's occupants=3
+        "vehicles": [1, 2, 2, 1, 1, 1, 2],  # v2 and v3 both from 2-vehicle households
+        "weekday": [2, 2, 2, 2, 2, 1, 1],  # Added weekend trips (1) for v1 and v3
+        "start_time": [800, 900, 1000, 800, 1300, 1100, 1400],  # Added weekend start times
+        "end_time": [1700, 1800, 1900, 1200, 1700, 1500, 1800],  # Added weekend end times
+        "miles_driven": [20.0, 30.0, 40.0, 10.0, 15.0, 25.0, 35.0],  # Added weekend miles
+        "trip_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # Added weekend weights
     }
-    return pl.DataFrame(data)
+    return pl.DataFrame(data).lazy()  # Return LazyFrame to match production
 
 
 @pytest.fixture
@@ -33,7 +33,7 @@ def mock_metadata():
         "vehicles": [1, 2, 1],  # b1 has 1 vehicle, b2 has 2, b3 has 1
         "metro": ["urban", "suburban", "rural"],
     }
-    return pl.DataFrame(data)
+    return pl.DataFrame(data)  
 
 
 @pytest.fixture
@@ -45,8 +45,7 @@ def mock_metadata_with_zero():
         "vehicles": [1, 2, 1, 0],  # b4 has 0 vehicles
         "metro": ["urban", "suburban", "rural", "urban"],
     }
-    return pl.DataFrame(data)
-
+    return pl.DataFrame(data) 
 
 @pytest.fixture
 def calculator(mock_nhts_data, mock_metadata):
@@ -119,54 +118,54 @@ def test_sample_vehicle_profiles(calculator):
 
     # Expected profiles with calculator's random_state=42
     expected_profiles = {
-        ("b1", 1): {  # Building 1 has 1 vehicle (matches v1)
-            "weekday_departure_hour": [8],
-            "weekday_arrival_hour": [17],
-            "weekday_miles": [20.0],
-            "weekday_trip_weights": [1.0],
-            "weekend_departure_hour": [],  # No weekend trips
-            "weekend_arrival_hour": [],
-            "weekend_miles": [],
-            "weekend_trip_weights": [],
-            "weekday_trip_ids": [1],
-            "weekend_trip_ids": [],
-        },
-        ("b2", 1): {  # Building 2 first vehicle (matches v2)
-            "weekday_departure_hour": [9],
-            "weekday_arrival_hour": [18],
-            "weekday_miles": [30.0],
-            "weekday_trip_weights": [1.0],
-            "weekend_departure_hour": [],
-            "weekend_arrival_hour": [],
-            "weekend_miles": [],
-            "weekend_trip_weights": [],
-            "weekday_trip_ids": [1],
-            "weekend_trip_ids": [],
-        },
-        ("b2", 2): {  # Building 2 second vehicle (matches v3)
-            "weekday_departure_hour": [10],
-            "weekday_arrival_hour": [19],
-            "weekday_miles": [40.0],
-            "weekday_trip_weights": [1.0],
-            "weekend_departure_hour": [],
-            "weekend_arrival_hour": [],
-            "weekend_miles": [],
-            "weekend_trip_weights": [],
-            "weekday_trip_ids": [1],
-            "weekend_trip_ids": [],
-        },
-        ("b3", 1): {  # Building 3 has 1 vehicle (matches v3)
-            "weekday_departure_hour": [8, 13],  # Two trips on weekdays
-            "weekday_arrival_hour": [12, 17],
-            "weekday_miles": [10.0, 15.0],
-            "weekday_trip_weights": [1.0, 1.0],
-            "weekend_departure_hour": [],  # No weekend trips
-            "weekend_arrival_hour": [],
-            "weekend_miles": [],
-            "weekend_trip_weights": [],
-            "weekday_trip_ids": [1, 2],
-            "weekend_trip_ids": [],
-        },
+                    ("b1", 1): {  # Building 1 has 1 vehicle (matches v1)
+                "weekday_departure_hour": [8],
+                "weekday_arrival_hour": [17],
+                "weekday_miles": [20.0],
+                "weekday_trip_weights": [1.0],
+                "weekend_departure_hour": [11],  # Now has weekend trips
+                "weekend_arrival_hour": [15],
+                "weekend_miles": [25.0],
+                "weekend_trip_weights": [1.0],
+                "weekday_trip_ids": [1],
+                "weekend_trip_ids": [1],
+            },
+                                            ("b2", 1): {  # Building 2 first vehicle (matches v3)
+                    "weekday_departure_hour": [10],
+                    "weekday_arrival_hour": [19],
+                    "weekday_miles": [40.0],
+                    "weekday_trip_weights": [1.0],
+                    "weekend_departure_hour": [14],  # v3 has weekend trips
+                    "weekend_arrival_hour": [18],
+                    "weekend_miles": [35.0],
+                    "weekend_trip_weights": [1.0],
+                    "weekday_trip_ids": [1],
+                    "weekend_trip_ids": [1],
+                },
+            ("b2", 2): {  # Building 2 second vehicle (matches v2)
+                "weekday_departure_hour": [9],
+                "weekday_arrival_hour": [18],
+                "weekday_miles": [30.0],
+                "weekday_trip_weights": [1.0],
+                "weekend_departure_hour": [],
+                "weekend_arrival_hour": [],
+                "weekend_miles": [],
+                "weekend_trip_weights": [],
+                "weekday_trip_ids": [1],
+                "weekend_trip_ids": [],
+            },
+                                            ("b3", 1): {  # Building 3 has 1 vehicle (matches v4)
+                    "weekday_departure_hour": [8, 13],  # Two trips on weekdays
+                    "weekday_arrival_hour": [12, 17],
+                    "weekday_miles": [10.0, 15.0],
+                    "weekday_trip_weights": [1.0, 1.0],
+                    "weekend_departure_hour": [],  # v4 has no weekend trips
+                    "weekend_arrival_hour": [],
+                    "weekend_miles": [],
+                    "weekend_trip_weights": [],
+                    "weekday_trip_ids": [1, 2],
+                    "weekend_trip_ids": [],
+                },
     }
     print(profiles)
     # Check that we got all expected profiles
@@ -259,13 +258,13 @@ def test_generate_daily_schedules(calculator):
     print(schedules)
     assert len(schedules) == len(expected_schedules)
 
-    for actual, expected in zip(schedules, expected_schedules):
-        assert actual.bldg_id == "b1"
-        assert actual.vehicle_id == 1
-        assert actual.date == expected["date"]
-        assert actual.departure_hour == expected["departure_hour"]
-        assert actual.arrival_hour == expected["arrival_hour"]
-        assert pytest.approx(actual.miles_driven, rel=1e-8) == expected["miles_driven"]
+    for actual, expected in zip(schedules.iter_rows(named=True), expected_schedules):
+        assert actual["bldg_id"] == "b1"
+        assert actual["vehicle_id"] == 1
+        assert actual["date"] == expected["date"]
+        assert actual["departure_hour"] == expected["departure_hour"]
+        assert actual["arrival_hour"] == expected["arrival_hour"]
+        assert pytest.approx(actual["miles_driven"], rel=1e-8) == expected["miles_driven"]
 
 
 @patch("utils.ev_demand.EVDemandCalculator._generate_annual_trip_schedule")
