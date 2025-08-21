@@ -173,6 +173,11 @@ class EVDemandCalculator:
 
         # Features used for vehicle assignment
         self.veh_assign_features = ["occupants", "income", "metro"]
+        
+        # Cache for NHTS data to avoid repeated filtering
+        self._nhts_cache: Optional[dict] = None
+        # Cache for vehicle trip data to avoid per-vehicle filtering
+        self._vehicle_trips_cache: Optional[dict] = None
 
         # Yuksel and Michalek (2015) polynomial coefficients for energy consumption
         # c(T) = sum(a_n * T^n) for n=0 to 5, units: kWh/mi/°F^n
@@ -254,6 +259,141 @@ class EVDemandCalculator:
 
         return self.vehicle_ownership_model
 
+    def _prepare_nhts_cache(self) -> None:
+        """
+        Pre-group NHTS data by key attributes to avoid repeated filtering.
+        This eliminates the need for collect() calls in find_best_matches().
+        """
+        if self._nhts_cache is not None:
+            return  # Already cached
+        
+        logging.info("Preparing NHTS data cache to optimize matching...")
+        
+        # Cap the number of vehicles at the max number of vehicles per household
+        nhts_df = self.nhts_df.with_columns(
+            pl.when(pl.col("vehicles") > self.max_vehicles)
+            .then(self.max_vehicles)
+            .otherwise(pl.col("vehicles"))
+            .alias("vehicles")
+        )
+        
+        # Build cache from all NHTS data 
+        all_nhts_df = nhts_df.collect()
+        
+        self._nhts_cache = self._build_matching_cache(all_nhts_df)
+        
+        logging.info("NHTS cache prepared successfully")
+    
+    def _build_matching_cache(self, df: pl.DataFrame) -> dict:
+        """Build cache dictionary for fast matching lookups."""
+        cache = {}
+        
+        # Group by different combinations for iterative matching
+        # 1. Exact match: (income_bucket, occupants, vehicles)
+        exact_groups = df.group_by(["income_bucket", "occupants", "vehicles"]).agg(
+            pl.col("hh_vehicle_id").unique()
+        )  
+        
+        for row in exact_groups.iter_rows(named=True):
+            key = (row["income_bucket"], row["occupants"], row["vehicles"])
+            # Sort to ensure consistent ordering for deterministic results
+            cache[key] = sorted(row["hh_vehicle_id"])
+        
+        # 2. Income + occupants match: (income_bucket, occupants)
+        income_occ_groups = df.group_by(["income_bucket", "occupants"]).agg(
+            pl.col("hh_vehicle_id").unique()
+        )  
+        
+        for row in income_occ_groups.iter_rows(named=True):
+            key = (row["income_bucket"], row["occupants"])
+            if key not in cache:  # Don't overwrite exact matches
+                # Sort to ensure consistent ordering for deterministic results
+                cache[key] = sorted(row["hh_vehicle_id"])
+        
+        # 3. Income only match: (income_bucket,)
+        income_groups = df.group_by(["income_bucket"]).agg(
+            pl.col("hh_vehicle_id").unique()
+        )  
+        
+        for row in income_groups.iter_rows(named=True):
+            key = (row["income_bucket"],)
+            # Sort to ensure consistent ordering for deterministic results
+            cache[key] = sorted(row["hh_vehicle_id"])
+        
+        return cache
+
+    def _prepare_vehicle_trips_cache(self) -> None:
+        """
+        Pre-group NHTS trip data by hh_vehicle_id to avoid repeated filtering.
+        This eliminates expensive per-vehicle filtering in sample_vehicle_profiles().
+        """
+        if self._vehicle_trips_cache is not None:
+            return  # Already cached
+        
+        logging.info("Preparing vehicle trips cache to optimize profile sampling...")
+        
+        # Cap the number of vehicles at the max number of vehicles per household
+        nhts_df = self.nhts_df.with_columns(
+            pl.when(pl.col("vehicles") > self.max_vehicles)
+            .then(self.max_vehicles)
+            .otherwise(pl.col("vehicles"))
+            .alias("vehicles")
+        )
+        
+        # Group weekday trips by hh_vehicle_id
+        weekday_grouped = (
+            nhts_df
+            .filter(pl.col("weekday") == 2)
+            .group_by("hh_vehicle_id")
+            .agg([
+                pl.col("start_time").alias("start_times"),
+                pl.col("end_time").alias("end_times"), 
+                pl.col("miles_driven").alias("miles_list"),
+                pl.col("trip_weight").alias("trip_weights")
+            ])
+            .collect()
+        )
+        
+        # Group weekend trips by hh_vehicle_id
+        weekend_grouped = (
+            nhts_df
+            .filter(pl.col("weekday") == 1)
+            .group_by("hh_vehicle_id")
+            .agg([
+                pl.col("start_time").alias("start_times"),
+                pl.col("end_time").alias("end_times"),
+                pl.col("miles_driven").alias("miles_list"), 
+                pl.col("trip_weight").alias("trip_weights")
+            ])
+            .collect()
+        )
+        
+        # Convert to dictionaries for fast lookup
+        weekday_dict = {}
+        for row in weekday_grouped.iter_rows(named=True):
+            weekday_dict[row["hh_vehicle_id"]] = {
+                "start_times": row["start_times"],
+                "end_times": row["end_times"],
+                "miles_list": row["miles_list"],
+                "trip_weights": row["trip_weights"]
+            }
+        
+        weekend_dict = {}
+        for row in weekend_grouped.iter_rows(named=True):
+            weekend_dict[row["hh_vehicle_id"]] = {
+                "start_times": row["start_times"],
+                "end_times": row["end_times"], 
+                "miles_list": row["miles_list"],
+                "trip_weights": row["trip_weights"]
+            }
+        
+        self._vehicle_trips_cache = {
+            'weekday': weekday_dict,
+            'weekend': weekend_dict
+        }
+        
+        logging.info("Vehicle trips cache prepared successfully")
+
     def predict_num_vehicles(self, metadata_df: Optional[pl.DataFrame] = None) -> pl.DataFrame:
         """
         Predict number of vehicles for each household in the metadata using the fitted model.
@@ -315,63 +455,63 @@ class EVDemandCalculator:
         """
         Find the best matching vehicles in NHTS data based on prioritized criteria.
         Will return num_samples different vehicles, falling back to less exact matches if needed.
+        
+        Uses pre-built cache to eliminate expensive filtering operations.
+        Matches based on household characteristics only (weekday parameter is ignored).
 
         Args:
             target_income: Target income bucket to match
             target_occupants: Target number of occupants to match
             target_vehicles: Target number of vehicles to match
             num_samples: Number of different vehicles to sample
-            weekday: Whether to match against weekday (True) or weekend (False) trips
+            weekday: Ignored - kept for compatibility
 
         Returns:
             Tuple of (match_type, list of matched_vehicle_ids)
         """
-        # Select weekday or weekend trips
-        trips = self.nhts_df.filter(pl.col("weekday") == (2 if weekday else 1))
+        # Ensure cache is prepared
+        if self._nhts_cache is None:
+            self._prepare_nhts_cache()
+        
+        # Use the single cache (no weekday/weekend separation for matching)
+        cache = self._nhts_cache
+        
+        # Try exact match first: (income, occupants, vehicles)
+        exact_key = (target_income, target_occupants, target_vehicles)
+        if exact_key in cache and len(cache[exact_key]) >= num_samples:
+            return "exact", np.random.choice(cache[exact_key], size=num_samples, replace=False).tolist()
 
-        # Try exact match first
-        exact_matches = (
-            trips.filter(
-                (pl.col("income_bucket") == target_income)
-                & (pl.col("occupants") == target_occupants)
-                & (pl.col("vehicles") == target_vehicles)
-            )
-            .select(["hh_vehicle_id"])
-            .unique()
-        )
+        # Try matching only income and occupants: (income, occupants)
+        income_occ_key = (target_income, target_occupants)
+        if income_occ_key in cache and len(cache[income_occ_key]) >= num_samples:
+            return "income_occupants", np.random.choice(cache[income_occ_key], size=num_samples, replace=False).tolist()
 
-        if exact_matches.height >= num_samples:
-            return "exact", exact_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
-
-        # Try matching only income and occupants
-        income_occ_matches = (
-            trips.filter((pl.col("income_bucket") == target_income) & (pl.col("occupants") == target_occupants))
-            .select(["hh_vehicle_id"])
-            .unique()
-        )
-
-        if income_occ_matches.height >= num_samples:
-            return "income_occupants", income_occ_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
-
-        # Try matching only income
-        income_matches = trips.filter(pl.col("income_bucket") == target_income).select(["hh_vehicle_id"]).unique()
-
-        if income_matches.height >= num_samples:
-            return "income_only", income_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
+        # Try matching only income: (income,)
+        income_key = (target_income,)
+        if income_key in cache and len(cache[income_key]) >= num_samples:
+            return "income_only", np.random.choice(cache[income_key], size=num_samples, replace=False).tolist()
 
         # If still no match, find closest income bucket
-        all_incomes = trips.select("income_bucket").unique().sort("income_bucket")
-        closest_income = min(all_incomes.get_column("income_bucket"), key=lambda x: abs(x - target_income))
-
-        fallback_matches = trips.filter(pl.col("income_bucket") == closest_income).select(["hh_vehicle_id"]).unique()
-
-        return "closest_income", fallback_matches.sample(num_samples).get_column("hh_vehicle_id").to_list()
+        available_incomes = [key[0] for key in cache.keys() if len(key) == 1]  # Get all single-income keys
+        if available_incomes:
+            closest_income = min(available_incomes, key=lambda x: abs(x - target_income))
+            closest_key = (closest_income,)
+            if closest_key in cache and len(cache[closest_key]) >= num_samples:
+                return "closest_income", np.random.choice(cache[closest_key], size=num_samples, replace=False).tolist()
+            else:
+                # If not enough samples, take all available
+                return "closest_income", cache[closest_key]
+        
+        # Fallback: return empty list if no matches found
+        return "no_match", []
 
     def sample_vehicle_profiles(
         self, bldg_veh_df: pl.DataFrame, nhts_df: pl.DataFrame
     ) -> dict[tuple[str, int], VehicleProfile]:
         """
         For each household and vehicle, select a weekday and weekend trip profiles from NHTS.
+        
+        Uses pre-built vehicle trips cache to eliminate expensive per-vehicle filtering.
 
         Args:
             bldg_veh_df: DataFrame with household and vehicle info.
@@ -387,17 +527,13 @@ class EVDemandCalculator:
         if nhts_df is None:
             raise NHTSDataError()
 
-        # Cap the number of vehicles at the max number of vehicles per household
-        nhts_df = nhts_df.with_columns(
-            pl.when(pl.col("vehicles") > self.max_vehicles)
-            .then(self.max_vehicles)
-            .otherwise(pl.col("vehicles"))
-            .alias("vehicles")
-        )
-
-        # Group NHTS data by weekday/weekend
-        weekday_trips = nhts_df.filter(pl.col("weekday") == 2)
-        weekend_trips = nhts_df.filter(pl.col("weekday") == 1)
+        # Ensure vehicle trips cache is prepared
+        if self._vehicle_trips_cache is None:
+            self._prepare_vehicle_trips_cache()
+        
+        # Get cached trip data
+        weekday_cache = self._vehicle_trips_cache['weekday']
+        weekend_cache = self._vehicle_trips_cache['weekend']
 
         profiles = {}
         total_buildings = len(df)
@@ -425,37 +561,29 @@ class EVDemandCalculator:
 
             # Create profiles for each vehicle
             for vehicle_id, matched_vehicle_id in enumerate(matched_vehicle_ids, start=1):
-                # Get all weekday trips for this vehicle
-                weekday_samples = weekday_trips.filter(pl.col("hh_vehicle_id") == matched_vehicle_id).select([
-                    "start_time",
-                    "end_time",
-                    "miles_driven",
-                    "trip_weight",
-                ])
+                # Get cached weekday trips for this vehicle (no filtering needed!)
+                weekday_data = weekday_cache.get(matched_vehicle_id, {
+                    "start_times": [], "end_times": [], "miles_list": [], "trip_weights": []
+                })
+                
+                # Get cached weekend trips for this vehicle (no filtering needed!)
+                weekend_data = weekend_cache.get(matched_vehicle_id, {
+                    "start_times": [], "end_times": [], "miles_list": [], "trip_weights": []
+                })
 
-                # Get all weekend trips for the same vehicle
-                weekend_samples = weekend_trips.filter(pl.col("hh_vehicle_id") == matched_vehicle_id).select([
-                    "start_time",
-                    "end_time",
-                    "miles_driven",
-                    "trip_weight",
-                ])
+                # Process weekday trips (now from cached data)
+                weekday_departures = [t // 100 for t in weekday_data["start_times"]]  # Convert HHMM to HH
+                weekday_arrivals = [t // 100 for t in weekday_data["end_times"]]
+                weekday_miles = weekday_data["miles_list"]
+                weekday_weights = weekday_data["trip_weights"]
+                weekday_trip_ids = list(range(1, len(weekday_departures) + 1))
 
-                # Process weekday trips
-                weekday_rows = weekday_samples.rows()
-                weekday_departures = [t[0] // 100 for t in weekday_rows]  # Convert HHMM to HH
-                weekday_arrivals = [t[1] // 100 for t in weekday_rows]
-                weekday_miles = [t[2] for t in weekday_rows]
-                weekday_weights = [t[3] for t in weekday_rows]
-                weekday_trip_ids = list(range(1, len(weekday_rows) + 1))
-
-                # Process weekend trips
-                weekend_rows = weekend_samples.rows()
-                weekend_departures = [t[0] // 100 for t in weekend_rows]
-                weekend_arrivals = [t[1] // 100 for t in weekend_rows]
-                weekend_miles = [t[2] for t in weekend_rows]
-                weekend_weights = [t[3] for t in weekend_rows]
-                weekend_trip_ids = list(range(1, len(weekend_rows) + 1))
+                # Process weekend trips (now from cached data)
+                weekend_departures = [t // 100 for t in weekend_data["start_times"]]
+                weekend_arrivals = [t // 100 for t in weekend_data["end_times"]]
+                weekend_miles = weekend_data["miles_list"]
+                weekend_weights = weekend_data["trip_weights"]
+                weekend_trip_ids = list(range(1, len(weekend_departures) + 1))
 
                 # Create VehicleProfile for this specific vehicle
                 profiles[(bldg_id, vehicle_id)] = VehicleProfile(
@@ -481,8 +609,8 @@ class EVDemandCalculator:
 
     def generate_daily_schedules(
         self, profile: VehicleProfile, rng: Optional[np.random.RandomState] = None
-    ) -> list[TripSchedule]:
-        """Generate trip schedules for all days in the date range."""
+    ) -> pl.DataFrame:
+        """Generate trip schedules for all days in the date range as a DataFrame."""
         if rng is None:
             rng = np.random  # Use global numpy random if no rng provided
 
@@ -586,22 +714,17 @@ class EVDemandCalculator:
             arrival_hours.extend(arrivals_with_variance.astype(int))
             miles_driven.extend(miles_variance)
 
-        # Create all TripSchedule objects at once
-        schedules = [
-            TripSchedule(
-                bldg_id=bid,
-                vehicle_id=vid,
-                date=date,
-                departure_hour=dep,
-                arrival_hour=arr,
-                miles_driven=miles,
-            )
-            for bid, vid, date, dep, arr, miles in zip(
-                bldg_ids, vehicle_ids, dates, departure_hours, arrival_hours, miles_driven
-            )
-        ]
+        # Create DataFrame directly from lists (vectorized approach)
+        schedule_data = {
+            'bldg_id': bldg_ids,
+            'vehicle_id': vehicle_ids,
+            'date': dates,
+            'departure_hour': departure_hours,
+            'arrival_hour': arrival_hours,
+            'miles_driven': miles_driven
+        }
 
-        return schedules
+        return pl.DataFrame(schedule_data)
 
     def _generate_annual_trip_schedule(
         self,
@@ -667,10 +790,14 @@ class EVDemandCalculator:
                 # Log progress every 5%
                 self._log_progress(i, total_profiles, "Progress")
 
-        # Convert to DataFrame
-        total_schedules = len(all_schedules)
+        # Combine all DataFrames (already in DataFrame format)
+        total_schedules = sum(len(schedule_df) for schedule_df in all_schedules)
         logging.info(f"Generated {total_schedules} trip schedules from {total_profiles} vehicle profiles")
-        return pl.DataFrame([vars(schedule) for schedule in all_schedules])
+        
+        if all_schedules:
+            return pl.concat(all_schedules)
+        else:
+            return pl.DataFrame()
 
     def generate_trip_schedules(self) -> pl.DataFrame:
         """
@@ -739,7 +866,7 @@ def main():
     print(f"Loaded NHTS data: {len(nhts_df)} rows")
     print(f"Loaded PUMS data: {len(pums_df)} rows")
 
-    # Process metadata in batches of 10,000 rows
+    # Process metadata in batches of 20,000 rows
     batch_size = 20000
     total_rows = len(metadata_df)
     all_trip_schedules = []
