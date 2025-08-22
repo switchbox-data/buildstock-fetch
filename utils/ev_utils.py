@@ -6,12 +6,11 @@ This module contains:
 - Data loading functions for metadata, NHTS, and PUMS data
 """
 
+import logging
 from pathlib import Path
 from typing import Any
-import io
-import boto3
-import logging
 
+import boto3
 import numpy as np
 import polars as pl
 
@@ -239,7 +238,7 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
         .with_columns([
             pl.col("occupants").cast(pl.UInt8),  # Instead of Int64
             pl.col("income_bucket").cast(pl.UInt8),  # 1-11 fits in UInt8
-            pl.col("puma").cast(pl.Utf8), 
+            pl.col("puma").cast(pl.Utf8),
         ])
         .collect()
     )
@@ -463,17 +462,15 @@ def upload_object_to_s3(file_content: bytes, file_name: str) -> bool:
     s3_key = f"ev_demand/trip_schedules/{file_name}"
 
     try:
-        s3_client = boto3.client('s3')
+        s3_client = boto3.client("s3")
         print(f"Uploading {file_name} to s3://{bucket_name}/{s3_key}...")
 
         # Upload directly from memory
         s3_client.put_object(Bucket=bucket_name, Key=s3_key, Body=file_content)
 
-        logging.info(
-            f"Successfully uploaded file to S3: s3://{bucket_name}/{s3_key}")
-        return True
-
-    except Exception as e:
-
-        logging.error(f"Failed to upload to S3: {e}")
+        logging.info(f"Successfully uploaded file to S3: s3://{bucket_name}/{s3_key}")
+    except Exception:
+        logging.exception("Failed to upload to S3")
         return False
+    else:
+        return True
