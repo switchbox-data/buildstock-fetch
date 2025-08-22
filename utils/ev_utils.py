@@ -217,6 +217,7 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
             .cast(pl.Int64)
             .alias("occupants")
         ])
+        .filter(pl.col("occupants") > 0)
         # Process income categories - convert to standard ranges first
         .with_columns([
             pl.when(pl.col("income") == "<10000")
