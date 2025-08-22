@@ -35,6 +35,7 @@ def cleanup_downloads():
 
 
 def test_fetch_bldg_ids():
+    # 2021 resstock release
     assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[0].bldg_id == 355537
     assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[0].res_com == "resstock"
     assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[0].release_year == "2021"
@@ -45,6 +46,18 @@ def test_fetch_bldg_ids():
     assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[1].bldg_id == 24415
     assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[2].bldg_id == 487404
     assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[3].bldg_id == 355634
+
+    # 2021 comstock release
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].bldg_id == 271060
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].res_com == "comstock"
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].release_year == "2021"
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].weather == "tmy3"
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].release_number == "1"
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].upgrade_id == "0"
+
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[1].bldg_id == 9944
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[2].bldg_id == 245624
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[3].bldg_id == 155275
 
 
 def test_building_id_config():
