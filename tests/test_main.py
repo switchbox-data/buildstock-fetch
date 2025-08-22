@@ -81,6 +81,16 @@ def test_fetch_bldg_ids():
     assert fetch_bldg_ids("comstock", "2023", "amy2018", "1", "AZ", "0")[2].bldg_id == 9161
     assert fetch_bldg_ids("comstock", "2023", "amy2018", "2", "MI", "0")[3].bldg_id == 163941
 
+    # 2024 resstock releases
+    assert fetch_bldg_ids("resstock", "2024", "amy2018", "2", "IL", "0")[1].bldg_id == 233842
+    assert fetch_bldg_ids("resstock", "2024", "amy2018", "2", "IL", "0")[2].bldg_id == 245818
+    assert fetch_bldg_ids("resstock", "2024", "tmy3", "2", "ID", "0")[3].bldg_id == 18149
+
+    # 2024 comstock releases
+    assert fetch_bldg_ids("comstock", "2024", "amy2018", "1", "GA", "0")[1].bldg_id == 104039
+    assert fetch_bldg_ids("comstock", "2024", "amy2018", "1", "GA", "0")[2].bldg_id == 97452
+    assert fetch_bldg_ids("comstock", "2024", "amy2018", "2", "DC", "0")[3].bldg_id == 117988
+
 
 def test_building_id_config():
     res_2022_tmy3_1 = {"release_number": "1", "release_year": "2022", "res_com": "resstock", "weather": "tmy3"}
