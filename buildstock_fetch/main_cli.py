@@ -213,6 +213,7 @@ def _get_file_type_options_grouped(release_name: str) -> list[dict]:
     file_types = _get_file_type_options(release_name)
 
     # Define categories
+    # TODO: Add a category for grabbing EV related files
     categories = {
         "Simulation Files": ["hpxml", "schedule"],
         "End Use Load Curves": [
@@ -615,6 +616,8 @@ def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[s
     if state_check is not True:
         return state_check
 
+    # TODO: Validate EV related files
+
     # Check output directory
     output_directory_validation = _validate_output_directory(str(inputs["output_directory"]))
     if output_directory_validation is not True:
@@ -673,6 +676,7 @@ def main_callback(
         upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
         file_type_list = file_type.split() if file_type else []
 
+        # TODO: Add a category for grabbing EV related files
         direct_inputs: dict[str, Union[str, list[str]]] = {
             "product": product,
             "release_year": release_year,
@@ -684,6 +688,7 @@ def main_callback(
             "output_directory": output_directory,
         }
         try:
+            # TODO: Add a category for grabbing EV related files
             validation_result = _validate_direct_inputs(direct_inputs)
             if validation_result is not True:
                 console.print(f"\n[red]{validation_result}[/red]")
