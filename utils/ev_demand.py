@@ -805,17 +805,16 @@ def main():
     if all_trip_schedules:
         combined_trip_schedules = pl.concat(all_trip_schedules)
         logging.info(f"Combined all batches: {len(combined_trip_schedules)} total trip schedules")
-        
-        # Add metadata and sort in one chain
-        final_trip_schedules = (combined_trip_schedules
-            .with_columns([
-                pl.lit(config.release).alias("release"),
-                pl.lit(config.state).alias("state")
-            ])
-            .sort(["bldg_id", "vehicle_id", "date"])
-        )
 
-        file_name = "trip_schedules" #f"{config.state}_{config.release}_{start_date.year}_annual_trip_schedules.parquet"
+        # Add metadata and sort in one chain
+        final_trip_schedules = combined_trip_schedules.with_columns([
+            pl.lit(config.release).alias("release"),
+            pl.lit(config.state).alias("state"),
+        ]).sort(["bldg_id", "vehicle_id", "date"])
+
+        file_name = (
+            "trip_schedules"  # f"{config.state}_{config.release}_{start_date.year}_annual_trip_schedules.parquet"
+        )
 
         # Partition the DataFrame by release and state (done once, used by both paths)
         partitions = final_trip_schedules.partition_by(["release", "state"])
@@ -823,28 +822,28 @@ def main():
         if args.upload_s3:
             # Upload directly to S3 with partitioning
             import io
-            
+
             upload_success = True
             for partition in partitions:
                 # Get partition values for file naming
                 release_val = partition["release"][0] if len(partition["release"]) > 0 else "unknown"
                 state_val = partition["state"][0] if len(partition["state"]) > 0 else "unknown"
-                
+
                 # Create partitioned file name
                 partition_file_name = f"{file_name}/release={release_val}/state={state_val}/data.parquet"
-                
+
                 # Write partition to memory buffer
                 buffer = io.BytesIO()
                 partition.write_parquet(buffer)
                 file_content = buffer.getvalue()
-                
+
                 # Upload partition to S3
                 partition_upload_success = ev_utils.upload_object_to_s3(file_content, partition_file_name)
                 if not partition_upload_success:
                     print(f"Error: S3 upload failed for partition release={release_val}, state={state_val}")
                     upload_success = False
                     break
-            
+
             if not upload_success:
                 print("Error: S3 upload failed")
                 return 1
@@ -856,8 +855,7 @@ def main():
             os.makedirs(config.output_dir, exist_ok=True)
 
             local_file_path = f"{config.output_dir}/{file_name}"
-            final_trip_schedules.write_parquet(local_file_path, 
-                                                  partition_by=["release", "state"])
+            final_trip_schedules.write_parquet(local_file_path, partition_by=["release", "state"])
 
             print(f"Results written to: {local_file_path}")
             logging.info(f"Written results to {local_file_path}")
