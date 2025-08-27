@@ -64,6 +64,7 @@ dev-utils = [
     "pyarrow>=14.0.1",
     "numpy>=1.26.4",
     "scikit-learn>=1.6.1",
+    "xmltodict>=0.14.2",
 ]
 
 # All development dependencies (convenience group)
@@ -185,4 +186,5 @@ per_rule_ignores.DEP002 = [
     "pyarrow",
     "numpy",
     "scikit-learn",
+    "xmltodict",
 ]
