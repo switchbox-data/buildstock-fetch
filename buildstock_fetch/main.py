@@ -1071,7 +1071,9 @@ def fetch_bldg_data(
             )
 
         # TODO: add EV related files
-        # TODO: Write a function for downloading EV related files
+        # TODO: Write a function for downloading EV related files from SB's s3 bucket.
+        # It should dynamically build the download url based on the release_name + state combo.
+        # Make sure to follow the directory structure for downloading the files.
 
     _print_download_summary(downloaded_paths, failed_downloads, console)
 

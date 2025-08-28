@@ -288,6 +288,16 @@ def _find_upgrade_ids(s3_client: Any, bucket_name: str, prefix: str) -> list[str
     return upgrade_ids
 
 
+def _find_trip_schedules():
+    """
+    TODO: go to SB's s3 bucket, search through the existing EV trip schedule files,
+    return the release version + state combos for which there are EV trip schedule files,
+    modify the buildstock_releases.json file to include "trip_schedules" in the available_data key for those releases,
+    and figure out a way to incorporate state-specific trip_schedule file availability.
+    """
+    return
+
+
 def _process_release(
     s3_client: Any,
     bucket_name: str,

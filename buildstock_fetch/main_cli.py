@@ -212,6 +212,13 @@ def _get_file_type_options_grouped(release_name: str) -> list[dict]:
     """Get file type options grouped by category for questionary checkbox."""
     file_types = _get_file_type_options(release_name)
 
+    # TODO: If a trip_schedule table was built for any of the states in this release, "trip_schedules" will be included
+    # in the file_types list above. However, the state that the user wants to download files for may not have the trip_schedule tables built for it yet.
+    # So, we need to check if the release_name + state combo is in the available trip_schedules_states list.
+    # If not, we need to remove "trip_schedules" from the file_types list, so it doesn't show up in the questionary checkbox.
+    # Remember that users can select multiple states, so as long as one release_name + state combo is in the available trip_schedules_states list,
+    # we should include "trip_schedules" in the file_types list. and then later on, we need to handle different states differently.
+
     # Define categories
     categories = {
         "Simulation Files": ["hpxml", "schedule"],
@@ -434,6 +441,10 @@ def _print_data_processing_info(inputs: Mapping[str, Union[str, list[str]]]) -> 
 
 def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> None:
     """Check and print warning for unavailable file types."""
+
+    # TODO: Add a check for trip_schedules file types. Make sure that the release_name + state combo is in the available trip_schedules_states list.
+    # If not, print a warning message for the unavailable release_name + state combo.
+
     unavailable_file_types = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly"]
     selected_file_types = inputs["file_type"].split() if isinstance(inputs["file_type"], str) else inputs["file_type"]
     selected_unavailable = [ft for ft in selected_file_types if ft in unavailable_file_types]
