@@ -213,7 +213,6 @@ def _get_file_type_options_grouped(release_name: str) -> list[dict]:
     file_types = _get_file_type_options(release_name)
 
     # Define categories
-    # TODO: Add a category for grabbing EV related files
     categories = {
         "Simulation Files": ["hpxml", "schedule"],
         "End Use Load Curves": [
@@ -224,6 +223,7 @@ def _get_file_type_options_grouped(release_name: str) -> list[dict]:
             "load_curve_annual",
         ],
         "Metadata": ["metadata"],
+        "EV": ["trip_schedules"],
     }
 
     choices = []
@@ -572,6 +572,7 @@ def _validate_file_types(inputs: dict[str, Union[str, list[str]]], release_name:
     """Validate file types."""
     available_releases = _get_all_available_releases()
     for file_type in inputs["file_type"]:
+        # TODO: Validate EV related files
         if file_type not in available_releases[release_name]["available_data"]:
             return f"Invalid file type: {file_type}"
     return True
@@ -615,8 +616,6 @@ def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[s
     state_check = _validate_states(inputs)
     if state_check is not True:
         return state_check
-
-    # TODO: Validate EV related files
 
     # Check output directory
     output_directory_validation = _validate_output_directory(str(inputs["output_directory"]))
@@ -676,7 +675,6 @@ def main_callback(
         upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
         file_type_list = file_type.split() if file_type else []
 
-        # TODO: Add a category for grabbing EV related files
         direct_inputs: dict[str, Union[str, list[str]]] = {
             "product": product,
             "release_year": release_year,
