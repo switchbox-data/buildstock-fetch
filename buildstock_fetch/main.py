@@ -711,6 +711,8 @@ def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes
         file_type_obj.load_curve_monthly = True
     if "load_curve_annual" in file_type:
         file_type_obj.load_curve_annual = True
+
+    # TODO: add EV related files
     return file_type_obj
 
 
@@ -1067,6 +1069,11 @@ def fetch_bldg_data(
             _download_annual_load_curves_parallel(
                 bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
             )
+
+        # TODO: add EV related files
+        # TODO: Write a function for downloading EV related files from SB's s3 bucket.
+        # It should dynamically build the download url based on the release_name + state combo.
+        # Make sure to follow the directory structure for downloading the files.
 
     _print_download_summary(downloaded_paths, failed_downloads, console)
 
