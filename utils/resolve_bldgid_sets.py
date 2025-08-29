@@ -11,6 +11,9 @@ import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+output_file_path: str = os.path.join(
+    PROJECT_ROOT, "buildstock_fetch", "data", "buildstock_releases.json")
 
 class BuildStockRelease(TypedDict):
     release_year: str
@@ -382,7 +385,7 @@ def append_avail_trip_schedules(releases: dict[str, BuildStockRelease],sb_bucket
 def resolve_bldgid_sets(
     bucket_name: str = "oedi-data-lake",
     prefix: str = "nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock",
-    output_file: str = "buildstock_releases.json",
+    output_file: str = output_file_path,
 ) -> dict[str, BuildStockRelease]:
     """
     Get URLs containing 'building_energy_models' from the NREL S3 bucket.
