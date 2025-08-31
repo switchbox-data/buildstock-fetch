@@ -437,13 +437,13 @@ def _print_data_processing_info(inputs: Mapping[str, Union[str, list[str]]]) -> 
 
 def _check_weather_map_available_states(inputs: Mapping[str, Union[str, list[str]]]) -> tuple[list[str], list[str]]:
     """Check if the weather map is available for the given release and state."""
-    available_states = []
-    unavailable_states = []
+    available_states: list[str] = []
+    unavailable_states: list[str] = []
     product_short_name = "res" if inputs["product"] == "resstock" else "com"
     release_name = f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
     selected_release = _get_all_available_releases()[release_name]
     if "weather_map_available_states" not in selected_release:
-        unavailable_states = inputs["states"]
+        unavailable_states = inputs["states"] if isinstance(inputs["states"], list) else [inputs["states"]]
     else:
         unavailable_states = [
             state for state in inputs["states"] if state not in selected_release["weather_map_available_states"]
@@ -458,19 +458,26 @@ def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -
     """Check and print warning for unavailable file types."""
 
     selected_file_types = inputs["file_type"].split() if isinstance(inputs["file_type"], str) else inputs["file_type"]
-    available_file_types = selected_file_types
+    # Create a copy to avoid modifying the original list
+    available_file_types = selected_file_types.copy()
     unavailable_file_types = []
+
     for ft in selected_file_types:
         if ft in UNAVAILABLE_FILE_TYPES:
             unavailable_file_types.append(ft)
-            available_file_types.remove(ft)
+            # Only remove if it exists in available_file_types
+            if ft in available_file_types:
+                available_file_types.remove(ft)
+
     selected_unavailable = [ft for ft in selected_file_types if ft in UNAVAILABLE_FILE_TYPES]
 
     # Check weather weather file mapping is available for given release and state
     available_states, unavailable_states = _check_weather_map_available_states(inputs)
     if len(unavailable_states) == len(inputs["states"]):
         unavailable_file_types.append("weather")
-        available_file_types.remove("weather")
+        # Only remove "weather" if it exists in available_file_types
+        if "weather" in available_file_types:
+            available_file_types.remove("weather")
 
     if len(unavailable_states) > 0:
         console.print(
