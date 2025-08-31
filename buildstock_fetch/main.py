@@ -1010,7 +1010,7 @@ def fetch_bldg_data(
     file_type: tuple[str, ...],
     output_dir: Path,
     max_workers: int = 5,
-    weather_states: list[str] | None = None,
+    weather_states: Union[list[str], None] = None,
 ) -> tuple[list[Path], list[str]]:
     """Download building data for a given list of building ids
 
