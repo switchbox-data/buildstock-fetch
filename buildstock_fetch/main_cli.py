@@ -223,6 +223,7 @@ def _get_file_type_options_grouped(release_name: str) -> list[dict]:
             "load_curve_annual",
         ],
         "Metadata": ["metadata"],
+        "Weather": ["weather"],
     }
 
     choices = []
