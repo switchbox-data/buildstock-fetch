@@ -752,6 +752,7 @@ def main_callback(
     # Process the data
     _print_data_processing_info(inputs)
     available_file_types, unavailable_file_types = _check_unavailable_file_types(inputs)
+    available_states, unavailable_states = _check_weather_map_available_states(inputs)
 
     if len(available_file_types) > 0:
         # Fetch the building ids and download data
@@ -769,7 +770,7 @@ def main_callback(
             output_dir = inputs["output_directory"]
             if isinstance(output_dir, list):
                 output_dir = output_dir[0] if output_dir else "."
-            fetch_bldg_data(selected_bldg_ids, file_type_tuple, Path(output_dir))
+            fetch_bldg_data(selected_bldg_ids, file_type_tuple, Path(output_dir), weather_states=available_states)
         else:
             console.print("[yellow]No files selected for download.[/yellow]")
     else:

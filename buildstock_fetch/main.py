@@ -74,6 +74,7 @@ class RequestedFileTypes:
     load_curve_daily: bool = False
     load_curve_monthly: bool = False
     load_curve_annual: bool = False
+    weather: bool = False
 
 
 @dataclass
@@ -711,6 +712,8 @@ def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes
         file_type_obj.load_curve_monthly = True
     if "load_curve_annual" in file_type:
         file_type_obj.load_curve_annual = True
+    if "weather" in file_type:
+        file_type_obj.weather = True
     return file_type_obj
 
 
@@ -1003,7 +1006,11 @@ def _print_download_summary(downloaded_paths: list[Path], failed_downloads: list
 
 
 def fetch_bldg_data(
-    bldg_ids: list[BuildingID], file_type: tuple[str, ...], output_dir: Path, max_workers: int = 5
+    bldg_ids: list[BuildingID],
+    file_type: tuple[str, ...],
+    output_dir: Path,
+    max_workers: int = 5,
+    weather_states: list[str] | None = None,
 ) -> tuple[list[Path], list[str]]:
     """Download building data for a given list of building ids
 
@@ -1018,6 +1025,10 @@ def fetch_bldg_data(
     file_type_obj = _parse_requested_file_type(file_type)
     console = Console()
 
+    # Initialize weather_states to empty list if None
+    if weather_states is None:
+        weather_states = []
+
     downloaded_paths: list[Path] = []
     failed_downloads: list[str] = []
 
@@ -1029,6 +1040,8 @@ def fetch_bldg_data(
         total_files += len(bldg_ids)  # Add 15-minute load curve files
     if file_type_obj.load_curve_annual:
         total_files += len(bldg_ids)  # Add annual load curve files
+    if file_type_obj.weather:
+        total_files += len(bldg_ids) * len(weather_states)  # Add weather map files
 
     console.print(f"\n[bold blue]Starting download of {total_files} files...[/bold blue]")
 
