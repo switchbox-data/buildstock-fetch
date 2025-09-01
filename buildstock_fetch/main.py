@@ -58,6 +58,12 @@ class NoAnnualLoadCurveError(ValueError):
     pass
 
 
+class NoWeatherFileError(ValueError):
+    """Raised when weather file is not available for a release."""
+
+    pass
+
+
 METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
@@ -250,6 +256,10 @@ class BuildingID:
         else:
             return ""
 
+    def get_weather_file_url(self) -> str:
+        """Generate the S3 download URL for this building."""
+        return ""
+
     def get_annual_load_curve_filename(self) -> str:
         """Generate the filename for the annual load curve."""
         if self.release_year == "2021":
@@ -278,6 +288,10 @@ class BuildingID:
                 return ""
         else:
             return ""
+
+    def get_weather_station_name(self) -> str:
+        """Get the weather station name for this building."""
+        return ""
 
     def _build_annual_load_state_url(self) -> str:
         """Build the state-level URL for annual load curve data.
@@ -777,6 +791,25 @@ def _download_metadata_with_progress(bldg: BuildingID, output_dir: Path, progres
     return output_file
 
 
+def download_weather_file_with_progress(
+    bldg_id: BuildingID, output_dir: Path, progress: Progress, task_id: TaskID
+) -> Path:
+    """Download weather file with progress tracking."""
+    download_url = bldg_id.get_weather_file_url()
+    if download_url == "":
+        raise NoWeatherFileError()
+    output_file = (
+        output_dir
+        / bldg_id.get_release_name()
+        / "weather"
+        / bldg_id.state
+        / f"{bldg_id.get_weather_station_name()}.csv"
+    )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    _download_with_progress(download_url, output_file, progress, task_id)
+    return output_file
+
+
 def _download_building_data_parallel(
     bldg_ids: list[BuildingID],
     file_type_obj: RequestedFileTypes,
@@ -995,6 +1028,64 @@ def _download_annual_load_curves_parallel(
                 console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
+def _download_weather_files_parallel(
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    max_workers: int,
+    progress: Progress,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+) -> None:
+    """Download weather files in parallel with progress tracking."""
+    # Create progress tasks for weather file downloads
+    weather_file_tasks = {}
+    for i, bldg_id in enumerate(bldg_ids):
+        task_id = progress.add_task(
+            f"[magenta]Weather file {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
+            total=0,  # Will be updated when we get the file size
+        )
+        weather_file_tasks[i] = task_id
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Create a modified version of the download function that uses the specific task IDs
+        def download_weather_file_with_task_id(bldg_id: BuildingID, output_dir: Path, task_id: TaskID) -> Path:
+            return download_weather_file_with_progress(bldg_id, output_dir, progress, task_id)
+
+        future_to_bldg = {
+            executor.submit(download_weather_file_with_task_id, bldg_id, output_dir, weather_file_tasks[i]): bldg_id
+            for i, bldg_id in enumerate(bldg_ids)
+        }
+
+        for future in concurrent.futures.as_completed(future_to_bldg):
+            bldg_id = future_to_bldg[future]
+            try:
+                output_file = future.result()
+                downloaded_paths.append(output_file)
+            except NoWeatherFileError:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "weather"
+                    / bldg_id.state
+                    / f"{bldg_id.get_weather_station_name()}.csv"
+                )
+                failed_downloads.append(str(output_file))
+                console.print(f"[red]Weather file not available for {bldg_id.get_release_name()}[/red]")
+                raise
+            except Exception as e:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "weather"
+                    / bldg_id.state
+                    / f"{bldg_id.get_weather_station_name()}.csv"
+                )
+                failed_downloads.append(str(output_file))
+                console.print(f"[red]Download failed for weather file {bldg_id.bldg_id}: {e}[/red]")
+                raise
+
+
 def _print_download_summary(downloaded_paths: list[Path], failed_downloads: list[str], console: Console) -> None:
     """Print a summary of the download results."""
     console.print("\n[bold green]Download complete![/bold green]")
@@ -1059,31 +1150,53 @@ def fetch_bldg_data(
         console=console,
         transient=False,
     ) as progress:
-        # Download building data if requested.
-        if file_type_obj.hpxml or file_type_obj.schedule:
-            _download_building_data_parallel(
-                bldg_ids, file_type_obj, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
-            )
-
-        # Get metadata if requested. Only one building is needed to get the metadata.
-        if file_type_obj.metadata:
-            _download_metadata_single(bldg_ids, output_dir, progress, downloaded_paths)
-
-        # Get 15 min load profile timeseries if requested.
-        if file_type_obj.load_curve_15min:
-            _download_15min_load_curves_parallel(
-                bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
-            )
-
-        # Get annual load curve if requested.
-        if file_type_obj.load_curve_annual:
-            _download_annual_load_curves_parallel(
-                bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
-            )
+        _execute_downloads(
+            file_type_obj, bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+        )
 
     _print_download_summary(downloaded_paths, failed_downloads, console)
 
     return downloaded_paths, failed_downloads
+
+
+def _execute_downloads(
+    file_type_obj: RequestedFileTypes,
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    max_workers: int,
+    progress: Progress,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+) -> None:
+    """Execute all requested downloads based on file type configuration."""
+    # Download building data if requested.
+    if file_type_obj.hpxml or file_type_obj.schedule:
+        _download_building_data_parallel(
+            bldg_ids, file_type_obj, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+        )
+
+    # Get metadata if requested. Only one building is needed to get the metadata.
+    if file_type_obj.metadata:
+        _download_metadata_single(bldg_ids, output_dir, progress, downloaded_paths)
+
+    # Get 15 min load profile timeseries if requested.
+    if file_type_obj.load_curve_15min:
+        _download_15min_load_curves_parallel(
+            bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+        )
+
+    # Get annual load curve if requested.
+    if file_type_obj.load_curve_annual:
+        _download_annual_load_curves_parallel(
+            bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+        )
+
+    # Get weather files if requested.
+    if file_type_obj.weather:
+        _download_weather_files_parallel(
+            bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
