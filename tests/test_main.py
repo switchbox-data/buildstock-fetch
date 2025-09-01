@@ -12,6 +12,7 @@ from buildstock_fetch.main import (
     NoAnnualLoadCurveError,
     NoBuildingDataError,
     NoMetadataError,
+    NoWeatherFileError,
     RequestedFileTypes,
     _parse_requested_file_type,
     download_bldg_data,
@@ -683,3 +684,14 @@ def test_fetch_weather_file(cleanup_downloads):
         assert Path(
             f"data/{bldg_id.get_release_name()}/weather/{bldg_id.state}/{bldg_id.get_weather_station_name()}.csv"
         ).exists()
+
+    # Invalid weather file test
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2024", res_com="comstock", weather="tmy3", upgrade_id="0", release_number="2"
+        ),
+    ]
+    file_type = ("weather",)
+    output_dir = Path("data")
+    with pytest.raises(NoWeatherFileError):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
