@@ -655,3 +655,31 @@ def test_fetch_weather_station_name(cleanup_downloads):
     for i, bldg_id in enumerate(bldg_ids):
         weather_station_name = bldg_id.get_weather_station_name()
         assert weather_station_name == expected_weather_station_names[i]
+
+
+def test_fetch_weather_file(cleanup_downloads):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=69, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=132, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=161, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+    ]
+
+    file_type = ("weather",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == len(bldg_ids)
+    assert len(failed_downloads) == 0
+    for bldg_id in bldg_ids:
+        assert Path(
+            f"data/{bldg_id.get_release_name()}/weather/{bldg_id.state}/{bldg_id.get_weather_station_name()}.csv"
+        ).exists()
