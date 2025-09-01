@@ -68,6 +68,7 @@ METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
 RELEASE_JSON_FILE = Path(str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")))
+WEATHER_FILE_DIR = Path(str(files("buildstock_fetch").joinpath("data").joinpath("weather_station_map")))
 
 
 @dataclass
@@ -291,7 +292,25 @@ class BuildingID:
 
     def get_weather_station_name(self) -> str:
         """Get the weather station name for this building."""
-        return ""
+        weather_map_df = pl.read_parquet(WEATHER_FILE_DIR)
+
+        # Filter by multiple fields for a more specific match
+        weather_station_map = weather_map_df.filter(
+            (pl.col("product") == self.res_com)
+            & (pl.col("release_year") == self.release_year)
+            & (pl.col("weather_file") == self.weather)
+            & (pl.col("release_version") == self.release_number)
+            & (pl.col("bldg_id") == self.bldg_id)
+        )
+
+        # Check if we found a match
+        if weather_station_map.height > 0:
+            # Return the weather station name from the first (and should be only) match
+            weather_station_name = weather_station_map.select("weather_station_name").item()
+            return str(weather_station_name) if weather_station_name is not None else ""
+        else:
+            # No match found, return empty string
+            return ""
 
     def _build_annual_load_state_url(self) -> str:
         """Build the state-level URL for annual load curve data.
