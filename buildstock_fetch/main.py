@@ -259,6 +259,8 @@ class BuildingID:
 
     def get_weather_file_url(self) -> str:
         """Generate the S3 download URL for this building."""
+        if self.get_weather_station_name() == "":
+            return ""
         return self._build_weather_url()
 
     def _build_weather_url(self) -> str:
