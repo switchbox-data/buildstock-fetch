@@ -294,7 +294,7 @@ class BuildingID:
         elif self.weather == "amy2018":
             return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_2018.csv"
         elif self.weather == "amy2012":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2012.csv"
+            return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_2012.csv"
         else:
             return ""
 
