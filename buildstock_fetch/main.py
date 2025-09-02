@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import tempfile
 import zipfile
 from dataclasses import asdict, dataclass
 from importlib.resources import files
@@ -54,6 +55,12 @@ class No15minLoadCurveError(ValueError):
 
 class NoAnnualLoadCurveError(ValueError):
     """Raised when annual load curve is not available for a release."""
+
+    pass
+
+
+class NoMonthlyLoadCurveError(ValueError):
+    """Raised when no monthly load curve is available for a given release."""
 
     pass
 
@@ -233,6 +240,10 @@ class BuildingID:
             )
         else:
             return ""
+
+    def get_monthly_load_curve_url(self) -> str:
+        """Generate the S3 download URL for this building. The url is the same as the 15-minute load curve url."""
+        return self.get_15min_load_curve_url()
 
     def get_annual_load_curve_url(self) -> str:
         """Generate the S3 download URL for this building."""
@@ -497,6 +508,46 @@ def _download_with_progress(url: str, output_file: Path, progress: Progress, tas
     return downloaded_size
 
 
+def _download_and_process_monthly(url: str, output_file: Path, progress: Progress, task_id: TaskID) -> int:
+    """Download monthly load curve to temporary file, process with Polars, and save result."""
+    # Get file size first for progress tracking
+    response = requests.head(url, timeout=30)
+    response.raise_for_status()
+    total_size = int(response.headers.get("content-length", 0))
+    progress.update(task_id, total=total_size)
+
+    # Download to temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+        temp_path = Path(temp_file.name)
+
+        try:
+            # Download with streaming to temp file
+            response = requests.get(url, stream=True, timeout=30)
+            response.raise_for_status()
+
+            downloaded_size = 0
+            with open(temp_path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        file.write(chunk)
+                        downloaded_size += len(chunk)
+                        if total_size > 0:
+                            progress.update(task_id, completed=downloaded_size)
+
+            # Process with Polars
+            df = pl.read_parquet(temp_path)
+
+            # Save processed file to final destination
+            df.write_parquet(output_file)
+
+            return downloaded_size
+
+        finally:
+            # Clean up temporary file
+            if temp_path.exists():
+                temp_path.unlink()
+
+
 def download_bldg_data(
     bldg_id: BuildingID,
     file_type: RequestedFileTypes,
@@ -692,6 +743,48 @@ def download_15min_load_curve_with_progress(
     return output_file
 
 
+def download_monthly_load_curve_with_progress(
+    bldg_id: BuildingID, output_dir: Path, progress: Progress, task_id: TaskID
+) -> Path:
+    """Download the monthly load profile timeseries for a given building with progress tracking."""
+    download_url = bldg_id.get_monthly_load_curve_url()
+    if download_url == "":
+        message = f"Monthly load profile timeseries is not available for {bldg_id.get_release_name()}"
+        raise NoMonthlyLoadCurveError(message)
+
+    output_file = (
+        output_dir
+        / bldg_id.get_release_name()
+        / "load_curve_15min"
+        / bldg_id.state
+        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+    )
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Download with progress tracking if progress object is provided
+    if progress and task_id is not None:
+        _download_and_process_monthly(download_url, output_file, progress, task_id)
+    else:
+        # For non-progress downloads, still use temp file approach for consistency
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+            temp_path = Path(temp_file.name)
+            try:
+                response = requests.get(download_url, timeout=30)
+                response.raise_for_status()
+                temp_path.write_bytes(response.content)
+
+                # Process with Polars
+                df = pl.read_parquet(temp_path)
+                df.write_parquet(output_file)
+            finally:
+                if temp_path.exists():
+                    temp_path.unlink()
+
+    return output_file
+
+
 def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes:
     """Parse the file type string into a RequestedFileTypes object."""
     file_type_obj = RequestedFileTypes()
@@ -879,6 +972,52 @@ def _download_monthly_load_curves_parallel(
     console: Console,
 ) -> None:
     """Download monthly load curves in parallel with progress tracking."""
+    """Download 15-minute load curves in parallel with progress tracking."""
+    # Create progress tasks for 15-minute load curve downloads
+    load_curve_tasks = {}
+    for i, bldg_id in enumerate(bldg_ids):
+        task_id = progress.add_task(
+            f"[magenta]Load curve {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
+            total=0,  # Will be updated when we get the file size
+        )
+        load_curve_tasks[i] = task_id
+
+    # Create a modified version of the download function that uses the specific task IDs
+    def download_monthly_with_task_id(bldg_id: BuildingID, output_dir: Path, task_id: TaskID) -> Path:
+        return download_monthly_load_curve_with_progress(bldg_id, output_dir, progress, task_id)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_bldg = {
+            executor.submit(download_monthly_with_task_id, bldg_id, output_dir, load_curve_tasks[i]): bldg_id
+            for i, bldg_id in enumerate(bldg_ids)
+        }
+
+        for future in concurrent.futures.as_completed(future_to_bldg):
+            bldg_id = future_to_bldg[future]
+            try:
+                output_file = future.result()
+                downloaded_paths.append(output_file)
+            except NoMonthlyLoadCurveError:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "load_curve_15min"
+                    / bldg_id.state
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+                )
+                failed_downloads.append(str(output_file))
+                console.print(f"[red]15 min load curve not available for {bldg_id.get_release_name()}[/red]")
+                raise
+            except Exception as e:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "load_curve_15min"
+                    / bldg_id.state
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+                )
+                failed_downloads.append(str(output_file))
+                console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
     pass
 
 
