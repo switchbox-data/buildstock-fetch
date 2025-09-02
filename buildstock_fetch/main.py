@@ -69,7 +69,7 @@ METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
 RELEASE_JSON_FILE = Path(str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")))
-LOAD_CURVE_COLUMN_AGGREGATION = Path(str(files("utils").joinpath("2024_resstock_load_curve_columns.csv")))
+LOAD_CURVE_COLUMN_AGGREGATION = Path(__file__).parent.parent / "utils" / "2024_resstock_load_curve_columns.csv"
 
 
 @dataclass
@@ -559,6 +559,7 @@ def _aggregate_load_curve_monthly(load_curve: pl.DataFrame) -> pl.DataFrame:
     # Sort by timestamp and drop the grouping column
     monthly_data = monthly_data.sort("timestamp").drop("year_month")
 
+    print(monthly_data)
     return monthly_data
 
 
