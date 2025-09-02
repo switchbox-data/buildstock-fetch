@@ -12,8 +12,8 @@ from botocore import UNSIGNED
 from botocore.config import Config
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-output_file_path: str = os.path.join(
-    PROJECT_ROOT, "buildstock_fetch", "data", "buildstock_releases.json")
+output_file_path: str = os.path.join(PROJECT_ROOT, "buildstock_fetch", "data", "buildstock_releases.json")
+
 
 class BuildStockRelease(TypedDict):
     release_year: str
@@ -330,9 +330,7 @@ def _find_trip_schedules(sb_bucket_name: str, sb_prefix: str):
                                 sub2 = sub2.split("state=")[1]
                             subdirs[sub1].append(sub2)
 
-
     return subdirs
-
 
 
 def _process_release(
@@ -375,12 +373,17 @@ def _process_release(
     releases[key] = release_data
 
 
-def append_avail_trip_schedules(releases: dict[str, BuildStockRelease],sb_bucket_name: str = "buildstock-fetch", sb_prefix: str = "ev_demand/trip_schedules/" ):
+def append_avail_trip_schedules(
+    releases: dict[str, BuildStockRelease],
+    sb_bucket_name: str = "buildstock-fetch",
+    sb_prefix: str = "ev_demand/trip_schedules/",
+):
     trip_schedules = _find_trip_schedules(sb_bucket_name, sb_prefix)
-    common_keys = [key for key in trip_schedules.keys() if key in releases]
+    common_keys = [key for key in trip_schedules if key in releases]
     for key in common_keys:
-        releases[key]['available_data'].append('trip_schedules')
-        releases[key]['trip_schedule_states'] = trip_schedules[key]
+        releases[key]["available_data"].append("trip_schedules")
+        releases[key]["trip_schedule_states"] = trip_schedules[key]
+
 
 def resolve_bldgid_sets(
     bucket_name: str = "oedi-data-lake",
