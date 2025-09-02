@@ -29,6 +29,9 @@ app = typer.Typer(
 # File configuration
 BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json"))
 
+# Unavailable file types that have not been implemented yet
+UNAVILABLE_FILE_TYPES = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly"]
+
 
 class InvalidProductError(Exception):
     """Exception raised when an invalid product is provided."""
@@ -468,20 +471,35 @@ def _print_data_processing_info(inputs: Mapping[str, Union[str, list[str]]]) -> 
     print(f"Output directory: {inputs['output_directory']}")
 
 
-def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> None:
+def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> list[str]:
     """Check and print warning for unavailable file types."""
 
-    # TODO: Add a check for trip_schedules file types. Make sure that the release_name + state combo is in the available trip_schedules_states list.
-    # If not, print a warning message for the unavailable release_name + state combo.
+    unavailable_files: list[str] = []
 
-    unavailable_file_types = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly"]
     selected_file_types = inputs["file_type"].split() if isinstance(inputs["file_type"], str) else inputs["file_type"]
-    selected_unavailable = [ft for ft in selected_file_types if ft in unavailable_file_types]
+    selected_unavailable = [ft for ft in selected_file_types if ft in UNAVILABLE_FILE_TYPES]
     if selected_unavailable:
         console.print("\n[yellow]The following file types are not available yet:[/yellow]")
         for file_type in selected_unavailable:
             console.print(f"  • {file_type}")
         console.print("")
+    unavailable_files = selected_unavailable.copy()
+
+    # TODO: Add a check for trip_schedules file types. Make sure that the release_name + state combo is in the available trip_schedules_states list.
+    # If not, print a warning message for the unavailable release_name + state combo.
+    if "trip_schedules" in selected_file_types:
+        product_short_name = "res" if inputs["product"] == "resstock" else "com"
+        input_release_name = (
+            f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
+        )
+        available_releases = _get_all_available_releases()
+        availble_trip_schedule_states = available_releases[input_release_name]["trip_schedule_states"]
+        for state in inputs["states"]:
+            if state not in availble_trip_schedule_states:
+                console.print(f"[yellow]The following state is not available for trip schedules: {state}[/yellow]")
+                unavailable_files.append(f"trip_schedules_{state}")
+
+    return unavailable_files
 
 
 def _fetch_all_building_ids(inputs: Mapping[str, Union[str, list[str]]]) -> list:
@@ -726,7 +744,6 @@ def main_callback(
             "output_directory": output_directory,
         }
         try:
-            # TODO: Add a category for grabbing EV related files
             validation_result = _validate_direct_inputs(direct_inputs)
             if validation_result is not True:
                 console.print(f"\n[red]{validation_result}[/red]")
