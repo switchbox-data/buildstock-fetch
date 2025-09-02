@@ -69,6 +69,7 @@ METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
 RELEASE_JSON_FILE = Path(str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")))
+LOAD_CURVE_COLUMN_AGGREGATION = Path(str(files("utils").joinpath("2024_resstock_load_curve_columns.csv")))
 
 
 @dataclass
@@ -508,6 +509,59 @@ def _download_with_progress(url: str, output_file: Path, progress: Progress, tas
     return downloaded_size
 
 
+def _aggregate_load_curve_monthly(load_curve: pl.DataFrame) -> pl.DataFrame:
+    """Aggregate the 15-minute load curve to monthly values based on aggregation rules."""
+    # Read the aggregation rules from CSV
+    aggregation_rules = pl.read_csv(LOAD_CURVE_COLUMN_AGGREGATION)
+
+    # Create a dictionary mapping column names to their aggregation functions
+    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
+
+    # Ensure timestamp column exists and convert to datetime if needed
+    if "timestamp" not in load_curve.columns:
+        msg = "DataFrame must contain a 'timestamp' column"
+        raise ValueError(msg)
+
+    # Convert timestamp to datetime if it's not already
+    load_curve = load_curve.with_columns(pl.col("timestamp").cast(pl.Datetime))
+
+    # Create monthly grouping key (year-month)
+    load_curve = load_curve.with_columns(pl.col("timestamp").dt.strftime("%Y-%m").alias("year_month"))
+
+    # Prepare aggregation expressions for each column
+    agg_exprs = []
+
+    for col in load_curve.columns:
+        if col in ["timestamp", "year_month"]:
+            continue
+
+        if col in column_aggregations:
+            agg_func = column_aggregations[col]
+            if agg_func == "sum":
+                agg_exprs.append(pl.col(col).sum().alias(col))
+            elif agg_func == "mean":
+                agg_exprs.append(pl.col(col).mean().alias(col))
+            elif agg_func == "first":
+                agg_exprs.append(pl.col(col).first().alias(col))
+            else:
+                # Default to mean for unknown aggregation functions
+                agg_exprs.append(pl.col(col).mean().alias(col))
+        else:
+            # Default to mean for columns not in the rules
+            agg_exprs.append(pl.col(col).mean().alias(col))
+
+    # Add timestamp aggregation (take the first timestamp of each month)
+    agg_exprs.append(pl.col("timestamp").first().alias("timestamp"))
+
+    # Perform the aggregation
+    monthly_data = load_curve.group_by("year_month").agg(agg_exprs)
+
+    # Sort by timestamp and drop the grouping column
+    monthly_data = monthly_data.sort("timestamp").drop("year_month")
+
+    return monthly_data
+
+
 def _download_and_process_monthly(url: str, output_file: Path, progress: Progress, task_id: TaskID) -> int:
     """Download monthly load curve to temporary file, process with Polars, and save result."""
     # Get file size first for progress tracking
@@ -535,10 +589,11 @@ def _download_and_process_monthly(url: str, output_file: Path, progress: Progres
                             progress.update(task_id, completed=downloaded_size)
 
             # Process with Polars
-            df = pl.read_parquet(temp_path)
+            load_curve_15min = pl.read_parquet(temp_path)
+            load_curve_monthly = _aggregate_load_curve_monthly(load_curve_15min)
 
             # Save processed file to final destination
-            df.write_parquet(output_file)
+            load_curve_monthly.write_parquet(output_file)
 
             return downloaded_size
 
@@ -776,8 +831,11 @@ def download_monthly_load_curve_with_progress(
                 temp_path.write_bytes(response.content)
 
                 # Process with Polars
-                df = pl.read_parquet(temp_path)
-                df.write_parquet(output_file)
+                load_curve_15min = pl.read_parquet(temp_path)
+                load_curve_monthly = _aggregate_load_curve_monthly(load_curve_15min)
+
+                # Save processed file to final destination
+                load_curve_monthly.write_parquet(output_file)
             finally:
                 if temp_path.exists():
                     temp_path.unlink()
