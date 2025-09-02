@@ -559,7 +559,6 @@ def _aggregate_load_curve_monthly(load_curve: pl.DataFrame) -> pl.DataFrame:
     # Sort by timestamp and drop the grouping column
     monthly_data = monthly_data.sort("timestamp").drop("year_month")
 
-    print(monthly_data)
     return monthly_data
 
 
