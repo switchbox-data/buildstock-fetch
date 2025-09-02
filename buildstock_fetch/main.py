@@ -810,7 +810,7 @@ def download_monthly_load_curve_with_progress(
     output_file = (
         output_dir
         / bldg_id.get_release_name()
-        / "load_curve_15min"
+        / "load_curve_monthly"
         / bldg_id.state
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
@@ -1059,23 +1059,23 @@ def _download_monthly_load_curves_parallel(
                 output_file = (
                     output_dir
                     / bldg_id.get_release_name()
-                    / "load_curve_15min"
+                    / "load_curve_monthly"
                     / bldg_id.state
-                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
                 )
                 failed_downloads.append(str(output_file))
-                console.print(f"[red]15 min load curve not available for {bldg_id.get_release_name()}[/red]")
+                console.print(f"[red]Monthly load curve not available for {bldg_id.get_release_name()}[/red]")
                 raise
             except Exception as e:
                 output_file = (
                     output_dir
                     / bldg_id.get_release_name()
-                    / "load_curve_15min"
+                    / "load_curve_monthly"
                     / bldg_id.state
-                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
                 )
                 failed_downloads.append(str(output_file))
-                console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
+                console.print(f"[red]Download failed for monthly load curve {bldg_id.bldg_id}: {e}[/red]")
     pass
 
 
