@@ -627,3 +627,41 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert Path(
         f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
+
+
+def test_fetch_monthly_load_curve(cleanup_downloads):
+    # 2024 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=173038,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+        BuildingID(
+            bldg_id=119411,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+    ]
+    file_type = ("load_curve_annual",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_monthly/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_monthly/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+    ).exists()
