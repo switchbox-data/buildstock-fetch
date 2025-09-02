@@ -74,6 +74,7 @@ class RequestedFileTypes:
     load_curve_daily: bool = False
     load_curve_monthly: bool = False
     load_curve_annual: bool = False
+    trip_schedules: bool = False
 
 
 @dataclass
@@ -711,8 +712,9 @@ def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes
         file_type_obj.load_curve_monthly = True
     if "load_curve_annual" in file_type:
         file_type_obj.load_curve_annual = True
+    if "trip_schedules" in file_type:
+        file_type_obj.trip_schedules = True
 
-    # TODO: add EV related files
     return file_type_obj
 
 
