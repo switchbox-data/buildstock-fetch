@@ -655,6 +655,7 @@ def test_fetch_monthly_load_curve(cleanup_downloads):
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
     assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
