@@ -433,7 +433,7 @@ def _print_data_processing_info(inputs: Mapping[str, Union[str, list[str]]]) -> 
 
 def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> None:
     """Check and print warning for unavailable file types."""
-    unavailable_file_types = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly"]
+    unavailable_file_types = ["load_curve_hourly", "load_curve_daily"]
     selected_file_types = inputs["file_type"].split() if isinstance(inputs["file_type"], str) else inputs["file_type"]
     selected_unavailable = [ft for ft in selected_file_types if ft in unavailable_file_types]
     if selected_unavailable:

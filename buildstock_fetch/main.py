@@ -869,6 +869,19 @@ def _download_15min_load_curves_parallel(
                 console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
+def _download_monthly_load_curves_parallel(
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    max_workers: int,
+    progress: Progress,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+) -> None:
+    """Download monthly load curves in parallel with progress tracking."""
+    pass
+
+
 def _download_metadata_single(
     bldg_ids: list[BuildingID],
     output_dir: Path,
@@ -1027,6 +1040,8 @@ def fetch_bldg_data(
         total_files += 1  # Add metadata file
     if file_type_obj.load_curve_15min:
         total_files += len(bldg_ids)  # Add 15-minute load curve files
+    if file_type_obj.load_curve_monthly:
+        total_files += len(bldg_ids)  # Add 15-minute load curve files
     if file_type_obj.load_curve_annual:
         total_files += len(bldg_ids)  # Add annual load curve files
 
@@ -1059,6 +1074,11 @@ def fetch_bldg_data(
         # Get 15 min load profile timeseries if requested.
         if file_type_obj.load_curve_15min:
             _download_15min_load_curves_parallel(
+                bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+            )
+
+        if file_type_obj.load_curve_monthly:
+            _download_monthly_load_curves_parallel(
                 bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
             )
 
