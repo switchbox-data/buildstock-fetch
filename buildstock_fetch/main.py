@@ -5,7 +5,8 @@ from dataclasses import asdict, dataclass
 from importlib.resources import files
 from pathlib import Path
 from typing import Optional, Union
-
+import boto3
+from botocore import UNSIGNED
 import polars as pl
 import requests
 from rich.console import Console
@@ -996,6 +997,81 @@ def _download_annual_load_curves_parallel(
                 console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
+# bucket: str, release: str, state: str, output_dir: Path):
+def _download_trip_schedules_data(bldg_ids: list[BuildingID], output_dir: Path, bucket: str = "buildstock-fetch",
+                              prefix: str = "ev_demand/trip_schedules/"):
+    """
+    Download and filter trip schedules data for specific building IDs.
+    
+    Args:
+        bldg_ids: List of BuildingID objects to filter for.
+        output_dir: Directory to save the downloaded files.
+        bucket: Name of the S3 bucket.
+        prefix: S3 prefix for the trip schedules data.
+        
+    Returns:
+        Path to the filtered trip schedules file.
+        
+    Raises:
+        NoBuildingDataError: If no buildings from bldg_ids are found in the data.
+    """
+    release = bldg_ids[0].get_release_name()
+    state = bldg_ids[0].state
+
+    s3 = boto3.client("s3", config=boto3.session.Config(signature_version=UNSIGNED))
+    s3_prefix = f"{prefix}release={release}/state={state}/"
+
+    # List all parquet files in the prefix
+    paginator = s3.get_paginator("list_objects_v2")
+    parquet_files = []
+
+    for page in paginator.paginate(Bucket=bucket, Prefix=s3_prefix):
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith(".parquet"):
+                parquet_files.append(obj["Key"])
+
+    if not parquet_files:
+        raise NoBuildingDataError(
+            f"No trip schedules data found for {release} in {state}")
+
+    # Download and read all parquet files
+    all_dataframes = []
+    for s3_key in parquet_files:
+        # Download to temp location
+        temp_file = output_dir / f"temp_{s3_key.split('/')[-1]}"
+        s3.download_file(bucket, s3_key, str(temp_file))
+
+        # Read and add to list
+        df = pl.read_parquet(str(temp_file))
+        all_dataframes.append(df)
+
+        # Clean up temp file
+        temp_file.unlink()
+
+    # Combine all dataframes
+    combined_df = pl.concat(all_dataframes)
+
+    # Filter for our building IDs
+    bldg_id_list = [bldg.bldg_id for bldg in bldg_ids]
+    filtered_df = combined_df.filter(pl.col("bldg_id").is_in(bldg_id_list))
+
+    if filtered_df.height == 0:
+        raise NoBuildingDataError(
+            f"No trip schedules data found for buildings {bldg_id_list} in {release} {state}")
+
+    # Save filtered data
+    output_file = (
+        output_dir
+        / release
+        / "trip_schedules"
+        / state
+        / "trip_schedules.parquet"
+    )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    filtered_df.write_parquet(str(output_file))
+
+    return output_file
+
 def _print_download_summary(downloaded_paths: list[Path], failed_downloads: list[str], console: Console) -> None:
     """Print a summary of the download results."""
     console.print("\n[bold green]Download complete![/bold green]")
@@ -1076,6 +1152,8 @@ def fetch_bldg_data(
         # TODO: Write a function for downloading EV related files from SB's s3 bucket.
         # It should dynamically build the download url based on the release_name + state combo.
         # Make sure to follow the directory structure for downloading the files.
+        if file_type_obj.trip_schedules:
+            _download_trip_schedules_data(bldg_ids, output_dir)
 
     _print_download_summary(downloaded_paths, failed_downloads, console)
 
