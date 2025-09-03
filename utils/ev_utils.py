@@ -197,9 +197,6 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
     metadata_df = (
         pl.scan_parquet(metadata_path)
         .filter(pl.col("in.state") == state)
-        .with_columns([
-            pl.col("bldg_id").cast(str).str.zfill(5)  # Ensure 5-digit string with leading zeros
-        ])
         # Select and rename columns
         .select([
             pl.col("bldg_id"),

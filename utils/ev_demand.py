@@ -51,7 +51,7 @@ class NHTSDataError(Exception):
 class InsufficientVehiclesError(Exception):
     """Raised when there are not enough matching vehicles in NHTS data."""
 
-    def __init__(self, bldg_id: str, vehicle_id: int, count: int):
+    def __init__(self, bldg_id: int, vehicle_id: int, count: int):
         self.message = f"Building {bldg_id}, vehicle {vehicle_id}: {count} matching vehicles"
         super().__init__(self.message)
 
@@ -91,7 +91,7 @@ class EVDemandConfig:
 class VehicleProfile:
     """Represents a vehicle's driving profile parameters."""
 
-    bldg_id: str
+    bldg_id: int
     vehicle_id: int
     weekday_departure_hour: list[int] = field(default_factory=list)  # List of departure hours for each weekday trip
     weekday_arrival_hour: list[int] = field(default_factory=list)  # List of arrival hours for each weekday trip
@@ -109,7 +109,7 @@ class VehicleProfile:
 class TripSchedule:
     """Represents a daily trip schedule for a vehicle."""
 
-    bldg_id: str  # Changed from int to str to match VehicleProfile
+    bldg_id: int  # Changed from int to str to match VehicleProfile
     vehicle_id: int
     date: datetime
     departure_hour: int
