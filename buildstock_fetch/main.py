@@ -69,7 +69,14 @@ METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
 RELEASE_JSON_FILE = Path(str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")))
-LOAD_CURVE_COLUMN_AGGREGATION = Path(__file__).parent.parent / "utils" / "2024_resstock_load_curve_columns.csv"
+LOAD_CURVE_COLUMN_AGGREGATION = Path(
+    str(
+        files("buildstock_fetch")
+        .joinpath("data")
+        .joinpath("load_curve_column_map")
+        .joinpath("2024_resstock_load_curve_columns.csv")
+    )
+)
 
 
 @dataclass
