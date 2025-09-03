@@ -1,10 +1,13 @@
 import concurrent.futures
+import json
 import os
 import tempfile
 import threading
 import time
 import zipfile
 from collections import defaultdict
+from importlib.resources import files
+from pathlib import Path
 
 import polars as pl
 import questionary
@@ -15,7 +18,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
-from buildstock_fetch.main import BuildingID, fetch_bldg_ids
+from buildstock_fetch.main import BuildingID, InvalidReleaseNameError, fetch_bldg_ids
 from buildstock_fetch.main_cli import (
     _get_available_releases_names,
     _get_state_options,
@@ -63,6 +66,9 @@ class InvalidProductError(ValueError):
     """Raised when an invalid product is provided."""
 
     pass
+
+
+RELEASE_JSON_FILE = Path(str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")))
 
 
 class ProfilingData:
@@ -723,6 +729,35 @@ def _remove_duplicates(weather_map_df: pl.DataFrame) -> pl.DataFrame:
     return weather_map_df
 
 
+def _modify_buildstock_releases_json(release_name: str, state: str) -> dict:
+    """Modify the buildstock releases JSON file to update the weather station mapping availability."""
+    with open(RELEASE_JSON_FILE, encoding="utf-8") as f:
+        buildstock_releases_json = json.load(f)
+
+    # Check if the release exists
+    if release_name not in buildstock_releases_json:
+        print(f"Warning: Release '{release_name}' not found in buildstock_releases.json")
+        raise InvalidReleaseNameError()
+
+    # Check if weather_map_available_states key exists, create it if it doesn't
+    if "weather_map_available_states" not in buildstock_releases_json[release_name]:
+        buildstock_releases_json[release_name]["weather_map_available_states"] = []
+        print(f"Created 'weather_map_available_states' key for release '{release_name}'")
+
+    # Add the state if it's not already in the list
+    if state not in buildstock_releases_json[release_name]["weather_map_available_states"]:
+        buildstock_releases_json[release_name]["weather_map_available_states"].append(state)
+        print(f"Added state '{state}' to weather_map_available_states for release '{release_name}'")
+    else:
+        print(f"State '{state}' already exists in weather_map_available_states for release '{release_name}'")
+
+    # Write the updated JSON back to the file
+    with open(RELEASE_JSON_FILE, "w", encoding="utf-8") as f:
+        json.dump(buildstock_releases_json, f, indent=4)
+
+    return buildstock_releases_json
+
+
 def _interactive_mode():
     console.print(Panel("Weather Station Mapping Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
     console.print("Please select the release information and file type you would like to fetch:")
@@ -779,6 +814,9 @@ def _interactive_mode():
     print(f"Time taken: {elapsed_time:.2f} seconds")
     print(f"Successfully saved partitioned weather station mapping to {output_path}")
     print(f"\nDataFrame shape: {clean_weather_map_df.shape}")
+
+    # TODO: Modify buildstock_releases.json to update weather station mapping availability
+    _modify_buildstock_releases_json(selected_release_name, selected_states)
 
 
 def find_weather_station_name(data, path=""):
@@ -844,3 +882,13 @@ if __name__ == "__main__":
     print(f"Time taken: {elapsed_time:.2f} seconds")
     print(f"Successfully saved partitioned weather station mapping to {output_path}")
     print(f"\nDataFrame shape: {weather_map_df_cleaned.shape}")
+
+    # Modify buildstock releases JSON to update weather station mapping
+    if product == "resstock":
+        product_shorthand = "res"
+    elif product == "comstock":
+        product_shorthand = "com"
+    else:
+        raise InvalidProductError()
+    release_name = f"{product_shorthand}_{release_year}_{weather_file}_{release_version}"
+    _modify_buildstock_releases_json(release_name, state)

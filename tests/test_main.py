@@ -12,6 +12,7 @@ from buildstock_fetch.main import (
     NoAnnualLoadCurveError,
     NoBuildingDataError,
     NoMetadataError,
+    NoWeatherFileError,
     RequestedFileTypes,
     _parse_requested_file_type,
     download_bldg_data,
@@ -627,3 +628,70 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert Path(
         f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
+
+
+def test_fetch_weather_station_name(cleanup_downloads):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=69, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=132, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=161, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+    ]
+
+    expected_weather_station_names = [
+        "G3600130",
+        "G3600810",
+        "G3600810",
+        "G3600710",
+    ]
+
+    for i, bldg_id in enumerate(bldg_ids):
+        weather_station_name = bldg_id.get_weather_station_name()
+        assert weather_station_name == expected_weather_station_names[i]
+
+
+def test_fetch_weather_file(cleanup_downloads):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=69, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=132, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=161, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+    ]
+
+    file_type = ("weather",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == len(bldg_ids)
+    assert len(failed_downloads) == 0
+    for bldg_id in bldg_ids:
+        assert Path(
+            f"data/{bldg_id.get_release_name()}/weather/{bldg_id.state}/{bldg_id.get_weather_station_name()}.csv"
+        ).exists()
+
+    # Invalid weather file test
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2024", res_com="comstock", weather="tmy3", upgrade_id="0", release_number="2"
+        ),
+    ]
+    file_type = ("weather",)
+    output_dir = Path("data")
+    with pytest.raises(NoWeatherFileError):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
