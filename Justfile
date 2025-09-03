@@ -86,8 +86,8 @@ download-pums:
     echo "✅ PUMS data downloaded successfully"
 
 # Save locally (default)
-# just ev-demand NY res_2022_tmy3_1.1 2018-01-01 2018-01-02
+# just ev-demand NY res_2024_tmy3_2 2018-01-01 2018-01-02
 # Upload to S3 (requires --upload-s3 flag)
-# just ev-demand NY res_2022_tmy3_1.1 2018-01-01 2018-01-02 --upload-s3
+# just ev-demand NY res_2024_tmy3_2 2018-01-01 2018-01-02 --upload-s3
 ev-demand state release start_date end_date *args="":
     uv run python utils/ev_demand.py --state {{state}} --release {{release}} --start-date {{start_date}} --end-date {{end_date}} {{args}}

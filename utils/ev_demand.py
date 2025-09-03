@@ -753,6 +753,45 @@ def parse_date(date_str: str) -> datetime:
         raise InvalidDateFormatError(date_str) from e
 
 
+def upload_batch_to_s3(batch_trip_schedules, config, file_name, batch_number):
+    """Upload a single batch of trip schedules to S3 with partitioning."""
+    import io
+    
+    if len(batch_trip_schedules) == 0:
+        return True
+    
+    # Add metadata columns
+    batch_with_metadata = batch_trip_schedules.with_columns([
+        pl.lit(config.release).alias("release"),
+        pl.lit(config.state).alias("state"),
+    ])
+    
+    # Partition the batch
+    partitions = batch_with_metadata.partition_by(["release", "state"])
+    
+    upload_success = True
+    for partition in partitions:
+        # Get partition values for file naming
+        release_val = partition["release"][0] if len(partition["release"]) > 0 else "unknown"
+        state_val = partition["state"][0] if len(partition["state"]) > 0 else "unknown"
+        
+        # Create partitioned file name with batch number
+        partition_file_name = f"{file_name}/release={release_val}/state={state_val}/batch_{batch_number:03d}.parquet"
+        
+        # Write partition to memory buffer
+        buffer = io.BytesIO()
+        partition.write_parquet(buffer)
+        file_content = buffer.getvalue()
+        
+        # Upload partition to S3
+        partition_upload_success = ev_utils.upload_object_to_s3(file_content, partition_file_name)
+        if not partition_upload_success:
+            print(f"Error: S3 upload failed for partition release={release_val}, state={state_val}, batch={batch_number}")
+            upload_success = False
+            break
+    
+    return upload_success
+
 def main():
     """Main function to run EV demand calculation with command-line arguments."""
     args = parse_arguments()
@@ -779,12 +818,14 @@ def main():
     batch_size = 20000
     total_rows = len(metadata_df)
     all_trip_schedules = []
+    file_name = "trip_schedules"
 
     for i in range(0, total_rows, batch_size):
         batch_end = min(i + batch_size, total_rows)
         batch_metadata = metadata_df[i:batch_end]
+        batch_number = i // batch_size + 1
 
-        print(f"Processing batch {i // batch_size + 1}: rows {i + 1} to {batch_end} ({len(batch_metadata)} rows)")
+        print(f"Processing batch {batch_number}: rows {i + 1} to {batch_end} ({len(batch_metadata)} rows)")
 
         calculator = EVDemandCalculator(
             metadata_df=batch_metadata,
@@ -796,72 +837,50 @@ def main():
         )
 
         batch_trip_schedules = calculator.generate_trip_schedules()
-        all_trip_schedules.append(batch_trip_schedules)
-
-        print(f"Completed batch {i // batch_size + 1}: generated {len(batch_trip_schedules)} trip schedules")
-
-    # Combine all batches
-    print("Combining all batches...")
-    if all_trip_schedules:
-        combined_trip_schedules = pl.concat(all_trip_schedules)
-        logging.info(f"Combined all batches: {len(combined_trip_schedules)} total trip schedules")
-
-        # Add metadata and sort in one chain
-        final_trip_schedules = combined_trip_schedules.with_columns([
-            pl.lit(config.release).alias("release"),
-            pl.lit(config.state).alias("state"),
-        ]).sort(["bldg_id", "vehicle_id", "date"])
-
-        file_name = (
-            "trip_schedules"  # f"{config.state}_{config.release}_{start_date.year}_annual_trip_schedules.parquet"
-        )
-
-        # Partition the DataFrame by release and state (done once, used by both paths)
-        partitions = final_trip_schedules.partition_by(["release", "state"])
+        
+        print(f"Completed batch {batch_number}: generated {len(batch_trip_schedules)} trip schedules")
 
         if args.upload_s3:
-            # Upload directly to S3 with partitioning
-            import io
-
-            upload_success = True
-            for partition in partitions:
-                # Get partition values for file naming
-                release_val = partition["release"][0] if len(partition["release"]) > 0 else "unknown"
-                state_val = partition["state"][0] if len(partition["state"]) > 0 else "unknown"
-
-                # Create partitioned file name
-                partition_file_name = f"{file_name}/release={release_val}/state={state_val}/data.parquet"
-
-                # Write partition to memory buffer
-                buffer = io.BytesIO()
-                partition.write_parquet(buffer)
-                file_content = buffer.getvalue()
-
-                # Upload partition to S3
-                partition_upload_success = ev_utils.upload_object_to_s3(file_content, partition_file_name)
-                if not partition_upload_success:
-                    print(f"Error: S3 upload failed for partition release={release_val}, state={state_val}")
-                    upload_success = False
-                    break
-
+            # Upload batch directly to S3
+            print(f"Uploading batch {batch_number} to S3...")
+            upload_success = upload_batch_to_s3(batch_trip_schedules, config, file_name, batch_number)
+            
             if not upload_success:
-                print("Error: S3 upload failed")
+                print(f"Error: S3 upload failed for batch {batch_number}")
                 return 1
-            else:
-                print(f"Results uploaded to S3 with partitioning: {file_name}/")
-                logging.info(f"Uploaded results to S3 with partitioning: {file_name}/")
+            
+            print(f"Successfully uploaded batch {batch_number} to S3")
+            # Clear batch data to free memory
+            del batch_trip_schedules
         else:
+            # Keep batch for local saving
+            all_trip_schedules.append(batch_trip_schedules)
+
+    if args.upload_s3:
+        print(f"All batches uploaded to S3 with partitioning: {file_name}/")
+        logging.info(f"Uploaded all batches to S3 with partitioning: {file_name}/")
+    else:
+        # Combine all batches for local saving
+        print("Combining all batches...")
+        if all_trip_schedules:
+            combined_trip_schedules = pl.concat(all_trip_schedules)
+            logging.info(f"Combined all batches: {len(combined_trip_schedules)} total trip schedules")
+
+            # Add metadata and sort in one chain
+            final_trip_schedules = combined_trip_schedules.with_columns([
+                pl.lit(config.release).alias("release"),
+                pl.lit(config.state).alias("state"),
+            ]).sort(["bldg_id", "vehicle_id", "date"])
+
             # Save locally (default behavior)
             os.makedirs(config.output_dir, exist_ok=True)
-
             local_file_path = f"{config.output_dir}/{file_name}"
             final_trip_schedules.write_parquet(local_file_path, partition_by=["release", "state"])
 
             print(f"Results written to: {local_file_path}")
             logging.info(f"Written results to {local_file_path}")
-
-    else:
-        logging.warning("No trip schedules generated")
+        else:
+            logging.warning("No trip schedules generated")
 
     return 0
 

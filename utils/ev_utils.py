@@ -457,7 +457,7 @@ def miles_to_kwh(self, daily_miles: float, avg_temp: float) -> float:
 def upload_object_to_s3(file_content: bytes, file_name: str) -> bool:
     """Upload file content directly to S3 bucket from memory."""
     bucket_name = "buildstock-fetch"
-    s3_key = f"ev_demand/trip_schedules/{file_name}"
+    s3_key = f"ev_demand/{file_name}"
 
     try:
         s3_client = boto3.client("s3")
