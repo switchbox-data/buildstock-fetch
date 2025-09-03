@@ -65,6 +65,12 @@ class NoMonthlyLoadCurveError(ValueError):
     pass
 
 
+class UnknownAggregationFunctionError(ValueError):
+    """Raised when an unknown aggregation function is provided."""
+
+    pass
+
+
 METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
@@ -551,11 +557,9 @@ def _aggregate_load_curve_monthly(load_curve: pl.DataFrame) -> pl.DataFrame:
             elif agg_func == "first":
                 agg_exprs.append(pl.col(col).first().alias(col))
             else:
-                # Default to mean for unknown aggregation functions
-                agg_exprs.append(pl.col(col).mean().alias(col))
+                raise UnknownAggregationFunctionError()
         else:
-            # Default to mean for columns not in the rules
-            agg_exprs.append(pl.col(col).mean().alias(col))
+            raise UnknownAggregationFunctionError()
 
     # Add timestamp aggregation (take the first timestamp of each month)
     agg_exprs.append(pl.col("timestamp").first().alias("timestamp"))
