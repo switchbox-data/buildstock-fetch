@@ -674,4 +674,6 @@ if __name__ == "__main__":
         end_date=datetime(2022, 1, 7),
     )
 
+    # TODO: Add a step to update the buildstock_releases.json file. There will be a function in resolve_bldgid_sets.py that will do this.
+
     trip_schedules = calculator.generate_trip_schedules()

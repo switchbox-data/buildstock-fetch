@@ -29,6 +29,9 @@ app = typer.Typer(
 # File configuration
 BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json"))
 
+# Unavailable file types that have not been implemented yet
+UNAVILABLE_FILE_TYPES = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly"]
+
 
 class InvalidProductError(Exception):
     """Exception raised when an invalid product is provided."""
@@ -208,9 +211,25 @@ def _get_file_type_options(release_name: str) -> list[str]:
     return cast(list[str], available_releases[release_name]["available_data"])
 
 
-def _get_file_type_options_grouped(release_name: str) -> list[dict]:
+def _get_file_type_options_grouped(release_name: str, selected_states: list[str]) -> list[dict]:
     """Get file type options grouped by category for questionary checkbox."""
     file_types = _get_file_type_options(release_name)
+
+    # TODO: If a trip_schedule table was built for any of the states in this release, "trip_schedules" will be included
+    # in the file_types list above. However, the state that the user wants to download files for may not have the trip_schedule tables built for it yet.
+    # So, we need to check if the release_name + state combo is in the available trip_schedules_states list.
+    # If not, we need to remove "trip_schedules" from the file_types list, so it doesn't show up in the questionary checkbox.
+    # Remember that users can select multiple states, so as long as one release_name + state combo is in the available trip_schedules_states list,
+    # we should include "trip_schedules" in the file_types list. and then later on, we need to handle different states differently.
+
+    trip_schedule_availabile = False
+    available_releases = _get_all_available_releases()
+    for state in selected_states:
+        if (
+            "trip_schedules" in available_releases[release_name]["available_data"]
+            and state in available_releases[release_name]["trip_schedule_states"]
+        ):
+            trip_schedule_availabile = True
 
     # Define categories
     categories = {
@@ -223,18 +242,36 @@ def _get_file_type_options_grouped(release_name: str) -> list[dict]:
             "load_curve_annual",
         ],
         "Metadata": ["metadata"],
+        "EV": ["trip_schedules"],
     }
 
-    choices = []
+    choices: list[dict] = []
     for category, types in categories.items():
-        # Filter available types but maintain the defined order
-        available_in_category = [ft for ft in types if ft in file_types]
-        if available_in_category:
-            choices.append({"name": f"--- {category} ---", "value": None, "disabled": True})
-            for file_type in available_in_category:
-                choices.append({"name": f"  {file_type}", "value": file_type, "style": "bold"})
+        if category == "EV":
+            _add_ev_category_choices(choices, category, types, trip_schedule_availabile)
+        else:
+            _add_standard_category_choices(choices, category, types, file_types)
 
     return choices
+
+
+def _add_ev_category_choices(
+    choices: list[dict], category: str, types: list[str], trip_schedule_available: bool
+) -> None:
+    """Add EV category choices to the choices list."""
+    for file_type in types:
+        if file_type == "trip_schedules" and trip_schedule_available:
+            choices.append({"name": f"--- {category} ---", "value": None, "disabled": True})
+            choices.append({"name": f"  {file_type}", "value": file_type, "style": "bold"})
+
+
+def _add_standard_category_choices(choices: list[dict], category: str, types: list[str], file_types: list[str]) -> None:
+    """Add standard category choices to the choices list."""
+    available_in_category = [ft for ft in types if ft in file_types]
+    if available_in_category:
+        choices.append({"name": f"--- {category} ---", "value": None, "disabled": True})
+        for file_type in available_in_category:
+            choices.append({"name": f"  {file_type}", "value": file_type, "style": "bold"})
 
 
 def _get_available_releases_names() -> list[str]:
@@ -352,20 +389,23 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     )
 
     # Retrieve state
-    selected_states = _handle_cancellation(
-        questionary.checkbox(
-            "Select states:",
-            choices=_get_state_options(),
-            instruction="Use spacebar to select/deselect options, enter to confirm",
-            validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
-        ).ask()
+    selected_states: list[str] = cast(
+        list[str],
+        _handle_cancellation(
+            questionary.checkbox(
+                "Select states:",
+                choices=_get_state_options(),
+                instruction="Use spacebar to select/deselect options, enter to confirm",
+                validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
+            ).ask()
+        ),
     )
 
     # Retrieve requested file type
     requested_file_types = _handle_cancellation(
         questionary.checkbox(
             "Select file type:",
-            choices=_get_file_type_options_grouped(selected_release_name),
+            choices=_get_file_type_options_grouped(selected_release_name, selected_states),
             instruction="Use spacebar to select/deselect options, enter to confirm",
             validate=lambda answer: "You must select at least one file type" if len(answer) == 0 else True,
         ).ask()
@@ -431,16 +471,35 @@ def _print_data_processing_info(inputs: Mapping[str, Union[str, list[str]]]) -> 
     print(f"Output directory: {inputs['output_directory']}")
 
 
-def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> None:
+def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> list[str]:
     """Check and print warning for unavailable file types."""
-    unavailable_file_types = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly"]
+
+    unavailable_files: list[str] = []
+
     selected_file_types = inputs["file_type"].split() if isinstance(inputs["file_type"], str) else inputs["file_type"]
-    selected_unavailable = [ft for ft in selected_file_types if ft in unavailable_file_types]
+    selected_unavailable = [ft for ft in selected_file_types if ft in UNAVILABLE_FILE_TYPES]
     if selected_unavailable:
         console.print("\n[yellow]The following file types are not available yet:[/yellow]")
         for file_type in selected_unavailable:
             console.print(f"  • {file_type}")
         console.print("")
+    unavailable_files = selected_unavailable.copy()
+
+    # TODO: Add a check for trip_schedules file types. Make sure that the release_name + state combo is in the available trip_schedules_states list.
+    # If not, print a warning message for the unavailable release_name + state combo.
+    if "trip_schedules" in selected_file_types:
+        product_short_name = "res" if inputs["product"] == "resstock" else "com"
+        input_release_name = (
+            f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
+        )
+        available_releases = _get_all_available_releases()
+        availble_trip_schedule_states = available_releases[input_release_name]["trip_schedule_states"]
+        for state in inputs["states"]:
+            if state not in availble_trip_schedule_states:
+                console.print(f"[yellow]The following state is not available for trip schedules: {state}[/yellow]")
+                unavailable_files.append(f"trip_schedules_{state}")
+
+    return unavailable_files
 
 
 def _fetch_all_building_ids(inputs: Mapping[str, Union[str, list[str]]]) -> list:
@@ -571,6 +630,7 @@ def _validate_file_types(inputs: dict[str, Union[str, list[str]]], release_name:
     """Validate file types."""
     available_releases = _get_all_available_releases()
     for file_type in inputs["file_type"]:
+        # TODO: Validate EV related files
         if file_type not in available_releases[release_name]["available_data"]:
             return f"Invalid file type: {file_type}"
     return True
