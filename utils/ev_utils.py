@@ -3,12 +3,15 @@ Utility functions for EV demand calculations.
 
 This module contains:
 - Census division mapping functions
-- Data loading functions for metadata, NHTS, and weather data
+- Data loading functions for metadata, NHTS, and PUMS data
 """
 
+import logging
 from pathlib import Path
 from typing import Any
 
+import boto3
+import numpy as np
 import polars as pl
 
 __all__ = [
@@ -18,7 +21,6 @@ __all__ = [
     "load_metro_puma_map",
     "load_nhts_data",
     "load_pums_data",
-    "load_weather_data",
 ]
 
 
@@ -175,7 +177,7 @@ def assign_nhts_income_bucket(income: int) -> int:
     return 11  # Should never reach here due to inf threshold, but makes mypy happy
 
 
-def load_metadata(metadata_path: str) -> pl.DataFrame:
+def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
     """
     Load and parse the ResStock metadata parquet file.
 
@@ -191,13 +193,10 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
     if not Path(metadata_path).exists():
         msg = f"Metadata file not found: {metadata_path}"
         raise FileNotFoundError(msg)
-
     # Scan parquet file and ensure bldg_id is properly formatted with leading zeros
     metadata_df = (
         pl.scan_parquet(metadata_path)
-        .with_columns([
-            pl.col("bldg_id").cast(str).str.zfill(5)  # Ensure 5-digit string with leading zeros
-        ])
+        .filter(pl.col("in.state") == state)
         # Select and rename columns
         .select([
             pl.col("bldg_id"),
@@ -215,6 +214,7 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
             .cast(pl.Int64)
             .alias("occupants")
         ])
+        .filter(pl.col("occupants") > 0)
         # Process income categories - convert to standard ranges first
         .with_columns([
             pl.when(pl.col("income") == "<10000")
@@ -233,6 +233,11 @@ def load_metadata(metadata_path: str) -> pl.DataFrame:
         ])
         # Extract last 5 characters from PUMA
         .with_columns([pl.col("puma").str.slice(-5).alias("puma")])
+        .with_columns([
+            pl.col("occupants").cast(pl.UInt8),  # Instead of Int64
+            pl.col("income_bucket").cast(pl.UInt8),  # 1-11 fits in UInt8
+            pl.col("puma").cast(pl.Utf8),
+        ])
         .collect()
     )
 
@@ -339,25 +344,6 @@ def load_pums_data(pums_path: str, metadata_path: str) -> pl.DataFrame:
     return pums_df
 
 
-def load_weather_data(weather_path: str) -> pl.DataFrame:
-    """
-    Load hourly weather data (e.g., temperature) for a given location.
-
-    Args:
-        weather_path: Path to the weather data file (e.g., TMY3 CSV or EPW)
-
-    Returns:
-        DataFrame with at least columns ['datetime', 'temperature']
-    """
-    # if not Path(weather_path).exists():
-    #     msg = f"Weather file not found: {weather_path}"
-    #     raise FileNotFoundError(msg)
-
-    # TODO: Implement weather data loading
-    # This is a placeholder - replace with actual weather loading logic
-    return pl.DataFrame()  # Placeholder
-
-
 def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
     """
     Load the metro-puma mapping file. We need to assign the metro variable to the PUMS data based on a lookup of the puma code.
@@ -384,16 +370,105 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
     return metro_lookup_df
 
 
-def load_all_input_data(ev_demand_config: Any) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def load_all_input_data(ev_demand_config: Any) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """
     Load all input data for the EV demand calculator.
 
     Returns:
-        Tuple of (metadata_df, nhts_df, pums_df, weather_df)
+        Tuple of (metadata_df, nhts_df, pums_df)
     """
-    metadata_df = load_metadata(ev_demand_config.metadata_path)
+    metadata_df = load_metadata(ev_demand_config.metadata_path, ev_demand_config.state)
     nhts_df = load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state)
     pums_df = load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path)
-    weather_df = load_weather_data(ev_demand_config.weather_path)
 
-    return metadata_df, nhts_df, pums_df, weather_df
+    return metadata_df, nhts_df, pums_df
+
+
+def assign_battery_capacity(battery_capacities, daily_kwh: pl.Series) -> pl.Series:
+    """
+    Assign the minimum EV battery capacity that covers the max daily kWh plus a 20% buffer.
+
+    Args:
+        daily_kwh: Series of max daily kWh for each vehicle
+
+    Returns:
+        Series of assigned battery capacities (12, 40, 60, 90, 120 kWh)
+    """
+    # Calculate required capacity with 20% buffer
+    required_capacity = daily_kwh * 1.2
+
+    # Find the minimum battery capacity that meets the requirement
+    battery_capacities = pl.Series(battery_capacities)
+    assigned_capacities: list[int] = []
+
+    for required in required_capacity:
+        # Find the smallest battery that can handle the required capacity
+        suitable_batteries = battery_capacities.filter(battery_capacities >= required)
+        if len(suitable_batteries) > 0:
+            assigned_capacities.append(int(suitable_batteries[0]))
+        else:
+            # If no battery is large enough, assign the largest available
+            assigned_capacities.append(int(battery_capacities[-1]))
+
+    return pl.Series(assigned_capacities)
+
+
+def miles_to_kwh(self, daily_miles: float, avg_temp: float) -> float:
+    """
+    Calculate daily electricity consumption for electric vehicles based on
+    temperature and daily miles driven using the Yuksel and Michalek (2015) regression. @yuksel_EffectsRegionalTemperature_2015
+
+    Args:
+        daily_miles: Number of miles driven in a day
+        avg_temp: Average outdoor temperature during driving hours (in °F)
+
+    Returns:
+        Daily electricity consumption in kWh
+    """
+    # Convert inputs to numpy arrays for vectorized operations
+    temp = np.asarray(avg_temp)
+    miles = np.asarray(daily_miles)
+
+    # Apply temperature bounds as described in the paper
+    temp_bounded = np.clip(temp, -15, 110)
+
+    # Calculate energy consumption per mile using polynomial regression
+    # c(T) = a_0 + a_1*T + a_2*T^2 + a_3*T^3 + a_4*T^4 + a_5*T^5
+    # polyval expects coefficients in reverse order
+    efficiency_coefficients = np.array([
+        0.3950,  # a_0 (constant term)
+        -0.0022,  # a_1 (linear term)
+        9.1978e-5,  # a_2 (quadratic term)
+        -3.9249e-6,  # a_3 (cubic term)
+        5.2918e-8,  # a_4 (quartic term)
+        -2.0659e-10,  # a_5 (quintic term)
+    ])
+    consumption_per_mile = np.polyval(efficiency_coefficients[::-1], temp_bounded)
+
+    # Calculate total daily energy consumption
+    daily_consumption_kwh = consumption_per_mile * miles
+
+    # Return scalar if input was scalar
+    if np.isscalar(daily_miles) and np.isscalar(avg_temp):
+        return float(daily_consumption_kwh)
+    return float(daily_consumption_kwh)
+
+
+def upload_object_to_s3(file_content: bytes, file_name: str) -> bool:
+    """Upload file content directly to S3 bucket from memory."""
+    bucket_name = "buildstock-fetch"
+    s3_key = f"ev_demand/{file_name}"
+
+    try:
+        s3_client = boto3.client("s3")
+        print(f"Uploading {file_name} to s3://{bucket_name}/{s3_key}...")
+
+        # Upload directly from memory
+        s3_client.put_object(Bucket=bucket_name, Key=s3_key, Body=file_content)
+
+        logging.info(f"Successfully uploaded file to S3: s3://{bucket_name}/{s3_key}")
+    except Exception:
+        logging.exception("Failed to upload to S3")
+        return False
+    else:
+        return True
