@@ -608,7 +608,7 @@ def _aggregate_load_curve_aggregate(load_curve: pl.DataFrame, aggregate_time_ste
     aggregate_data = load_curve.group_by(grouping_key).agg(agg_exprs)
 
     # Sort by timestamp and drop the grouping column
-    aggregate_data = aggregate_data.sort("timestamp").drop("year_month", "year_month_day_hour", "year_month_day")
+    aggregate_data = aggregate_data.sort("timestamp").drop(grouping_key)
 
     return aggregate_data
 
