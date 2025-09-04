@@ -91,3 +91,13 @@ download-pums:
 # just ev-demand NY res_2024_tmy3_2 2018-01-01 2018-01-02 --upload-s3
 ev-demand state release start_date end_date *args="":
     uv run python utils/ev_demand.py --state {{state}} --release {{release}} --start-date {{start_date}} --end-date {{end_date}} {{args}}
+
+# =============================================================================
+# Utility functions
+# =============================================================================
+# These commands help you create internal mapping and metadata tables
+
+# Create bldg_id to weather station id map
+build-weather-station-map:
+    echo "🔧 Starting interactive weather station mapping tool"
+    uv run python -c "from utils.resolve_weather_station_id import _interactive_mode; _interactive_mode()"

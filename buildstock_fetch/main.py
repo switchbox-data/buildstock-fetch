@@ -1074,25 +1074,4 @@ def fetch_bldg_data(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    bldg_ids = [
-        BuildingID(
-            bldg_id=5634,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="1",
-            release_number="2",
-            state="AL",
-        ),
-        BuildingID(
-            bldg_id=78270,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="1",
-            release_number="2",
-            state="DE",
-        ),
-    ]
-    for bldg_id in bldg_ids:
-        print(bldg_id._get_county_name())
+    print(fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[:3])
