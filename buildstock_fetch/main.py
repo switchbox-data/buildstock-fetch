@@ -21,7 +21,7 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
-
+# from buildstock_fetch.main_cli import _get_all_available_releases
 
 class InvalidProductError(ValueError):
     """Raised when an invalid product is provided."""
@@ -997,80 +997,111 @@ def _download_annual_load_curves_parallel(
                 console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
-# bucket: str, release: str, state: str, output_dir: Path):
-def _download_trip_schedules_data(bldg_ids: list[BuildingID], output_dir: Path, bucket: str = "buildstock-fetch",
-                              prefix: str = "ev_demand/trip_schedules/"):
+
+def _download_trip_schedules_data(bldg_ids: list[BuildingID], output_dir: Path, downloaded_paths: list[Path], 
+                              bucket: str = "buildstock-fetch", prefix: str = "ev_demand/trip_schedules/"):
     """
     Download and filter trip schedules data for specific building IDs.
     
     Args:
         bldg_ids: List of BuildingID objects to filter for.
         output_dir: Directory to save the downloaded files.
+        downloaded_paths: List to append successful download paths to.
         bucket: Name of the S3 bucket.
         prefix: S3 prefix for the trip schedules data.
         
-    Returns:
-        Path to the filtered trip schedules file.
-        
     Raises:
-        NoBuildingDataError: If no buildings from bldg_ids are found in the data.
+        NoBuildingDataError: If no buildings from bldg_ids are found in any available state data.
     """
+    import warnings
+    
     release = bldg_ids[0].get_release_name()
-    state = bldg_ids[0].state
-
+    states_list = list(set([bldg.state for bldg in bldg_ids]))
+    
     s3 = boto3.client("s3", config=boto3.session.Config(signature_version=UNSIGNED))
-    s3_prefix = f"{prefix}release={release}/state={state}/"
-
-    # List all parquet files in the prefix
-    paginator = s3.get_paginator("list_objects_v2")
-    parquet_files = []
-
-    for page in paginator.paginate(Bucket=bucket, Prefix=s3_prefix):
-        for obj in page.get("Contents", []):
-            if obj["Key"].endswith(".parquet"):
-                parquet_files.append(obj["Key"])
-
-    if not parquet_files:
-        raise NoBuildingDataError(
-            f"No trip schedules data found for {release} in {state}")
-
-    # Download and read all parquet files
+    
     all_dataframes = []
-    for s3_key in parquet_files:
-        # Download to temp location
-        temp_file = output_dir / f"temp_{s3_key.split('/')[-1]}"
-        s3.download_file(bucket, s3_key, str(temp_file))
-
-        # Read and add to list
-        df = pl.read_parquet(str(temp_file))
-        all_dataframes.append(df)
-
-        # Clean up temp file
-        temp_file.unlink()
-
-    # Combine all dataframes
-    combined_df = pl.concat(all_dataframes)
-
-    # Filter for our building IDs
-    bldg_id_list = [bldg.bldg_id for bldg in bldg_ids]
-    filtered_df = combined_df.filter(pl.col("bldg_id").is_in(bldg_id_list))
-
-    if filtered_df.height == 0:
+    available_states = []
+    unavailable_states = []
+    
+    # Process each state
+    for state in states_list:
+        s3_prefix = f"{prefix}release={release}/state={state}/"
+        
+        # List all parquet files in the prefix
+        paginator = s3.get_paginator("list_objects_v2")
+        parquet_files = []
+        
+        for page in paginator.paginate(Bucket=bucket, Prefix=s3_prefix):
+            for obj in page.get("Contents", []):
+                if obj["Key"].endswith(".parquet"):
+                    parquet_files.append(obj["Key"])
+        
+        if not parquet_files:
+            unavailable_states.append(state)
+            continue
+            
+        available_states.append(state)
+        
+        # Download and read all parquet files for this state
+        state_dataframes = []
+        for s3_key in parquet_files:
+            # Download to temp location
+            temp_file = output_dir / f"temp_{s3_key.split('/')[-1]}"
+            s3.download_file(bucket, s3_key, str(temp_file))
+            
+            # Read and add to list
+            df = pl.read_parquet(str(temp_file))
+            state_dataframes.append(df)
+            
+            # Clean up temp file
+            temp_file.unlink()
+        
+        # Combine state dataframes and add to overall list
+        if state_dataframes:
+            state_combined_df = pl.concat(state_dataframes)
+            all_dataframes.append(state_combined_df)
+    
+    # Issue warnings for unavailable states
+    if unavailable_states:
+        warnings.warn(
+            f"No trip schedules data found for {release} in states: {', '.join(unavailable_states)}. "
+            f"Continuing with available states: {', '.join(available_states)}."
+        )
+    
+    if not all_dataframes:
         raise NoBuildingDataError(
-            f"No trip schedules data found for buildings {bldg_id_list} in {release} {state}")
-
-    # Save filtered data
-    output_file = (
-        output_dir
-        / release
-        / "trip_schedules"
-        / state
-        / "trip_schedules.parquet"
-    )
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    filtered_df.write_parquet(str(output_file))
-
-    return output_file
+            f"No trip schedules data found for {release} in any of the requested states: {', '.join(states_list)}")
+    
+    # Save filtered data for each available state separately
+    for i, state_df in enumerate(all_dataframes):
+        state = available_states[i]
+        
+        # Filter for our building IDs in this state
+        bldg_id_list = [bldg.bldg_id for bldg in bldg_ids if bldg.state == state]
+        if not bldg_id_list:
+            continue
+            
+        filtered_df = state_df.filter(pl.col("bldg_id").is_in(bldg_id_list))
+        
+        if filtered_df.height == 0:
+            continue
+        
+        # Save filtered data for this state
+        output_file = (
+            output_dir
+            / release
+            / "trip_schedules"
+            / state
+            / "trip_schedules.parquet"
+        )
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        filtered_df.write_parquet(str(output_file))
+        downloaded_paths.append(output_file)
+    
+    if not any(bldg.state in available_states for bldg in bldg_ids):
+        raise NoBuildingDataError(
+            f"No trip schedules data found for buildings {[bldg.bldg_id for bldg in bldg_ids]} in {release} for any available state")
 
 def _print_download_summary(downloaded_paths: list[Path], failed_downloads: list[str], console: Console) -> None:
     """Print a summary of the download results."""
@@ -1153,7 +1184,7 @@ def fetch_bldg_data(
         # It should dynamically build the download url based on the release_name + state combo.
         # Make sure to follow the directory structure for downloading the files.
         if file_type_obj.trip_schedules:
-            _download_trip_schedules_data(bldg_ids, output_dir)
+            _download_trip_schedules_data(bldg_ids, output_dir, downloaded_paths)
 
     _print_download_summary(downloaded_paths, failed_downloads, console)
 
