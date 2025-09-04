@@ -187,5 +187,6 @@ per_rule_ignores.DEP002 = [
     "pyarrow",
     "numpy",
     "scikit-learn",
+    "awscli",
     "xmltodict",
 ]
