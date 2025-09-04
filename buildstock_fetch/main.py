@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import tempfile
 import zipfile
 from dataclasses import asdict, dataclass
 from importlib.resources import files
@@ -58,10 +59,30 @@ class NoAnnualLoadCurveError(ValueError):
     pass
 
 
+class NoAggregateLoadCurveError(ValueError):
+    """Raised when no monthly load curve is available for a given release."""
+
+    pass
+
+
+class UnknownAggregationFunctionError(ValueError):
+    """Raised when an unknown aggregation function is provided."""
+
+    pass
+
+
 METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
 RELEASE_JSON_FILE = Path(str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")))
+LOAD_CURVE_COLUMN_AGGREGATION = Path(
+    str(
+        files("buildstock_fetch")
+        .joinpath("data")
+        .joinpath("load_curve_column_map")
+        .joinpath("2024_resstock_load_curve_columns.csv")
+    )
+)
 
 
 @dataclass
@@ -233,6 +254,10 @@ class BuildingID:
             )
         else:
             return ""
+
+    def get_aggregate_load_curve_url(self) -> str:
+        """Generate the S3 download URL for this building. The url is the same as the 15-minute load curve url."""
+        return self.get_15min_load_curve_url()
 
     def get_annual_load_curve_url(self) -> str:
         """Generate the S3 download URL for this building."""
@@ -497,6 +522,140 @@ def _download_with_progress(url: str, output_file: Path, progress: Progress, tas
     return downloaded_size
 
 
+def _get_time_step_grouping_key(aggregate_time_step: str) -> tuple[str, str]:
+    """Get the grouping key and format string for a given time step.
+
+    Args:
+        aggregate_time_step: The time step to aggregate to ("monthly", "hourly", "daily")
+
+    Returns:
+        A tuple of (grouping_key_name, format_string)
+    """
+    time_step_configs = {
+        "monthly": ("year_month", "%Y-%m"),
+        "hourly": ("year_month_day_hour", "%Y-%m-%d-%H"),
+        "daily": ("year_month_day", "%Y-%m-%d"),
+    }
+
+    if aggregate_time_step not in time_step_configs:
+        msg = f"Unknown aggregate time step: {aggregate_time_step}"
+        raise ValueError(msg)
+
+    return time_step_configs[aggregate_time_step]
+
+
+def _create_aggregation_expressions(load_curve: pl.DataFrame, column_aggregations: dict[str, str]) -> list[pl.Expr]:
+    """Create aggregation expressions for each column based on the aggregation rules.
+
+    Args:
+        load_curve: The DataFrame to create expressions for
+        column_aggregations: Dictionary mapping column names to aggregation functions
+
+    Returns:
+        List of Polars expressions for aggregation
+    """
+    agg_exprs = []
+
+    for col in load_curve.columns:
+        if col in ["timestamp", "year_month", "year_month_day_hour", "year_month_day"]:
+            continue
+
+        if col in column_aggregations:
+            agg_func = column_aggregations[col]
+            if agg_func == "sum":
+                agg_exprs.append(pl.col(col).sum().alias(col))
+            elif agg_func == "mean":
+                agg_exprs.append(pl.col(col).mean().alias(col))
+            elif agg_func == "first":
+                agg_exprs.append(pl.col(col).first().alias(col))
+            else:
+                raise UnknownAggregationFunctionError()
+        else:
+            raise UnknownAggregationFunctionError()
+
+    # Add timestamp aggregation (take the first timestamp of each group)
+    agg_exprs.append(pl.col("timestamp").first().alias("timestamp"))
+
+    return agg_exprs
+
+
+def _aggregate_load_curve_aggregate(load_curve: pl.DataFrame, aggregate_time_step: str) -> pl.DataFrame:
+    """Aggregate the 15-minute load curve to specified time step based on aggregation rules."""
+    # Read the aggregation rules from CSV
+    aggregation_rules = pl.read_csv(LOAD_CURVE_COLUMN_AGGREGATION)
+
+    # Create a dictionary mapping column names to their aggregation functions
+    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
+
+    # Ensure timestamp column exists and convert to datetime if needed
+    if "timestamp" not in load_curve.columns:
+        msg = "DataFrame must contain a 'timestamp' column"
+        raise ValueError(msg)
+
+    # Convert timestamp to datetime if it's not already
+    load_curve = load_curve.with_columns(pl.col("timestamp").cast(pl.Datetime))
+
+    # Get the grouping key configuration
+    grouping_key, format_string = _get_time_step_grouping_key(aggregate_time_step)
+
+    # Create grouping key
+    load_curve = load_curve.with_columns(pl.col("timestamp").dt.strftime(format_string).alias(grouping_key))
+
+    # Create aggregation expressions
+    agg_exprs = _create_aggregation_expressions(load_curve, column_aggregations)
+
+    # Perform the aggregation
+    aggregate_data = load_curve.group_by(grouping_key).agg(agg_exprs)
+
+    # Sort by timestamp and drop the grouping column
+    aggregate_data = aggregate_data.sort("timestamp").drop(grouping_key)
+
+    return aggregate_data
+
+
+def _download_and_process_aggregate(
+    url: str, output_file: Path, progress: Progress, task_id: TaskID, aggregate_time_step: str
+) -> int:
+    """Download aggregate time step load curve to temporary file, process with Polars, and save result."""
+    # Get file size first for progress tracking
+    response = requests.head(url, timeout=30)
+    response.raise_for_status()
+    total_size = int(response.headers.get("content-length", 0))
+    progress.update(task_id, total=total_size)
+
+    # Download to temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+        temp_path = Path(temp_file.name)
+
+        try:
+            # Download with streaming to temp file
+            response = requests.get(url, stream=True, timeout=30)
+            response.raise_for_status()
+
+            downloaded_size = 0
+            with open(temp_path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        file.write(chunk)
+                        downloaded_size += len(chunk)
+                        if total_size > 0:
+                            progress.update(task_id, completed=downloaded_size)
+
+            # Process with Polars
+            load_curve_15min = pl.read_parquet(temp_path)
+            load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step)
+
+            # Save processed file to final destination
+            load_curve_aggregate.write_parquet(output_file)
+
+            return downloaded_size
+
+        finally:
+            # Clean up temporary file
+            if temp_path.exists():
+                temp_path.unlink()
+
+
 def download_bldg_data(
     bldg_id: BuildingID,
     file_type: RequestedFileTypes,
@@ -692,6 +851,62 @@ def download_15min_load_curve_with_progress(
     return output_file
 
 
+def download_aggregate_time_step_load_curve_with_progress(
+    bldg_id: BuildingID, output_dir: Path, progress: Progress, task_id: TaskID, aggregate_time_step: str
+) -> Path:
+    """Download the aggregate time step load profile timeseries for a given building with progress tracking."""
+
+    download_url = bldg_id.get_aggregate_load_curve_url()
+    if download_url == "":
+        message = f"Aggregate load profile timeseries is not available for {bldg_id.get_release_name()}"
+        raise NoAggregateLoadCurveError(message)
+
+    if aggregate_time_step == "monthly":
+        load_curve_dir = "load_curve_monthly"
+    elif aggregate_time_step == "hourly":
+        load_curve_dir = "load_curve_hourly"
+    elif aggregate_time_step == "daily":
+        load_curve_dir = "load_curve_daily"
+    else:
+        message = f"Unknown aggregate time step: {aggregate_time_step}"
+        raise ValueError(message)
+
+    output_file = (
+        output_dir
+        / bldg_id.get_release_name()
+        / load_curve_dir
+        / bldg_id.state
+        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_{aggregate_time_step}.parquet"
+    )
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Download with progress tracking if progress object is provided
+    if progress and task_id is not None:
+        _download_and_process_aggregate(download_url, output_file, progress, task_id, aggregate_time_step)
+    else:
+        # For non-progress downloads, still use temp file approach for consistency
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+            temp_path = Path(temp_file.name)
+            try:
+                response = requests.get(download_url, timeout=30)
+                response.raise_for_status()
+                temp_path.write_bytes(response.content)
+
+                # Process with Polars
+                load_curve_15min = pl.read_parquet(temp_path)
+                load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step)
+
+                # Save processed file to final destination
+                load_curve_aggregate.write_parquet(output_file)
+            finally:
+                if temp_path.exists():
+                    temp_path.unlink()
+
+    return output_file
+
+
 def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes:
     """Parse the file type string into a RequestedFileTypes object."""
     file_type_obj = RequestedFileTypes()
@@ -869,6 +1084,72 @@ def _download_15min_load_curves_parallel(
                 console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
+def _download_aggregate_load_curves_parallel(
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    aggregate_time_step: str,
+    max_workers: int,
+    progress: Progress,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+) -> None:
+    """Download monthly load curves in parallel with progress tracking."""
+    """Download 15-minute load curves in parallel with progress tracking."""
+    # Create progress tasks for 15-minute load curve downloads
+    load_curve_tasks = {}
+    for i, bldg_id in enumerate(bldg_ids):
+        task_id = progress.add_task(
+            f"[magenta]Load curve {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
+            total=0,  # Will be updated when we get the file size
+        )
+        load_curve_tasks[i] = task_id
+
+    # Create a modified version of the download function that uses the specific task IDs
+    def download_aggregate_with_task_id(
+        bldg_id: BuildingID, output_dir: Path, task_id: TaskID, aggregate_time_step: str
+    ) -> Path:
+        return download_aggregate_time_step_load_curve_with_progress(
+            bldg_id, output_dir, progress, task_id, aggregate_time_step
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_bldg = {
+            executor.submit(
+                download_aggregate_with_task_id, bldg_id, output_dir, load_curve_tasks[i], aggregate_time_step
+            ): bldg_id
+            for i, bldg_id in enumerate(bldg_ids)
+        }
+
+        for future in concurrent.futures.as_completed(future_to_bldg):
+            bldg_id = future_to_bldg[future]
+            try:
+                output_file = future.result()
+                downloaded_paths.append(output_file)
+            except NoAggregateLoadCurveError:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "load_curve_monthly"
+                    / bldg_id.state
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+                )
+                failed_downloads.append(str(output_file))
+                console.print(f"[red]Monthly load curve not available for {bldg_id.get_release_name()}[/red]")
+                raise
+            except Exception as e:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "load_curve_monthly"
+                    / bldg_id.state
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+                )
+                failed_downloads.append(str(output_file))
+                console.print(f"[red]Download failed for monthly load curve {bldg_id.bldg_id}: {e}[/red]")
+    pass
+
+
 def _download_metadata_single(
     bldg_ids: list[BuildingID],
     output_dir: Path,
@@ -1027,6 +1308,8 @@ def fetch_bldg_data(
         total_files += 1  # Add metadata file
     if file_type_obj.load_curve_15min:
         total_files += len(bldg_ids)  # Add 15-minute load curve files
+    if file_type_obj.load_curve_monthly:
+        total_files += len(bldg_ids)  # Add 15-minute load curve files
     if file_type_obj.load_curve_annual:
         total_files += len(bldg_ids)  # Add annual load curve files
 
@@ -1060,6 +1343,19 @@ def fetch_bldg_data(
         if file_type_obj.load_curve_15min:
             _download_15min_load_curves_parallel(
                 bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+            )
+
+        if file_type_obj.load_curve_monthly:
+            aggregate_time_step = "monthly"
+            _download_aggregate_load_curves_parallel(
+                bldg_ids,
+                output_dir,
+                aggregate_time_step,
+                max_workers,
+                progress,
+                downloaded_paths,
+                failed_downloads,
+                console,
             )
 
         # Get annual load curve if requested.
