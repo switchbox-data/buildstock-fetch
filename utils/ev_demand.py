@@ -756,41 +756,44 @@ def parse_date(date_str: str) -> datetime:
 def upload_batch_to_s3(batch_trip_schedules, config, file_name, batch_number):
     """Upload a single batch of trip schedules to S3 with partitioning."""
     import io
-    
+
     if len(batch_trip_schedules) == 0:
         return True
-    
+
     # Add metadata columns
     batch_with_metadata = batch_trip_schedules.with_columns([
         pl.lit(config.release).alias("release"),
         pl.lit(config.state).alias("state"),
     ])
-    
+
     # Partition the batch
     partitions = batch_with_metadata.partition_by(["release", "state"])
-    
+
     upload_success = True
     for partition in partitions:
         # Get partition values for file naming
         release_val = partition["release"][0] if len(partition["release"]) > 0 else "unknown"
         state_val = partition["state"][0] if len(partition["state"]) > 0 else "unknown"
-        
+
         # Create partitioned file name with batch number
         partition_file_name = f"{file_name}/release={release_val}/state={state_val}/batch_{batch_number:03d}.parquet"
-        
+
         # Write partition to memory buffer
         buffer = io.BytesIO()
         partition.write_parquet(buffer)
         file_content = buffer.getvalue()
-        
+
         # Upload partition to S3
         partition_upload_success = ev_utils.upload_object_to_s3(file_content, partition_file_name)
         if not partition_upload_success:
-            print(f"Error: S3 upload failed for partition release={release_val}, state={state_val}, batch={batch_number}")
+            print(
+                f"Error: S3 upload failed for partition release={release_val}, state={state_val}, batch={batch_number}"
+            )
             upload_success = False
             break
-    
+
     return upload_success
+
 
 def main():
     """Main function to run EV demand calculation with command-line arguments."""
@@ -837,18 +840,18 @@ def main():
         )
 
         batch_trip_schedules = calculator.generate_trip_schedules()
-        
+
         print(f"Completed batch {batch_number}: generated {len(batch_trip_schedules)} trip schedules")
 
         if args.upload_s3:
             # Upload batch directly to S3
             print(f"Uploading batch {batch_number} to S3...")
             upload_success = upload_batch_to_s3(batch_trip_schedules, config, file_name, batch_number)
-            
+
             if not upload_success:
                 print(f"Error: S3 upload failed for batch {batch_number}")
                 return 1
-            
+
             print(f"Successfully uploaded batch {batch_number} to S3")
             # Clear batch data to free memory
             del batch_trip_schedules
