@@ -7,7 +7,7 @@ body:
   - type: textarea
     id: what
     attributes:
-      value: "# What"
+      label: What
       description: Describe what you're building in 1-2 clear sentences. Focus on the end result, not the implementation details.
       placeholder: "Example: Add a --filter flag that allows users to query ResStock data by building type, vintage, or geographic region."
     validations:
