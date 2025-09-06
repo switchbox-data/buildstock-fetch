@@ -4,7 +4,7 @@ title: "Short description of the 'What' here"
 labels: []
 assignees: []
 body:
-  - type: h1
+  - type: textarea
     id: what
     attributes:
       label: What
@@ -13,7 +13,7 @@ body:
     validations:
       required: true
 
-  - type: h1
+  - type: textarea
     id: why
     attributes:
       label: Why
@@ -22,7 +22,7 @@ body:
     validations:
       required: true
 
-  - type: h1
+  - type: textarea
     id: how
     attributes:
       label: How
