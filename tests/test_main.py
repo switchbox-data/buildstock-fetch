@@ -331,7 +331,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -346,7 +346,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/load_curve_15min/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/load_curve_15min/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -367,7 +367,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -414,11 +414,11 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -448,11 +448,11 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
 
@@ -659,9 +659,9 @@ def test_fetch_monthly_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_monthly/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_monthly/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_monthly.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_monthly/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_monthly/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_monthly.parquet"
     ).exists()
