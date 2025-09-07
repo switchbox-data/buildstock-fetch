@@ -781,7 +781,7 @@ def download_metadata(bldg_id: BuildingID, output_dir: Path) -> Path:
         output_dir
         / bldg_id.get_release_name()
         / "metadata"
-        / bldg_id.state
+        / f"state={bldg_id.state}"
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
         / "metadata.parquet"
     )
@@ -808,7 +808,7 @@ def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
         output_dir
         / bldg_id.get_release_name()
         / "load_curve_15min"
-        / bldg_id.state
+        / f"state={bldg_id.state}"
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     )
@@ -840,7 +840,7 @@ def download_15min_load_curve_with_progress(
         output_dir
         / bldg_id.get_release_name()
         / "load_curve_15min"
-        / bldg_id.state
+        / f"state={bldg_id.state}"
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     )
@@ -885,7 +885,7 @@ def download_aggregate_time_step_load_curve_with_progress(
         output_dir
         / bldg_id.get_release_name()
         / load_curve_dir
-        / bldg_id.state
+        / f"state={bldg_id.state}"
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_{aggregate_time_step}.parquet"
     )
@@ -989,7 +989,7 @@ def _download_metadata_with_progress(bldg: BuildingID, output_dir: Path, progres
         output_dir
         / bldg.get_release_name()
         / "metadata"
-        / bldg.state
+        / f"state={bldg.state}"
         / f"up{str(int(bldg.upgrade_id)).zfill(2)}"
         / "metadata.parquet"
     )
@@ -1076,7 +1076,7 @@ def _download_15min_load_curves_parallel(
                     output_dir
                     / bldg_id.get_release_name()
                     / "load_curve_15min"
-                    / bldg_id.state
+                    / f"state={bldg_id.state}"
                     / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
                 )
                 failed_downloads.append(str(output_file))
@@ -1087,7 +1087,7 @@ def _download_15min_load_curves_parallel(
                     output_dir
                     / bldg_id.get_release_name()
                     / "load_curve_15min"
-                    / bldg_id.state
+                    / f"state={bldg_id.state}"
                     / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
                 )
                 failed_downloads.append(str(output_file))
@@ -1161,7 +1161,7 @@ def _process_download_future(
             output_dir
             / bldg_id.get_release_name()
             / "load_curve_monthly"
-            / bldg_id.state
+            / f"state={bldg_id.state}"
             / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_monthly.parquet"
         )
         failed_downloads.append(str(output_file))
@@ -1172,7 +1172,7 @@ def _process_download_future(
             output_dir
             / bldg_id.get_release_name()
             / "load_curve_monthly"
-            / bldg_id.state
+            / f"state={bldg_id.state}"
             / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_monthly.parquet"
         )
         failed_downloads.append(str(output_file))
@@ -1347,7 +1347,7 @@ def _download_annual_load_curves_parallel(
                     output_dir
                     / bldg_id.get_release_name()
                     / "load_curve_annual"
-                    / bldg_id.state
+                    / f"state={bldg_id.state}"
                     / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_annual.parquet"
                 )
                 failed_downloads.append(str(output_file))
@@ -1358,7 +1358,7 @@ def _download_annual_load_curves_parallel(
                     output_dir
                     / bldg_id.get_release_name()
                     / "load_curve_annual"
-                    / bldg_id.state
+                    / f"state={bldg_id.state}"
                     / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_annual.parquet"
                 )
                 failed_downloads.append(str(output_file))
