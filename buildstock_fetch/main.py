@@ -628,8 +628,14 @@ def _download_and_process_aggregate(
         temp_path = Path(temp_file.name)
 
         try:
+            # Create session with retry logic
+            session = requests.Session()
+            retry_strategy = requests.adapters.HTTPAdapter(max_retries=15)
+            session.mount("http://", retry_strategy)
+            session.mount("https://", retry_strategy)
+
             # Download with streaming to temp file
-            response = requests.get(url, stream=True, timeout=30)
+            response = session.get(url, stream=True, timeout=60)
             response.raise_for_status()
 
             downloaded_size = 0
@@ -852,7 +858,11 @@ def download_15min_load_curve_with_progress(
 
 
 def download_aggregate_time_step_load_curve_with_progress(
-    bldg_id: BuildingID, output_dir: Path, progress: Progress, task_id: TaskID, aggregate_time_step: str
+    bldg_id: BuildingID,
+    output_dir: Path,
+    progress: Optional[Progress],
+    task_id: Optional[TaskID],
+    aggregate_time_step: str,
 ) -> Path:
     """Download the aggregate time step load profile timeseries for a given building with progress tracking."""
 
@@ -1084,6 +1094,91 @@ def _download_15min_load_curves_parallel(
                 console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
+def _create_batch_progress_tasks(
+    bldg_ids: list[BuildingID], aggregate_time_step: str, progress: Progress, console: Console
+) -> dict[int, TaskID]:
+    """Create progress tasks for batch processing."""
+    batch_size = 100
+    num_batches = (len(bldg_ids) + batch_size - 1) // batch_size
+    console.print(f"[blue]Using batch processing: {len(bldg_ids)} buildings split into {num_batches} batches[/blue]")
+
+    load_curve_tasks = {}
+    for i in range(num_batches):
+        # Calculate how many buildings are in this batch
+        start_idx = i * batch_size
+        end_idx = min(start_idx + batch_size, len(bldg_ids))
+        batch_count = end_idx - start_idx
+
+        console.print(f"[blue]Batch {i + 1}/{num_batches}: {batch_count} buildings[/blue]")
+
+        task_id = progress.add_task(
+            f"[magenta]Batch {i + 1}/{num_batches} ({aggregate_time_step})",
+            total=batch_count,  # Set total to the number of buildings in this batch
+        )
+        load_curve_tasks[i] = task_id
+
+    return load_curve_tasks
+
+
+def _create_individual_progress_tasks(bldg_ids: list[BuildingID], progress: Progress) -> dict[int, TaskID]:
+    """Create progress tasks for individual building processing."""
+    load_curve_tasks = {}
+    for i, bldg_id in enumerate(bldg_ids):
+        task_id = progress.add_task(
+            f"[magenta]Load curve {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
+            total=0,  # Will be updated when we get the file size
+        )
+        load_curve_tasks[i] = task_id
+    return load_curve_tasks
+
+
+def _download_aggregate_with_batch_progress(
+    bldg_id: BuildingID, output_dir: Path, task_id: TaskID, aggregate_time_step: str, progress: Progress
+) -> Path:
+    """Download with batch progress tracking."""
+    # Download the file without individual progress tracking
+    result = download_aggregate_time_step_load_curve_with_progress(bldg_id, output_dir, None, None, aggregate_time_step)
+    # Update batch progress by 1
+    progress.update(task_id, advance=1)
+    return result
+
+
+def _process_download_future(
+    future: concurrent.futures.Future,
+    bldg_id: BuildingID,
+    output_dir: Path,
+    aggregate_time_step: str,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+) -> None:
+    """Process a completed download future."""
+    try:
+        output_file = future.result()
+        downloaded_paths.append(output_file)
+    except NoAggregateLoadCurveError:
+        output_file = (
+            output_dir
+            / bldg_id.get_release_name()
+            / "load_curve_monthly"
+            / bldg_id.state
+            / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+        )
+        failed_downloads.append(str(output_file))
+        console.print(f"[red]Monthly load curve not available for {bldg_id.get_release_name()}[/red]")
+        raise
+    except Exception as e:
+        output_file = (
+            output_dir
+            / bldg_id.get_release_name()
+            / "load_curve_monthly"
+            / bldg_id.state
+            / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+        )
+        failed_downloads.append(str(output_file))
+        console.print(f"[red]Download failed for monthly load curve {bldg_id.bldg_id}: {e}[/red]")
+
+
 def _download_aggregate_load_curves_parallel(
     bldg_ids: list[BuildingID],
     output_dir: Path,
@@ -1095,17 +1190,14 @@ def _download_aggregate_load_curves_parallel(
     console: Console,
 ) -> None:
     """Download monthly load curves in parallel with progress tracking."""
-    """Download 15-minute load curves in parallel with progress tracking."""
-    # Create progress tasks for 15-minute load curve downloads
-    load_curve_tasks = {}
-    for i, bldg_id in enumerate(bldg_ids):
-        task_id = progress.add_task(
-            f"[magenta]Load curve {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
-            total=0,  # Will be updated when we get the file size
-        )
-        load_curve_tasks[i] = task_id
 
-    # Create a modified version of the download function that uses the specific task IDs
+    # Create progress tasks based on dataset size
+    if len(bldg_ids) > 500:
+        load_curve_tasks = _create_batch_progress_tasks(bldg_ids, aggregate_time_step, progress, console)
+    else:
+        load_curve_tasks = _create_individual_progress_tasks(bldg_ids, progress)
+
+    # Create download functions
     def download_aggregate_with_task_id(
         bldg_id: BuildingID, output_dir: Path, task_id: TaskID, aggregate_time_step: str
     ) -> Path:
@@ -1114,40 +1206,40 @@ def _download_aggregate_load_curves_parallel(
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_bldg = {
-            executor.submit(
-                download_aggregate_with_task_id, bldg_id, output_dir, load_curve_tasks[i], aggregate_time_step
-            ): bldg_id
-            for i, bldg_id in enumerate(bldg_ids)
-        }
+        if len(bldg_ids) > 500:
+            # Process in batches for large datasets
+            batch_size = 100
+            future_to_bldg = {}
 
+            for batch_idx in range(0, len(bldg_ids), batch_size):
+                batch = bldg_ids[batch_idx : batch_idx + batch_size]
+                task_id = load_curve_tasks[batch_idx // batch_size]
+
+                for bldg_id in batch:
+                    future = executor.submit(
+                        _download_aggregate_with_batch_progress,
+                        bldg_id,
+                        output_dir,
+                        task_id,
+                        aggregate_time_step,
+                        progress,
+                    )
+                    future_to_bldg[future] = bldg_id
+        else:
+            # Original behavior for smaller datasets
+            future_to_bldg = {
+                executor.submit(
+                    download_aggregate_with_task_id, bldg_id, output_dir, load_curve_tasks[i], aggregate_time_step
+                ): bldg_id
+                for i, bldg_id in enumerate(bldg_ids)
+            }
+
+        # Process completed futures
         for future in concurrent.futures.as_completed(future_to_bldg):
             bldg_id = future_to_bldg[future]
-            try:
-                output_file = future.result()
-                downloaded_paths.append(output_file)
-            except NoAggregateLoadCurveError:
-                output_file = (
-                    output_dir
-                    / bldg_id.get_release_name()
-                    / "load_curve_monthly"
-                    / bldg_id.state
-                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
-                )
-                failed_downloads.append(str(output_file))
-                console.print(f"[red]Monthly load curve not available for {bldg_id.get_release_name()}[/red]")
-                raise
-            except Exception as e:
-                output_file = (
-                    output_dir
-                    / bldg_id.get_release_name()
-                    / "load_curve_monthly"
-                    / bldg_id.state
-                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
-                )
-                failed_downloads.append(str(output_file))
-                console.print(f"[red]Download failed for monthly load curve {bldg_id.bldg_id}: {e}[/red]")
-    pass
+            _process_download_future(
+                future, bldg_id, output_dir, aggregate_time_step, downloaded_paths, failed_downloads, console
+            )
 
 
 def _download_metadata_single(
@@ -1303,7 +1395,7 @@ def fetch_bldg_data(
     failed_downloads: list[str] = []
 
     # Calculate total files to download
-    total_files = len(bldg_ids)
+    total_files = 0
     if file_type_obj.metadata:
         total_files += 1  # Add metadata file
     if file_type_obj.load_curve_15min:

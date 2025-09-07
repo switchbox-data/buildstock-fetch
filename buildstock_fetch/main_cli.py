@@ -380,6 +380,7 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
             validate=_validate_output_directory,
         ).ask()
     )
+
     output_directory_path = Path(output_directory_str)
     output_directory_path.mkdir(parents=True, exist_ok=True)
     return {
