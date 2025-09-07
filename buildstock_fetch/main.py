@@ -1285,7 +1285,7 @@ def download_annual_load_curve_with_progress(
         output_dir
         / bldg_id.get_release_name()
         / "load_curve_annual"
-        / bldg_id.state
+        / f"state={bldg_id.state}"
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
         / output_filename
     )
