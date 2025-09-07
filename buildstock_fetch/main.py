@@ -810,7 +810,7 @@ def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
         / "load_curve_15min"
         / bldg_id.state
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_bytes(response.content)
@@ -842,7 +842,7 @@ def download_15min_load_curve_with_progress(
         / "load_curve_15min"
         / bldg_id.state
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -887,7 +887,7 @@ def download_aggregate_time_step_load_curve_with_progress(
         / load_curve_dir
         / bldg_id.state
         / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_{aggregate_time_step}.parquet"
+        / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_{aggregate_time_step}.parquet"
     )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1077,7 +1077,7 @@ def _download_15min_load_curves_parallel(
                     / bldg_id.get_release_name()
                     / "load_curve_15min"
                     / bldg_id.state
-                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
                 )
                 failed_downloads.append(str(output_file))
                 console.print(f"[red]15 min load curve not available for {bldg_id.get_release_name()}[/red]")
@@ -1088,7 +1088,7 @@ def _download_15min_load_curves_parallel(
                     / bldg_id.get_release_name()
                     / "load_curve_15min"
                     / bldg_id.state
-                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
                 )
                 failed_downloads.append(str(output_file))
                 console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
@@ -1162,7 +1162,7 @@ def _process_download_future(
             / bldg_id.get_release_name()
             / "load_curve_monthly"
             / bldg_id.state
-            / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+            / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_monthly.parquet"
         )
         failed_downloads.append(str(output_file))
         console.print(f"[red]Monthly load curve not available for {bldg_id.get_release_name()}[/red]")
@@ -1173,7 +1173,7 @@ def _process_download_future(
             / bldg_id.get_release_name()
             / "load_curve_monthly"
             / bldg_id.state
-            / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_monthly.parquet"
+            / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_monthly.parquet"
         )
         failed_downloads.append(str(output_file))
         console.print(f"[red]Download failed for monthly load curve {bldg_id.bldg_id}: {e}[/red]")
@@ -1348,7 +1348,7 @@ def _download_annual_load_curves_parallel(
                     / bldg_id.get_release_name()
                     / "load_curve_annual"
                     / bldg_id.state
-                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_annual.parquet"
                 )
                 failed_downloads.append(str(output_file))
                 console.print(f"[red]Annual load curve not available for {bldg_id.get_release_name()}[/red]")
@@ -1359,7 +1359,7 @@ def _download_annual_load_curves_parallel(
                     / bldg_id.get_release_name()
                     / "load_curve_annual"
                     / bldg_id.state
-                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_annual.parquet"
+                    / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_annual.parquet"
                 )
                 failed_downloads.append(str(output_file))
                 console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
