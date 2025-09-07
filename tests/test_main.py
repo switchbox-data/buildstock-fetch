@@ -198,25 +198,25 @@ def test_fetch_bldg_data(cleanup_downloads):
     print(failed_downloads)
     assert len(downloaded_paths) == 7
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
+        f"data/{bldg_ids[0].get_release_name()}/hpxml/state={bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
+        f"data/{bldg_ids[0].get_release_name()}/schedule/state={bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[1].get_release_name()}/hpxml/{bldg_ids[1].state}/up{str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00.xml"
+        f"data/{bldg_ids[1].get_release_name()}/hpxml/state={bldg_ids[1].state}/up{str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[1].get_release_name()}/schedule/{bldg_ids[1].state}/up{str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00_schedule.csv"
+        f"data/{bldg_ids[1].get_release_name()}/schedule/state={bldg_ids[1].state}/up{str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00_schedule.csv"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[2].get_release_name()}/hpxml/{bldg_ids[2].state}/up{str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00.xml"
+        f"data/{bldg_ids[2].get_release_name()}/hpxml/state={bldg_ids[2].state}/up{str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[2].get_release_name()}/schedule/{bldg_ids[2].state}/up{str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00_schedule.csv"
+        f"data/{bldg_ids[2].get_release_name()}/schedule/state={bldg_ids[2].state}/up{str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00_schedule.csv"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/metadata/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
 
     # Test 2021 release - should raise NoBuildingDataError

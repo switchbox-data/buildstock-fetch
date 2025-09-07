@@ -1,6 +1,5 @@
 import json
 import pprint
-import random
 from collections.abc import Mapping
 from importlib.resources import files
 from pathlib import Path
@@ -513,8 +512,8 @@ def _get_user_download_choice(bldg_ids: list) -> list:
                 console.print(f"[yellow]No files will be downloaded for State {state}, Upgrade {upgrade_id}.[/yellow]")
                 continue
 
-            # Randomly select the specified number of building IDs for this state-upgrade_id pair
-            selected_for_state_upgrade = random.sample(bldg_list, sample_size)
+            # Select the first N building IDs for this state-upgrade_id pair
+            selected_for_state_upgrade = bldg_list[:sample_size]
             selected_bldg_ids.extend(selected_for_state_upgrade)
             console.print(f"[green]Selected {sample_size} buildings for State {state}, Upgrade {upgrade_id}.[/green]")
 
