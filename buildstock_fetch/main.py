@@ -886,7 +886,7 @@ def download_aggregate_time_step_load_curve_with_progress(
         / bldg_id.get_release_name()
         / load_curve_dir
         / f"state={bldg_id.state}"
-        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_{aggregate_time_step}.parquet"
     )
 
