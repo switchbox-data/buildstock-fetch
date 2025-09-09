@@ -1016,6 +1016,9 @@ def _download_and_read_parquet_files(
     s3_client: Any, bucket: str, parquet_files: list[str], output_dir: Path
 ) -> list[Any]:
     """Download and read parquet files, returning a list of dataframes."""
+    # Ensure output directory exists
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     state_dataframes = []
     for s3_key in parquet_files:
         temp_file = output_dir / f"temp_{s3_key.split('/')[-1]}"
