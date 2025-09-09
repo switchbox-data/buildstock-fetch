@@ -1047,7 +1047,7 @@ def _save_filtered_state_data(
     state_df: Any, state: str, bldg_ids: list[BuildingID], release: str, output_dir: Path, downloaded_paths: list[Path]
 ) -> None:
     """Save filtered data for a specific state."""
-    bldg_id_list = [bldg.bldg_id for bldg in bldg_ids if bldg.state == state]
+    bldg_id_list = [str(bldg.bldg_id) for bldg in bldg_ids if bldg.state == state]
     if not bldg_id_list:
         return
 
@@ -1055,7 +1055,7 @@ def _save_filtered_state_data(
     if filtered_df.height == 0:
         return
 
-    output_file = output_dir / release / "trip_schedules" / state / "trip_schedules.parquet"
+    output_file = output_dir / release / "trip_schedules" / f"state={state}" / "trip_schedules.parquet"
     output_file.parent.mkdir(parents=True, exist_ok=True)
     filtered_df.write_parquet(str(output_file))
     downloaded_paths.append(output_file)

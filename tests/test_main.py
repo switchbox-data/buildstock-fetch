@@ -627,3 +627,58 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert Path(
         f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
+
+
+def test_fetch_trip_schedules(cleanup_downloads):
+    # 2025 comstock amy2018 v1 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=320214,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="2",
+            state="NY",
+        )
+    ]
+    file_type = ("trip_schedules",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/trip_schedules/state={bldg_id.state}/trip_schedules.parquet"
+    ).exists()
+
+    # 2025 comstock amy2018 v1 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=320214,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=216071,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="2",
+            state="NY",
+        ),
+    ]
+    file_type = ("trip_schedules",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/trip_schedules/state={bldg_id.state}/trip_schedules.parquet"
+    ).exists()
