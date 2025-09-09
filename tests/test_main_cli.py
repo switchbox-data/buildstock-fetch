@@ -462,7 +462,7 @@ def test_cli_direct_arguments_trip_schedules(cleanup_downloads):
     assert "Product: resstock" in result.stdout
     assert "Release year: 2024" in result.stdout
     assert "Weather file: tmy3" in result.stdout
-    assert "Release version: 1" in result.stdout
+    assert "Release version: 2" in result.stdout
     assert "States: ['NY']" in result.stdout
     assert "File type: ['trip_schedules']" in result.stdout
     assert "Upgrade ids: ['0']" in result.stdout
@@ -501,8 +501,8 @@ def test_cli_direct_arguments_trip_schedules(cleanup_downloads):
     assert "Product: resstock" in result.stdout
     assert "Release year: 2024" in result.stdout
     assert "Weather file: tmy3" in result.stdout
-    assert "Release version: 1" in result.stdout
-    assert "States: ['NY']" in result.stdout
+    assert "Release version: 2" in result.stdout
+    assert "States: ['WY']" in result.stdout
     assert "File type: ['trip_schedules']" in result.stdout
     assert "Upgrade ids: ['0']" in result.stdout
     assert "test_output" in result.stdout
