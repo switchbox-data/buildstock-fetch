@@ -809,7 +809,7 @@ def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
         / bldg_id.get_release_name()
         / "load_curve_15min"
         / f"state={bldg_id.state}"
-        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -841,7 +841,7 @@ def download_15min_load_curve_with_progress(
         / bldg_id.get_release_name()
         / "load_curve_15min"
         / f"state={bldg_id.state}"
-        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1077,6 +1077,7 @@ def _download_15min_load_curves_parallel(
                     / bldg_id.get_release_name()
                     / "load_curve_15min"
                     / f"state={bldg_id.state}"
+                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
                     / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
                 )
                 failed_downloads.append(str(output_file))
@@ -1088,6 +1089,7 @@ def _download_15min_load_curves_parallel(
                     / bldg_id.get_release_name()
                     / "load_curve_15min"
                     / f"state={bldg_id.state}"
+                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
                     / f"bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
                 )
                 failed_downloads.append(str(output_file))
