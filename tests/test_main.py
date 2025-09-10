@@ -160,7 +160,7 @@ def test_download_bldg_data(cleanup_downloads):
         output_dir=Path("data"),
     )
     assert Path(
-        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
+        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
     ).exists()
 
     # Test fetching schedule files
@@ -171,7 +171,7 @@ def test_download_bldg_data(cleanup_downloads):
         output_dir=Path("data"),
     )
     assert Path(
-        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
+        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
     ).exists()
 
     # Test fetching both HPXML and schedule files
@@ -182,10 +182,10 @@ def test_download_bldg_data(cleanup_downloads):
         output_dir=Path("data"),
     )
     assert Path(
-        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
+        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
+        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
     ).exists()
 
 
