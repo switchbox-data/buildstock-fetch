@@ -782,7 +782,7 @@ def download_metadata(bldg_id: BuildingID, output_dir: Path) -> Path:
         / bldg_id.get_release_name()
         / "metadata"
         / f"state={bldg_id.state}"
-        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
         / "metadata.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -990,7 +990,7 @@ def _download_metadata_with_progress(bldg: BuildingID, output_dir: Path, progres
         / bldg.get_release_name()
         / "metadata"
         / f"state={bldg.state}"
-        / f"up{str(int(bldg.upgrade_id)).zfill(2)}"
+        / f"upgrade={str(int(bldg.upgrade_id)).zfill(2)}"
         / "metadata.parquet"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
