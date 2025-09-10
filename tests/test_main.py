@@ -216,7 +216,7 @@ def test_fetch_bldg_data(cleanup_downloads):
         f"data/{bldg_ids[2].get_release_name()}/schedule/{bldg_ids[2].state}/up{str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00_schedule.csv"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
 
     # Test 2021 release - should raise NoBuildingDataError
@@ -284,7 +284,7 @@ def test_fetch_metadata(cleanup_downloads):
     assert len(downloaded_paths) == 1
     assert len(failed_downloads) == 0
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
 
     # Test 2024 comstock release - should raise NoMetadataError
