@@ -283,7 +283,7 @@ def resolve_weather_station_id(
     upgrade_id: str,
     status_update_interval_seconds: int = 10,
     status_update_interval_bldgs: int = 50,
-    max_workers: int = 5,
+    max_workers: int = 15,
 ) -> pl.DataFrame:
     # Initialize global status tracking
     global profiling_data, processed_bldg_ids_global
@@ -759,6 +759,7 @@ def _modify_buildstock_releases_json(release_name: str, state: str) -> dict:
 
 
 def _interactive_mode():
+    start_time = time.time()
     console.print(Panel("Weather Station Mapping Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
     console.print("Please select the release information and file type you would like to fetch:")
 
@@ -804,16 +805,46 @@ def _interactive_mode():
         bldg_ids, product_full, release_year, weather_file, release_version, selected_states, selected_upgrade_ids
     )
     clean_weather_map_df = _remove_duplicates(weather_map_df)
+
+    # Create output directory if it doesn't exist
+    output_dir = "buildstock_fetch/data/weather_station_map"
     output_path = os.path.join(output_dir, "weather_station_map.parquet")
-    clean_weather_map_df.write_parquet(
-        str(output_path),  # Convert Path to string for Polars
-        use_pyarrow=True,
-        partition_by=["product", "release_year", "weather_file", "release_version", "state"],
-    )
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Check if output file already exists
+    if os.path.exists(output_path):
+        print(f"Output file {output_path} already exists. Appending new data...")
+
+        # Read existing data
+        existing_df = pl.read_parquet(output_path)
+
+        # Combine existing data with new data
+        combined_df = pl.concat([existing_df, clean_weather_map_df])
+
+        # Remove duplicates from combined data
+        combined_df_cleaned = _remove_duplicates(combined_df)
+
+        # Save combined data as partitioned parquet file
+        combined_df_cleaned.write_parquet(
+            str(output_path),
+            use_pyarrow=True,
+            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
+        )
+
+        print(f"Successfully appended and saved combined weather station mapping to {output_path}")
+        print(f"Combined DataFrame shape: {combined_df_cleaned.shape}")
+    else:
+        # Save as partitioned parquet file (new file)
+        clean_weather_map_df.write_parquet(
+            str(output_path),
+            use_pyarrow=True,
+            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
+        )
+        print(f"Successfully saved new weather station mapping to {output_path}")
+        print(f"DataFrame shape: {clean_weather_map_df.shape}")
+
     elapsed_time = time.time() - start_time
     print(f"Time taken: {elapsed_time:.2f} seconds")
-    print(f"Successfully saved partitioned weather station mapping to {output_path}")
-    print(f"\nDataFrame shape: {clean_weather_map_df.shape}")
 
     # TODO: Modify buildstock_releases.json to update weather station mapping availability
     _modify_buildstock_releases_json(selected_release_name, selected_states)
@@ -865,23 +896,47 @@ if __name__ == "__main__":
         max_workers=20,  # Use 20 parallel threads for downloading
     )
 
-    # Create output directory if it doesn't exist
-    output_dir = "buildstock_fetch/data/weather_station_map"
-    os.makedirs(output_dir, exist_ok=True)
-
     weather_map_df_cleaned = _remove_duplicates(weather_map_df)
 
-    # Save as partitioned parquet file
+    # Create output directory if it doesn't exist
+    output_dir = "buildstock_fetch/data/weather_station_map"
     output_path = os.path.join(output_dir, "weather_station_map.parquet")
-    weather_map_df_cleaned.write_parquet(
-        str(output_path),  # Convert Path to string for Polars
-        use_pyarrow=True,
-        partition_by=["product", "release_year", "weather_file", "release_version", "state"],
-    )
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Check if output file already exists
+    if os.path.exists(output_path):
+        print(f"Output file {output_path} already exists. Appending new data...")
+
+        # Read existing data
+        existing_df = pl.read_parquet(output_path)
+
+        # Combine existing data with new data
+        combined_df = pl.concat([existing_df, weather_map_df_cleaned])
+
+        # Remove duplicates from combined data
+        combined_df_cleaned = _remove_duplicates(combined_df)
+
+        # Save combined data as partitioned parquet file
+        combined_df_cleaned.write_parquet(
+            str(output_path),
+            use_pyarrow=True,
+            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
+        )
+
+        print(f"Successfully appended and saved combined weather station mapping to {output_path}")
+        print(f"Combined DataFrame shape: {combined_df_cleaned.shape}")
+    else:
+        # Save as partitioned parquet file (new file)
+        weather_map_df_cleaned.write_parquet(
+            str(output_path),
+            use_pyarrow=True,
+            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
+        )
+        print(f"Successfully saved new weather station mapping to {output_path}")
+        print(f"DataFrame shape: {weather_map_df_cleaned.shape}")
+
     elapsed_time = time.time() - start_time
     print(f"Time taken: {elapsed_time:.2f} seconds")
-    print(f"Successfully saved partitioned weather station mapping to {output_path}")
-    print(f"\nDataFrame shape: {weather_map_df_cleaned.shape}")
 
     # Modify buildstock releases JSON to update weather station mapping
     if product == "resstock":
