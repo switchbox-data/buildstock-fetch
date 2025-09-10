@@ -728,7 +728,7 @@ def download_bldg_data(
                         / bldg_id.get_release_name()
                         / "hpxml"
                         / bldg_id.state
-                        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+                        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
                         / new_name
                     )
                     new_path.parent.mkdir(parents=True, exist_ok=True)
@@ -749,7 +749,7 @@ def download_bldg_data(
                         / bldg_id.get_release_name()
                         / "schedule"
                         / bldg_id.state
-                        / f"up{str(int(bldg_id.upgrade_id)).zfill(2)}"
+                        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
                         / new_name
                     )
                     new_path.parent.mkdir(parents=True, exist_ok=True)
