@@ -497,6 +497,9 @@
       "load_curve_hourly",
       "hpxml",
       "schedule"
+    ],
+    "weather_map_available_states": [
+      "NY"
     ]
   },
   "com_2025_amy2018_1": {
