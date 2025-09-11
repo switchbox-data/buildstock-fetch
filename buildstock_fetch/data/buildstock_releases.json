@@ -453,6 +453,9 @@
       "load_curve_hourly",
       "hpxml",
       "schedule"
+    ],
+    "weather_map_available_states": [
+      "AZ"
     ]
   },
   "res_2024_tmy3_1": {
