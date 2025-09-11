@@ -1599,7 +1599,6 @@ def fetch_bldg_data(
 
     # Calculate total files to download
     total_files = 0
-    total_files = 0
     if file_type_obj.metadata:
         total_files += 1  # Add metadata file
     if file_type_obj.load_curve_15min:
@@ -1663,18 +1662,18 @@ def _execute_downloads(
             bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
         )
 
-        if file_type_obj.load_curve_monthly:
-            aggregate_time_step = "monthly"
-            _download_aggregate_load_curves_parallel(
-                bldg_ids,
-                output_dir,
-                aggregate_time_step,
-                max_workers,
-                progress,
-                downloaded_paths,
-                failed_downloads,
-                console,
-            )
+    if file_type_obj.load_curve_monthly:
+        aggregate_time_step = "monthly"
+        _download_aggregate_load_curves_parallel(
+            bldg_ids,
+            output_dir,
+            aggregate_time_step,
+            max_workers,
+            progress,
+            downloaded_paths,
+            failed_downloads,
+            console,
+        )
 
     # Get annual load curve if requested.
     if file_type_obj.load_curve_annual:

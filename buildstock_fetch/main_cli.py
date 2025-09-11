@@ -29,7 +29,7 @@ app = typer.Typer(
 BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json"))
 
 # File types that haven't been implemented yet
-UNAVAILABLE_FILE_TYPES = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly"]
+UNAVAILABLE_FILE_TYPES = ["load_curve_hourly", "load_curve_daily"]
 
 
 class InvalidProductError(Exception):
@@ -454,48 +454,59 @@ def _check_weather_map_available_states(inputs: Mapping[str, Union[str, list[str
     return available_states, unavailable_states
 
 
-def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> tuple[list[str], list[str]]:
-    """Check and print warning for unavailable file types."""
-    unavailable_file_types = ["load_curve_hourly", "load_curve_daily"]
-    selected_file_types = inputs["file_type"].split() if isinstance(inputs["file_type"], str) else inputs["file_type"]
-    # Create a copy to avoid modifying the original list
-    available_file_types = selected_file_types.copy()
-    unavailable_file_types = []
-
-    for ft in selected_file_types:
-        if ft in UNAVAILABLE_FILE_TYPES:
-            unavailable_file_types.append(ft)
-            # Only remove if it exists in available_file_types
-            if ft in available_file_types:
-                available_file_types.remove(ft)
-
-    selected_unavailable = [ft for ft in selected_file_types if ft in UNAVAILABLE_FILE_TYPES]
-
-    # Check weather weather file mapping is available for given release and state
+def _check_weather_file_availability(
+    inputs: Mapping[str, Union[str, list[str]]],
+    available_file_types: list[str],
+    selected_unavailable_file_types: list[str],
+) -> None:
+    """Check weather file availability and update file type lists."""
     available_states, unavailable_states = _check_weather_map_available_states(inputs)
+
     if len(unavailable_states) == len(inputs["states"]):
-        unavailable_file_types.append("weather")
-        # Only remove "weather" if it exists in available_file_types
+        selected_unavailable_file_types.append("weather")
         if "weather" in available_file_types:
             available_file_types.remove("weather")
 
     if len(unavailable_states) > 0:
         console.print(
-            f"\n[yellow]The weather map is not available for the following state: {unavailable_states}[/yellow]"
+            f"\n[yellow]The weather map is not available for the following states: {unavailable_states}[/yellow]"
         )
         console.print(
             "\n[yellow]Please first build the weather station mapping for this state using the weather station mapping CLI tool (just build-weather-station-map)[/yellow]"
         )
     for state in unavailable_states:
-        selected_unavailable.append(f"weather: {state}")
+        selected_unavailable_file_types.append(f"weather: {state}")
 
-    if selected_unavailable:
+
+def _print_unavailable_file_types_warning(selected_unavailable_file_types: list[str]) -> None:
+    """Print warning for unavailable file types."""
+    if selected_unavailable_file_types:
         console.print("\n[yellow]The following file types are not available yet:[/yellow]")
-        for file_type in selected_unavailable:
+        for file_type in selected_unavailable_file_types:
             console.print(f"  • {file_type}")
         console.print("")
 
-    return available_file_types, unavailable_file_types
+
+def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> tuple[list[str], list[str]]:
+    """Check and print warning for unavailable file types."""
+    selected_file_types = inputs["file_type"].split() if isinstance(inputs["file_type"], str) else inputs["file_type"]
+    # Create a copy to avoid modifying the original list
+    available_file_types = selected_file_types.copy()
+    selected_unavailable_file_types = []
+
+    for ft in selected_file_types:
+        if ft in UNAVAILABLE_FILE_TYPES:
+            selected_unavailable_file_types.append(ft)
+            # Only remove if it exists in available_file_types
+            if ft in available_file_types:
+                available_file_types.remove(ft)
+
+    if "weather" in selected_file_types:
+        _check_weather_file_availability(inputs, available_file_types, selected_unavailable_file_types)
+
+    _print_unavailable_file_types_warning(selected_unavailable_file_types)
+
+    return available_file_types, selected_unavailable_file_types
 
 
 def _fetch_all_building_ids(inputs: Mapping[str, Union[str, list[str]]]) -> list:
@@ -698,63 +709,68 @@ UPGRADE_ID_OPTION = typer.Option(
 OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='e.g., "data" or "../output"')
 
 
-def main_callback(
-    product: str = PRODUCT_OPTION,
-    release_year: str = RELEASE_YEAR_OPTION,
-    weather_file: str = WEATHER_FILE_OPTION,
-    release_version: float = RELEASE_VERSION_OPTION,
-    states: str = STATES_OPTION,
-    file_type: str = FILE_TYPE_OPTION,
-    upgrade_id: str = UPGRADE_ID_OPTION,
-    output_directory: str = OUTPUT_DIRECTORY_OPTION,
-) -> None:
-    """
-    Buildstock Fetch CLI tool. Run without arguments for interactive mode.
-    """
+def _run_interactive_mode_wrapper() -> dict[str, Union[str, list[str]]]:
+    """Run interactive mode with error handling."""
+    try:
+        while True:
+            inputs = _run_interactive_mode()
+            if _verify_interactive_inputs(inputs):
+                return inputs
+            console.print("[yellow]Let's try again...[/yellow]")
+    except KeyboardInterrupt:
+        console.print("\n[red]Operation cancelled by user.[/red]")
+        raise typer.Exit(0) from None
 
-    # If no arguments provided, run interactive mode
-    if not any([product, release_year, weather_file, release_version, states, file_type]):
-        try:
-            while True:
-                inputs = _run_interactive_mode()
-                if _verify_interactive_inputs(inputs):
-                    break
-                console.print("[yellow]Let's try again...[/yellow]")
-        except KeyboardInterrupt:
-            console.print("\n[red]Operation cancelled by user.[/red]")
-            raise typer.Exit(0) from None
-    else:
-        states_list = states.split() if states else []
-        upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
-        file_type_list = file_type.split() if file_type else []
 
-        direct_inputs: dict[str, Union[str, list[str]]] = {
-            "product": product,
-            "release_year": release_year,
-            "weather_file": weather_file,
-            "release_version": _normalize_release_version(release_version),
-            "states": states_list,
-            "file_type": file_type_list,
-            "upgrade_ids": upgrade_ids_list,
-            "output_directory": output_directory,
-        }
-        try:
-            validation_result = _validate_direct_inputs(direct_inputs)
-            if validation_result is not True:
-                console.print(f"\n[red]{validation_result}[/red]")
-                raise typer.Exit(1) from None
-        except InvalidProductError:
-            console.print(f"\n[red]Invalid product: {direct_inputs['product']}[/red]")
+def _process_direct_inputs(
+    product: str,
+    release_year: str,
+    weather_file: str,
+    release_version: float,
+    states: str,
+    file_type: str,
+    upgrade_id: str,
+    output_directory: str,
+) -> dict[str, Union[str, list[str]]]:
+    """Process direct command line inputs."""
+    states_list = states.split() if states else []
+    upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
+    file_type_list = file_type.split() if file_type else []
+
+    direct_inputs: dict[str, Union[str, list[str]]] = {
+        "product": product,
+        "release_year": release_year,
+        "weather_file": weather_file,
+        "release_version": _normalize_release_version(release_version),
+        "states": states_list,
+        "file_type": file_type_list,
+        "upgrade_ids": upgrade_ids_list,
+        "output_directory": output_directory,
+    }
+
+    try:
+        validation_result = _validate_direct_inputs(direct_inputs)
+        if validation_result is not True:
+            console.print(f"\n[red]{validation_result}[/red]")
             raise typer.Exit(1) from None
+    except InvalidProductError:
+        console.print(f"\n[red]Invalid product: {direct_inputs['product']}[/red]")
+        raise typer.Exit(1) from None
 
-        inputs = direct_inputs
+    return direct_inputs
 
-    # Process the data
-    _print_data_processing_info(inputs)
+
+def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
+    """Process data download based on available file types."""
     available_file_types, unavailable_file_types = _check_unavailable_file_types(inputs)
-    available_states, unavailable_states = _check_weather_map_available_states(inputs)
+    if "weather" in unavailable_file_types:
+        available_states, unavailable_states = _check_weather_map_available_states(inputs)
+    else:
+        available_states = None
 
     if len(available_file_types) > 0:
+        print("TEST TEST")
+        print(available_file_types)
         # Fetch the building ids and download data
         bldg_ids = _fetch_all_building_ids(inputs)
 
@@ -775,6 +791,33 @@ def main_callback(
             console.print("[yellow]No files selected for download.[/yellow]")
     else:
         console.print("[yellow]None of the selected file types are available for download.[/yellow]")
+
+
+def main_callback(
+    product: str = PRODUCT_OPTION,
+    release_year: str = RELEASE_YEAR_OPTION,
+    weather_file: str = WEATHER_FILE_OPTION,
+    release_version: float = RELEASE_VERSION_OPTION,
+    states: str = STATES_OPTION,
+    file_type: str = FILE_TYPE_OPTION,
+    upgrade_id: str = UPGRADE_ID_OPTION,
+    output_directory: str = OUTPUT_DIRECTORY_OPTION,
+) -> None:
+    """
+    Buildstock Fetch CLI tool. Run without arguments for interactive mode.
+    """
+
+    # If no arguments provided, run interactive mode
+    if not any([product, release_year, weather_file, release_version, states, file_type]):
+        inputs = _run_interactive_mode_wrapper()
+    else:
+        inputs = _process_direct_inputs(
+            product, release_year, weather_file, release_version, states, file_type, upgrade_id, output_directory
+        )
+
+    # Process the data
+    _print_data_processing_info(inputs)
+    _process_data_download(inputs)
 
 
 app.command()(main_callback)
