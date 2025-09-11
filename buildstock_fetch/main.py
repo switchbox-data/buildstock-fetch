@@ -7,6 +7,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Optional, Union
 
+import boto3
 import polars as pl
 import requests
 from rich.console import Console
@@ -605,8 +606,57 @@ def fetch_bldg_ids(
     return building_ids
 
 
+def _extract_s3_info_from_url(url: str) -> tuple[str, str]:
+    """Extract S3 bucket and key from URL."""
+    if not url.startswith("https://oedi-data-lake.s3.amazonaws.com/"):
+        msg = f"URL is not from the expected S3 bucket: {url}"
+        raise ValueError(msg)
+
+    # Remove the base URL to get the key
+    key = url.replace("https://oedi-data-lake.s3.amazonaws.com/", "")
+    bucket = "oedi-data-lake"
+    return bucket, key
+
+
+def _download_s3_file_with_progress(
+    bucket: str, key: str, output_file: Path, progress: Progress, task_id: TaskID
+) -> int:
+    """Download a file from S3 with progress tracking using boto3."""
+    s3_client = boto3.client("s3")
+
+    # Get object metadata for progress tracking
+    try:
+        response = s3_client.head_object(Bucket=bucket, Key=key)
+        total_size = response["ContentLength"]
+        progress.update(task_id, total=total_size)
+    except Exception:
+        progress.update(task_id, total=0)
+        raise
+
+    # Download with progress tracking
+    downloaded_size = 0
+
+    def progress_callback(bytes_transferred):
+        nonlocal downloaded_size
+        downloaded_size += bytes_transferred
+        progress.update(task_id, completed=downloaded_size)
+
+    s3_client.download_file(bucket, key, str(output_file), Callback=progress_callback)
+    return downloaded_size
+
+
 def _download_with_progress(url: str, output_file: Path, progress: Progress, task_id: TaskID) -> int:
     """Download a file with progress tracking."""
+    # Try to use S3 client if it's an S3 URL
+    if url.startswith("https://oedi-data-lake.s3.amazonaws.com/"):
+        try:
+            bucket, key = _extract_s3_info_from_url(url)
+            return _download_s3_file_with_progress(bucket, key, output_file, progress, task_id)
+        except Exception as e:
+            # Fall back to requests if S3 download fails
+            print(f"S3 download failed, falling back to requests: {e}")
+
+    # Fall back to requests for non-S3 URLs or if S3 fails
     # Get file size first
     response = requests.head(url, timeout=30)
     response.raise_for_status()
@@ -726,6 +776,50 @@ def _download_and_process_aggregate(
     url: str, output_file: Path, progress: Progress, task_id: TaskID, aggregate_time_step: str
 ) -> int:
     """Download aggregate time step load curve to temporary file, process with Polars, and save result."""
+    # Try to use S3 client if it's an S3 URL
+    if url.startswith("https://oedi-data-lake.s3.amazonaws.com/"):
+        try:
+            bucket, key = _extract_s3_info_from_url(url)
+            s3_client = boto3.client("s3")
+
+            # Get object metadata for progress tracking
+            response = s3_client.head_object(Bucket=bucket, Key=key)
+            total_size = response["ContentLength"]
+            progress.update(task_id, total=total_size)
+
+            # Download to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+                temp_path = Path(temp_file.name)
+
+                try:
+                    # Download with progress tracking
+                    downloaded_size = 0
+
+                    def progress_callback(bytes_transferred):
+                        nonlocal downloaded_size
+                        downloaded_size += bytes_transferred
+                        progress.update(task_id, completed=downloaded_size)
+
+                    s3_client.download_file(bucket, key, str(temp_path), Callback=progress_callback)
+
+                    # Process with Polars
+                    load_curve_15min = pl.read_parquet(temp_path)
+                    load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step)
+
+                    # Save processed file to final destination
+                    load_curve_aggregate.write_parquet(output_file)
+
+                    return downloaded_size
+
+                finally:
+                    # Clean up temporary file
+                    if temp_path.exists():
+                        temp_path.unlink()
+        except Exception as e:
+            # Fall back to requests if S3 download fails
+            print(f"S3 download failed, falling back to requests: {e}")
+
+    # Fall back to requests for non-S3 URLs or if S3 fails
     # Get file size first for progress tracking
     response = requests.head(url, timeout=30)
     response.raise_for_status()
