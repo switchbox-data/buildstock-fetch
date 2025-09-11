@@ -636,7 +636,7 @@ def _download_s3_file_with_progress(
     # Download with progress tracking
     downloaded_size = 0
 
-    def progress_callback(bytes_transferred):
+    def progress_callback(bytes_transferred: int) -> None:
         nonlocal downloaded_size
         downloaded_size += bytes_transferred
         progress.update(task_id, completed=downloaded_size)
@@ -795,7 +795,7 @@ def _download_and_process_aggregate(
                     # Download with progress tracking
                     downloaded_size = 0
 
-                    def progress_callback(bytes_transferred):
+                    def progress_callback(bytes_transferred: int) -> None:
                         nonlocal downloaded_size
                         downloaded_size += bytes_transferred
                         progress.update(task_id, completed=downloaded_size)
