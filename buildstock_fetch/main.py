@@ -896,7 +896,8 @@ def download_weather_file_with_progress(
         output_dir
         / bldg_id.get_release_name()
         / "weather"
-        / bldg_id.state
+        / f"state={bldg_id.state}"
+        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"{bldg_id.get_weather_station_name()}.csv"
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1161,7 +1162,8 @@ def _download_weather_files_parallel(
                     output_dir
                     / bldg_id.get_release_name()
                     / "weather"
-                    / bldg_id.state
+                    / f"state={bldg_id.state}"
+                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
                     / f"{bldg_id.get_weather_station_name()}.csv"
                 )
                 failed_downloads.append(str(output_file))
@@ -1172,7 +1174,8 @@ def _download_weather_files_parallel(
                     output_dir
                     / bldg_id.get_release_name()
                     / "weather"
-                    / bldg_id.state
+                    / f"state={bldg_id.state}"
+                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
                     / f"{bldg_id.get_weather_station_name()}.csv"
                 )
                 failed_downloads.append(str(output_file))
@@ -1218,7 +1221,7 @@ def fetch_bldg_data(
     failed_downloads: list[str] = []
 
     # Calculate total files to download
-    total_files = len(bldg_ids)
+    total_files = 0
     if file_type_obj.metadata:
         total_files += 1  # Add metadata file
     if file_type_obj.load_curve_15min:

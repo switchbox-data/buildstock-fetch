@@ -682,7 +682,7 @@ def test_fetch_weather_file(cleanup_downloads):
     assert len(failed_downloads) == 0
     for bldg_id in bldg_ids:
         assert Path(
-            f"data/{bldg_id.get_release_name()}/weather/{bldg_id.state}/{bldg_id.get_weather_station_name()}.csv"
+            f"data/{bldg_id.get_release_name()}/weather/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_weather_station_name()}.csv"
         ).exists()
 
     # Invalid weather file test
