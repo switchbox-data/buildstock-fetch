@@ -117,6 +117,33 @@ def test_interactive_mode(mock_text, mock_checkbox, mock_select, mock_path, mock
     assert "Upgrade ids: ['7']" in result.stdout
     assert "test_output" in result.stdout
 
+    # Mock the questionary responses for another valid run
+    mock_select.return_value.ask.side_effect = ["resstock", "2024", "amy2018", "2", "Download a sample"]
+    mock_checkbox.return_value.ask.side_effect = [["7"], ["CA", "TX"], ["load_curve_monthly", "metadata"]]
+    mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
+    mock_confirm.return_value.ask.return_value = True
+    result = runner.invoke(app, [])
+
+    # Debug output
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+    print(f"Exception: {result.exception}")
+
+    assert result.exit_code == 0
+    assert "BuildStock Fetch Interactive CLI" in result.stdout
+    assert "Welcome to the BuildStock Fetch CLI!" in result.stdout
+    assert "Please select the release information and file type you would like to fetch:" in result.stdout
+    # Check that the result contains the expected values but with dynamic path and new print format
+    assert "Downloading data for:" in result.stdout
+    assert "Product: resstock" in result.stdout
+    assert "Release year: 2024" in result.stdout
+    assert "Weather file: amy2018" in result.stdout
+    assert "Release version: 2" in result.stdout
+    assert "States: ['CA', 'TX']" in result.stdout
+    assert "File type: ['load_curve_monthly', 'metadata']" in result.stdout
+    assert "Upgrade ids: ['7']" in result.stdout
+    assert "test_output" in result.stdout
+
     # Test weather file selection
     mock_select.return_value.ask.side_effect = ["resstock", "2022", "amy2012", "1", "Download a sample"]
     mock_checkbox.return_value.ask.side_effect = [["0"], ["NY"], ["weather"]]

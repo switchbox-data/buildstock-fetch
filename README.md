@@ -8,7 +8,8 @@
 This library simplifies downloading building characteristics and load curve data from NREL's ResStock and ComStock projects.
 
 - **Github repository**: <https://github.com/switchbox-data/buildstock-fetch/>
-- **Documentation** <https://switchbox-data.github.io/buildstock-fetch/>
+- **Documentation**: <https://switchbox-data.github.io/buildstock-fetch/>
+- **PyPI page***: <https://pypi.org/project/buildstock-fetch/>
 
 ## Installing the library
 
