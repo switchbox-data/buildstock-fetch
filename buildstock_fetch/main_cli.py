@@ -1,6 +1,5 @@
 import json
 import pprint
-import random
 from collections.abc import Mapping
 from importlib.resources import files
 from pathlib import Path
@@ -380,6 +379,7 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
             validate=_validate_output_directory,
         ).ask()
     )
+
     output_directory_path = Path(output_directory_str)
     output_directory_path.mkdir(parents=True, exist_ok=True)
     return {
@@ -433,7 +433,7 @@ def _print_data_processing_info(inputs: Mapping[str, Union[str, list[str]]]) -> 
 
 def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> None:
     """Check and print warning for unavailable file types."""
-    unavailable_file_types = ["load_curve_hourly", "load_curve_daily", "load_curve_monthly"]
+    unavailable_file_types = ["load_curve_hourly", "load_curve_daily"]
     selected_file_types = inputs["file_type"].split() if isinstance(inputs["file_type"], str) else inputs["file_type"]
     selected_unavailable = [ft for ft in selected_file_types if ft in unavailable_file_types]
     if selected_unavailable:
@@ -512,8 +512,8 @@ def _get_user_download_choice(bldg_ids: list) -> list:
                 console.print(f"[yellow]No files will be downloaded for State {state}, Upgrade {upgrade_id}.[/yellow]")
                 continue
 
-            # Randomly select the specified number of building IDs for this state-upgrade_id pair
-            selected_for_state_upgrade = random.sample(bldg_list, sample_size)
+            # Select the first N building IDs for this state-upgrade_id pair
+            selected_for_state_upgrade = bldg_list[:sample_size]
             selected_bldg_ids.extend(selected_for_state_upgrade)
             console.print(f"[green]Selected {sample_size} buildings for State {state}, Upgrade {upgrade_id}.[/green]")
 

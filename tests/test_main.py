@@ -160,7 +160,7 @@ def test_download_bldg_data(cleanup_downloads):
         output_dir=Path("data"),
     )
     assert Path(
-        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
+        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
     ).exists()
 
     # Test fetching schedule files
@@ -171,7 +171,7 @@ def test_download_bldg_data(cleanup_downloads):
         output_dir=Path("data"),
     )
     assert Path(
-        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
+        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
     ).exists()
 
     # Test fetching both HPXML and schedule files
@@ -182,10 +182,10 @@ def test_download_bldg_data(cleanup_downloads):
         output_dir=Path("data"),
     )
     assert Path(
-        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
+        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
+        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
     ).exists()
 
 
@@ -198,25 +198,25 @@ def test_fetch_bldg_data(cleanup_downloads):
     print(failed_downloads)
     assert len(downloaded_paths) == 7
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
+        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[1].get_release_name()}/hpxml/{bldg_ids[1].state}/up{str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00.xml"
+        f"data/{bldg_ids[1].get_release_name()}/hpxml/{bldg_ids[1].state}/upgrade={str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[1].get_release_name()}/schedule/{bldg_ids[1].state}/up{str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00_schedule.csv"
+        f"data/{bldg_ids[1].get_release_name()}/schedule/{bldg_ids[1].state}/upgrade={str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00_schedule.csv"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[2].get_release_name()}/hpxml/{bldg_ids[2].state}/up{str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00.xml"
+        f"data/{bldg_ids[2].get_release_name()}/hpxml/{bldg_ids[2].state}/upgrade={str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[2].get_release_name()}/schedule/{bldg_ids[2].state}/up{str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00_schedule.csv"
+        f"data/{bldg_ids[2].get_release_name()}/schedule/{bldg_ids[2].state}/upgrade={str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00_schedule.csv"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/metadata/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
 
     # Test 2021 release - should raise NoBuildingDataError
@@ -263,10 +263,10 @@ def test_fetch_bldg_data(cleanup_downloads):
     assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up01.xml"
+        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up01.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up01_schedule.csv"
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up01_schedule.csv"
     ).exists()
 
 
@@ -284,7 +284,7 @@ def test_fetch_metadata(cleanup_downloads):
     assert len(downloaded_paths) == 1
     assert len(failed_downloads) == 0
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/metadata/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
 
     # Test 2024 comstock release - should raise NoMetadataError
@@ -331,7 +331,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -346,7 +346,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/load_curve_15min/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/load_curve_15min/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -367,7 +367,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -414,11 +414,11 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -448,11 +448,11 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
 
@@ -498,11 +498,11 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     # 2023 release - should work fine
@@ -521,11 +521,11 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     # 2024 comstock amy2018 v2 release - should work fine
@@ -556,11 +556,11 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     # 2024 resstock tmy3 v1 release - should crash
@@ -621,9 +621,47 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+    ).exists()
+
+
+def test_fetch_monthly_load_curve(cleanup_downloads):
+    # 2024 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=173038,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+        BuildingID(
+            bldg_id=119411,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+    ]
+    file_type = ("load_curve_monthly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_monthly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_monthly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_monthly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_monthly.parquet"
     ).exists()
