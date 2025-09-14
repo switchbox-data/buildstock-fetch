@@ -702,7 +702,7 @@ def test_fetch_weather_station_name(cleanup_downloads):
         assert weather_station_name == expected_weather_station_names[i]
 
 
-def test_fetch_weather_file(cleanup_downloads):
+def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
     bldg_ids = [
         BuildingID(
             bldg_id=376421,
@@ -746,7 +746,7 @@ def test_fetch_weather_file(cleanup_downloads):
     output_dir = Path("data")
 
     release_name = "res_2022_amy2012_1"
-    available_releases = buildstock_releases_json()
+    available_releases = buildstock_releases_json
     weather_states = available_releases[release_name]["weather_map_available_states"]
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)

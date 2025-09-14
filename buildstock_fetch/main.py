@@ -1508,16 +1508,18 @@ def _download_weather_files_parallel(
     downloaded_paths: list[Path],
     failed_downloads: list[str],
     console: Console,
+    weather_states: Union[list[str], None] = None,
 ) -> None:
     """Download weather files in parallel with progress tracking."""
     # Create progress tasks for weather file downloads
     weather_file_tasks = {}
     for i, bldg_id in enumerate(bldg_ids):
-        task_id = progress.add_task(
-            f"[magenta]Weather file {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
-            total=0,  # Will be updated when we get the file size
-        )
-        weather_file_tasks[i] = task_id
+        if weather_states is not None and bldg_id.state in weather_states:
+            task_id = progress.add_task(
+                f"[magenta]Weather file {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
+                total=0,  # Will be updated when we get the file size
+            )
+            weather_file_tasks[i] = task_id
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Create a modified version of the download function that uses the specific task IDs
@@ -1697,9 +1699,8 @@ def _execute_downloads(
 
     # Get weather files if requested.
     if file_type_obj.weather:
-        bldg_ids = [bldg_id for bldg_id in bldg_ids if bldg_id.state in weather_states]
         _download_weather_files_parallel(
-            bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+            bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console, weather_states
         )
 
 
