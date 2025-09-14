@@ -759,13 +759,13 @@ def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
     # Invalid weather file test
     bldg_ids = [
         BuildingID(
-            bldg_id=67, release_year="2024", res_com="comstock", weather="tmy3", upgrade_id="0", release_number="2"
+            bldg_id=67, release_year="2024", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="1"
         ),
     ]
     file_type = ("weather",)
     output_dir = Path("data")
 
-    release_name = "com_2024_tmy3_2"
+    release_name = "com_2024_amy2018_1"
     weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
     assert len(downloaded_paths) == 0

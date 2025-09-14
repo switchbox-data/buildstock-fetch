@@ -1511,7 +1511,11 @@ def _download_weather_files_parallel(
     weather_states: Union[list[str], None] = None,
 ) -> None:
     """Download weather files in parallel with progress tracking."""
-    # Break if weather_states is None
+    # Initialize weather_states to empty list if None
+    if weather_states is None:
+        weather_states = []
+
+    # Break if weather_states is empty
     if len(weather_states) == 0:
         for bldg_id in bldg_ids:
             output_file = (
@@ -1737,7 +1741,7 @@ if __name__ == "__main__":  # pragma: no cover
     ]
     file_type = ("weather",)
     output_dir = Path("data")
-    weather_states = []
+    weather_states: list[str] = []
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
     print(downloaded_paths)
     print(failed_downloads)
