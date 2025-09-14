@@ -1656,6 +1656,10 @@ def _execute_downloads(
     weather_states: Union[list[str], None] = None,
 ) -> None:
     """Execute all requested downloads based on file type configuration."""
+    # Initialize weather_states to empty list if None
+    if weather_states is None:
+        weather_states = []
+
     # Download building data if requested.
     if file_type_obj.hpxml or file_type_obj.schedule:
         _download_building_data_parallel(
