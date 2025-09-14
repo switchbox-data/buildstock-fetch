@@ -1704,4 +1704,14 @@ def _execute_downloads(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    pass
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2024", res_com="comstock", weather="tmy3", upgrade_id="0", release_number="2"
+        ),
+    ]
+    file_type = ("weather",)
+    output_dir = Path("data")
+    weather_states = [""]
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
+    print(downloaded_paths)
+    print(failed_downloads)
