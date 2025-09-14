@@ -1244,7 +1244,7 @@ def _download_aggregate_load_curves_parallel(
             )
 
 
-def _download_metadata_single(
+def _download_metadata(
     bldg_ids: list[BuildingID],
     output_dir: Path,
     progress: Progress,
@@ -1255,6 +1255,9 @@ def _download_metadata_single(
         return
 
     bldg = bldg_ids[0]
+    metadata_urls = list({bldg_id.get_metadata_url() for bldg_id in bldg_ids})
+    print(metadata_urls)
+
     metadata_file = _download_metadata_with_progress(bldg, output_dir, progress)
     downloaded_paths.append(metadata_file)
 
@@ -1433,7 +1436,7 @@ def fetch_bldg_data(
 
         # Get metadata if requested. Only one building is needed to get the metadata.
         if file_type_obj.metadata:
-            _download_metadata_single(bldg_ids, output_dir, progress, downloaded_paths)
+            _download_metadata(bldg_ids, output_dir, progress, downloaded_paths)
 
         # Get 15 min load profile timeseries if requested.
         if file_type_obj.load_curve_15min:
