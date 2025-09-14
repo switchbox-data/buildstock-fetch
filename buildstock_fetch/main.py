@@ -1511,15 +1511,40 @@ def _download_weather_files_parallel(
     weather_states: Union[list[str], None] = None,
 ) -> None:
     """Download weather files in parallel with progress tracking."""
+    # Break if weather_states is None
+    if len(weather_states) == 0:
+        for bldg_id in bldg_ids:
+            output_file = (
+                output_dir
+                / bldg_id.get_release_name()
+                / "weather"
+                / f"state={bldg_id.state}"
+                / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                / f"{bldg_id.get_weather_station_name()}.csv"
+            )
+            failed_downloads.append(str(output_file))
+            console.print(f"[red]Weather file not available for {bldg_id.get_release_name()}[/red]")
+        return
     # Create progress tasks for weather file downloads
     weather_file_tasks = {}
     for i, bldg_id in enumerate(bldg_ids):
-        if weather_states is not None and bldg_id.state in weather_states:
+        if bldg_id.state in weather_states:
             task_id = progress.add_task(
                 f"[magenta]Weather file {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
                 total=0,  # Will be updated when we get the file size
             )
             weather_file_tasks[i] = task_id
+        else:
+            output_file = (
+                output_dir
+                / bldg_id.get_release_name()
+                / "weather"
+                / f"state={bldg_id.state}"
+                / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                / f"{bldg_id.get_weather_station_name()}.csv"
+            )
+            failed_downloads.append(str(output_file))
+            console.print(f"[red]Weather file not available for {bldg_id.get_release_name()}[/red]")
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Create a modified version of the download function that uses the specific task IDs
@@ -1712,7 +1737,7 @@ if __name__ == "__main__":  # pragma: no cover
     ]
     file_type = ("weather",)
     output_dir = Path("data")
-    weather_states = [""]
+    weather_states = []
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
     print(downloaded_paths)
     print(failed_downloads)

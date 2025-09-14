@@ -746,8 +746,7 @@ def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
     output_dir = Path("data")
 
     release_name = "res_2022_amy2012_1"
-    available_releases = buildstock_releases_json
-    weather_states = available_releases[release_name]["weather_map_available_states"]
+    weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
     assert len(downloaded_paths) == len(bldg_ids)
@@ -767,7 +766,7 @@ def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
     output_dir = Path("data")
 
     release_name = "com_2024_tmy3_2"
-    available_releases = buildstock_releases_json()
-    weather_states = available_releases[release_name]["weather_map_available_states"]
+    weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
     assert len(downloaded_paths) == 0
+    assert len(failed_downloads) == 1
