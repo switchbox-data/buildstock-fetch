@@ -1608,7 +1608,8 @@ def fetch_bldg_data(
     if file_type_obj.load_curve_annual:
         total_files += len(bldg_ids)  # Add annual load curve files
     if file_type_obj.weather:
-        total_files += len(bldg_ids) * len(weather_states)  # Add weather map files
+        available_bldg_ids = [bldg_id for bldg_id in bldg_ids if bldg_id.state in weather_states]
+        total_files += len(available_bldg_ids) * len(weather_states)  # Add weather map files
 
     console.print(f"\n[bold blue]Starting download of {total_files} files...[/bold blue]")
 
@@ -1627,7 +1628,15 @@ def fetch_bldg_data(
         transient=False,
     ) as progress:
         _execute_downloads(
-            file_type_obj, bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+            file_type_obj,
+            bldg_ids,
+            output_dir,
+            max_workers,
+            progress,
+            downloaded_paths,
+            failed_downloads,
+            console,
+            weather_states,
         )
 
     _print_download_summary(downloaded_paths, failed_downloads, console)
@@ -1644,6 +1653,7 @@ def _execute_downloads(
     downloaded_paths: list[Path],
     failed_downloads: list[str],
     console: Console,
+    weather_states: Union[list[str], None] = None,
 ) -> None:
     """Execute all requested downloads based on file type configuration."""
     # Download building data if requested.
@@ -1683,6 +1693,7 @@ def _execute_downloads(
 
     # Get weather files if requested.
     if file_type_obj.weather:
+        bldg_ids = [bldg_id for bldg_id in bldg_ids if bldg_id.state in weather_states]
         _download_weather_files_parallel(
             bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
         )

@@ -462,9 +462,9 @@ def _check_weather_file_availability(
     """Check weather file availability and update file type lists."""
     available_states, unavailable_states = _check_weather_map_available_states(inputs)
 
-    if len(unavailable_states) == len(inputs["states"]):
+    if len(unavailable_states) > 0:
         selected_unavailable_file_types.append("weather")
-        if "weather" in available_file_types:
+        if len(unavailable_states) == len(inputs["states"]) and "weather" in available_file_types:
             available_file_types.remove("weather")
 
     if len(unavailable_states) > 0:
@@ -764,13 +764,11 @@ def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
     """Process data download based on available file types."""
     available_file_types, unavailable_file_types = _check_unavailable_file_types(inputs)
     if "weather" in unavailable_file_types:
-        available_states, unavailable_states = _check_weather_map_available_states(inputs)
+        available_weather_states, unavailable_weather_states = _check_weather_map_available_states(inputs)
     else:
-        available_states = None
+        available_weather_states = None
 
     if len(available_file_types) > 0:
-        print("TEST TEST")
-        print(available_file_types)
         # Fetch the building ids and download data
         bldg_ids = _fetch_all_building_ids(inputs)
 
@@ -786,7 +784,9 @@ def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
             output_dir = inputs["output_directory"]
             if isinstance(output_dir, list):
                 output_dir = output_dir[0] if output_dir else "."
-            fetch_bldg_data(selected_bldg_ids, file_type_tuple, Path(output_dir), weather_states=available_states)
+            fetch_bldg_data(
+                selected_bldg_ids, file_type_tuple, Path(output_dir), weather_states=available_weather_states
+            )
         else:
             console.print("[yellow]No files selected for download.[/yellow]")
     else:
