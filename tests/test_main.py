@@ -766,7 +766,10 @@ def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
     output_dir = Path("data")
 
     release_name = "com_2024_amy2018_1"
-    weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
+    if "weather_map_available_states" in buildstock_releases_json[release_name]:
+        weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
+    else:
+        weather_states = []
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
     assert len(downloaded_paths) == 0
     assert len(failed_downloads) == 1
