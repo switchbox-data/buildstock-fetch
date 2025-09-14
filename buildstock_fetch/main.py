@@ -1704,4 +1704,4 @@ def _execute_downloads(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    print(fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[:3])
+    pass

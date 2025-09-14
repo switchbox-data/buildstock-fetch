@@ -763,7 +763,7 @@ def _process_direct_inputs(
 def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
     """Process data download based on available file types."""
     available_file_types, unavailable_file_types = _check_unavailable_file_types(inputs)
-    if "weather" in unavailable_file_types:
+    if "weather" in inputs["file_type"]:
         available_weather_states, unavailable_weather_states = _check_weather_map_available_states(inputs)
     else:
         available_weather_states = None
@@ -784,6 +784,10 @@ def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
             output_dir = inputs["output_directory"]
             if isinstance(output_dir, list):
                 output_dir = output_dir[0] if output_dir else "."
+
+            print(selected_bldg_ids)
+            print(available_weather_states)
+            print(file_type_tuple)
             fetch_bldg_data(
                 selected_bldg_ids, file_type_tuple, Path(output_dir), weather_states=available_weather_states
             )

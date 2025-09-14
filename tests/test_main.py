@@ -699,23 +699,48 @@ def test_fetch_weather_station_name(cleanup_downloads):
 def test_fetch_weather_file(cleanup_downloads):
     bldg_ids = [
         BuildingID(
-            bldg_id=67, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+            bldg_id=376421,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
         ),
         BuildingID(
-            bldg_id=69, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+            bldg_id=347694,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
         ),
         BuildingID(
-            bldg_id=132, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+            bldg_id=47568,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
         ),
         BuildingID(
-            bldg_id=161, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+            bldg_id=200309,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
         ),
     ]
 
     file_type = ("weather",)
     output_dir = Path("data")
 
-    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    weather_states = list({bldg_id.state for bldg_id in bldg_ids})
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
     assert len(downloaded_paths) == len(bldg_ids)
     assert len(failed_downloads) == 0
     for bldg_id in bldg_ids:
