@@ -768,33 +768,6 @@ def download_bldg_data(
     return downloaded_paths
 
 
-def download_metadata(bldg_id: BuildingID, output_dir: Path) -> Path:
-    """Download the metadata for a given building.
-
-    Args:
-        bldg_id: A BuildingID object to download metadata for.
-        output_dir: Directory to save the downloaded metadata.
-    """
-
-    download_url = bldg_id.get_metadata_url()
-    if download_url == "":
-        message = f"Metadata is not available for {bldg_id.get_release_name()}"
-        raise NoMetadataError(message)
-    response = requests.get(download_url, timeout=30)
-    response.raise_for_status()
-    output_file = (
-        output_dir
-        / bldg_id.get_release_name()
-        / "metadata"
-        / f"state={bldg_id.state}"
-        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / "metadata.parquet"
-    )
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_bytes(response.content)
-    return output_file
-
-
 def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
     """Download the 15 min load profile timeseries for a given building.
 

@@ -11,7 +11,6 @@ from buildstock_fetch.main import (
     No15minLoadCurveError,
     NoAnnualLoadCurveError,
     NoBuildingDataError,
-    NoMetadataError,
     RequestedFileTypes,
     _parse_requested_file_type,
     download_bldg_data,
@@ -287,7 +286,7 @@ def test_fetch_metadata(cleanup_downloads):
         f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
 
-    # Test 2024 comstock release - should raise NoMetadataError
+    # Test 2024 comstock release - should fail
     bldg_ids = [
         BuildingID(
             bldg_id=7, release_year="2024", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="2"
@@ -296,10 +295,11 @@ def test_fetch_metadata(cleanup_downloads):
     file_type = ("metadata",)
     output_dir = Path("data")
 
-    with pytest.raises(NoMetadataError, match=f"Metadata is not available for {bldg_ids[0].get_release_name()}"):
-        fetch_bldg_data(bldg_ids, file_type, output_dir)
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 0
+    assert len(failed_downloads) == 1
 
-    # Test 2025 comstock release - should raise NoMetadataError
+    # Test 2025 comstock release - should fail
     bldg_ids = [
         BuildingID(
             bldg_id=7, release_year="2025", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="1"
@@ -308,8 +308,9 @@ def test_fetch_metadata(cleanup_downloads):
     file_type = ("metadata",)
     output_dir = Path("data")
 
-    with pytest.raises(NoMetadataError, match=f"Metadata is not available for {bldg_ids[0].get_release_name()}"):
-        fetch_bldg_data(bldg_ids, file_type, output_dir)
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 0
+    assert len(failed_downloads) == 1
 
 
 def test_fetch_15min_load_curve(cleanup_downloads):
