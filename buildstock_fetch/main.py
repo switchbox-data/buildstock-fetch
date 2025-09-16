@@ -917,6 +917,34 @@ def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes
     return file_type_obj
 
 
+def _process_metadata_results(bldg_ids: list[BuildingID], output_dir: Path, downloaded_paths: list[Path]) -> None:
+    """Process the results of a completed metadata download."""
+    metadata_to_bldg_id_mapping: dict[Path, list[int]] = {}
+    for bldg_id in bldg_ids:
+        output_file = (
+            output_dir
+            / bldg_id.get_release_name()
+            / "metadata"
+            / f"state={bldg_id.state}"
+            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+            / "metadata.parquet"
+        )
+        if output_file in downloaded_paths:
+            if output_file in metadata_to_bldg_id_mapping:
+                metadata_to_bldg_id_mapping[output_file].append(bldg_id.bldg_id)
+            else:
+                metadata_to_bldg_id_mapping[output_file] = [bldg_id.bldg_id]
+
+    for metadata_file, bldg_id_list in metadata_to_bldg_id_mapping.items():
+        metadata_df = pl.read_parquet(metadata_file)
+        # Filter to keep only rows where bldg_id is in the list
+        metadata_df_filtered = metadata_df.filter(pl.col("bldg_id").is_in(bldg_id_list))
+        # Write the filtered dataframe back to the same file
+        metadata_df_filtered.write_parquet(metadata_file)
+
+    return
+
+
 def _process_download_results(
     future: concurrent.futures.Future,
     bldg_id: BuildingID,
@@ -1254,6 +1282,7 @@ def _download_metadata(
     print(metadata_urls)
 
     _download_metadata_with_progress(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
+    _process_metadata_results(bldg_ids, output_dir, downloaded_paths)
 
 
 def download_annual_load_curve_with_progress(
