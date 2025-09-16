@@ -430,6 +430,11 @@ def _validate_release_name(release_name: str) -> bool:
     return release_name in valid_release_names
 
 
+def _resolve_unique_metadata_urls(bldg_ids: list[BuildingID]) -> list[str]:
+    """Resolve the unique metadata URLs for a list of building IDs."""
+    return list({bldg_id.get_metadata_url() for bldg_id in bldg_ids})
+
+
 def fetch_bldg_ids(
     product: str, release_year: str, weather_file: str, release_version: str, state: str, upgrade_id: str
 ) -> list[BuildingID]:
@@ -965,38 +970,54 @@ def _process_download_results(
         console.print(f"[red]Download failed for bldg_id {bldg_id}: {e}[/red]")
 
 
-def _download_metadata_with_progress(bldg: BuildingID, output_dir: Path, progress: Progress) -> Path:
+def _download_metadata_with_progress(
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    progress: Progress,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+) -> tuple[list[Path], list[str]]:
     """Download metadata file with progress tracking."""
-    download_url = bldg.get_metadata_url()
-    if download_url == "":
-        message = f"Metadata is not available for {bldg.get_release_name()}"
-        raise NoMetadataError(message)
+    metadata_urls = _resolve_unique_metadata_urls(bldg_ids)
+    downloaded_urls: list[str] = []
+    for bldg_id in bldg_ids:
+        output_file = (
+            output_dir
+            / bldg_id.get_release_name()
+            / "metadata"
+            / f"state={bldg_id.state}"
+            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+            / "metadata.parquet"
+        )
+        download_url = bldg_id.get_metadata_url()
+        if download_url == "":
+            failed_downloads.append(str(output_file))
+            continue
+        if download_url in downloaded_urls:
+            continue
+        downloaded_urls.append(download_url)
+        if download_url in metadata_urls:
+            metadata_urls.remove(download_url)
+        metadata_task = progress.add_task(
+            f"[yellow]Downloading metadata: {download_url}",
+            total=0,  # Will be updated when we get the file size
+        )
+        # Get file size first
+        response = requests.head(download_url, timeout=30)
+        response.raise_for_status()
+        total_size = int(response.headers.get("content-length", 0))
+        progress.update(metadata_task, total=total_size)
 
-    # Create metadata task with progress tracking
-    metadata_task = progress.add_task(
-        "[yellow]Downloading metadata",
-        total=0,  # Will be updated when we get the file size
-    )
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            _download_with_progress(download_url, output_file, progress, metadata_task)
+            downloaded_paths.append(output_file)
+        except Exception as e:
+            failed_downloads.append(str(output_file))
+            console.print(f"[red]Download failed for metadata {bldg_id.bldg_id}: {e}[/red]")
 
-    # Get file size first
-    response = requests.head(download_url, timeout=30)
-    response.raise_for_status()
-    total_size = int(response.headers.get("content-length", 0))
-    progress.update(metadata_task, total=total_size)
-
-    # Download with progress
-    output_file = (
-        output_dir
-        / bldg.get_release_name()
-        / "metadata"
-        / f"state={bldg.state}"
-        / f"upgrade={str(int(bldg.upgrade_id)).zfill(2)}"
-        / "metadata.parquet"
-    )
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    _download_with_progress(download_url, output_file, progress, metadata_task)
-
-    return output_file
+    return downloaded_paths, failed_downloads
 
 
 def _download_building_data_parallel(
@@ -1249,17 +1270,17 @@ def _download_metadata(
     output_dir: Path,
     progress: Progress,
     downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
 ) -> None:
     """Download metadata file (only one needed per release)."""
     if not bldg_ids:
         return
 
-    bldg = bldg_ids[0]
     metadata_urls = list({bldg_id.get_metadata_url() for bldg_id in bldg_ids})
     print(metadata_urls)
 
-    metadata_file = _download_metadata_with_progress(bldg, output_dir, progress)
-    downloaded_paths.append(metadata_file)
+    _download_metadata_with_progress(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
 
 
 def download_annual_load_curve_with_progress(
@@ -1404,7 +1425,8 @@ def fetch_bldg_data(
     # Calculate total files to download
     total_files = 0
     if file_type_obj.metadata:
-        total_files += 1  # Add metadata file
+        unique_metadata_urls = _resolve_unique_metadata_urls(bldg_ids)
+        total_files += len(unique_metadata_urls)  # Add metadata file
     if file_type_obj.load_curve_15min:
         total_files += len(bldg_ids)  # Add 15-minute load curve files
     if file_type_obj.load_curve_monthly:
@@ -1436,7 +1458,7 @@ def fetch_bldg_data(
 
         # Get metadata if requested. Only one building is needed to get the metadata.
         if file_type_obj.metadata:
-            _download_metadata(bldg_ids, output_dir, progress, downloaded_paths)
+            _download_metadata(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
 
         # Get 15 min load profile timeseries if requested.
         if file_type_obj.load_curve_15min:
