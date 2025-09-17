@@ -1,3 +1,4 @@
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -17,6 +18,12 @@ from buildstock_fetch.main import (
     fetch_bldg_data,
     fetch_bldg_ids,
 )
+from buildstock_fetch.main_cli import BUILDSTOCK_RELEASES_FILE
+
+
+@pytest.fixture(scope="function")
+def buildstock_releases_json():
+    return json.loads(Path(BUILDSTOCK_RELEASES_FILE).read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="function")
@@ -666,3 +673,104 @@ def test_fetch_monthly_load_curve(cleanup_downloads):
     assert Path(
         f"data/{bldg_id.get_release_name()}/load_curve_monthly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_monthly.parquet"
     ).exists()
+
+
+def test_fetch_weather_station_name(cleanup_downloads):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=69, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=132, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=161, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+    ]
+
+    expected_weather_station_names = [
+        "G3600130",
+        "G3600810",
+        "G3600810",
+        "G3600710",
+    ]
+
+    for i, bldg_id in enumerate(bldg_ids):
+        weather_station_name = bldg_id.get_weather_station_name()
+        assert weather_station_name == expected_weather_station_names[i]
+
+
+def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=376421,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=347694,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=47568,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=200309,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
+        ),
+    ]
+
+    file_type = ("weather",)
+    output_dir = Path("data")
+
+    release_name = "res_2022_amy2012_1"
+    weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
+    assert len(downloaded_paths) == len(bldg_ids)
+    assert len(failed_downloads) == 0
+    for bldg_id in bldg_ids:
+        assert Path(
+            f"data/{bldg_id.get_release_name()}/weather/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_weather_station_name()}.csv"
+        ).exists()
+
+    # Invalid weather file test
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2024", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="1"
+        ),
+    ]
+    file_type = ("weather",)
+    output_dir = Path("data")
+
+    release_name = "com_2024_amy2018_1"
+    if "weather_map_available_states" in buildstock_releases_json[release_name]:
+        weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
+    else:
+        weather_states = []
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
+    assert len(downloaded_paths) == 0
+    assert len(failed_downloads) == 1

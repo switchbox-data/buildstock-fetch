@@ -71,6 +71,12 @@ class UnknownAggregationFunctionError(ValueError):
     pass
 
 
+class NoWeatherFileError(ValueError):
+    """Raised when weather file is not available for a release."""
+
+    pass
+
+
 METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
@@ -83,6 +89,7 @@ LOAD_CURVE_COLUMN_AGGREGATION = Path(
         .joinpath("2024_resstock_load_curve_columns.csv")
     )
 )
+WEATHER_FILE_DIR = Path(str(files("buildstock_fetch").joinpath("data").joinpath("weather_station_map")))
 
 
 @dataclass
@@ -95,6 +102,7 @@ class RequestedFileTypes:
     load_curve_daily: bool = False
     load_curve_monthly: bool = False
     load_curve_annual: bool = False
+    weather: bool = False
 
 
 @dataclass
@@ -274,6 +282,85 @@ class BuildingID:
         else:
             return ""
 
+    def get_weather_file_url(self) -> str:
+        """Generate the S3 download URL for this building."""
+        if self.get_weather_station_name() == "":
+            return ""
+        return self._build_weather_url()
+
+    def _build_weather_url(self) -> str:
+        """Build the weather file URL based on release year and weather type."""
+        if self.release_year == "2021":
+            return self._build_2021_weather_url()
+        elif self.release_year == "2022":
+            return self._build_2022_weather_url()
+        elif self.release_year == "2023":
+            return self._build_2023_weather_url()
+        elif self.release_year == "2024":
+            return self._build_2024_weather_url()
+        elif self.release_year == "2025":
+            return self._build_2025_weather_url()
+        else:
+            return ""
+
+    def _build_2021_weather_url(self) -> str:
+        """Build weather URL for 2021 release."""
+        if self.weather == "tmy3":
+            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_tmy3.csv"
+        elif self.weather == "amy2018":
+            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2018.csv"
+        elif self.weather == "amy2012":
+            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2012.csv"
+        else:
+            return ""
+
+    def _build_2022_weather_url(self) -> str:
+        """Build weather URL for 2022 release."""
+        if self.weather == "tmy3":
+            return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_TMY3.csv"
+        elif self.weather == "amy2018":
+            return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_2018.csv"
+        elif self.weather == "amy2012":
+            return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_2012.csv"
+        else:
+            return ""
+
+    def _build_2023_weather_url(self) -> str:
+        """Build weather URL for 2023 release."""
+        if self.weather == "tmy3":
+            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_TMY3.csv"
+        elif self.weather == "amy2018":
+            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2018.csv"
+        elif self.weather == "amy2012":
+            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2012.csv"
+        else:
+            return ""
+
+    def _build_2024_weather_url(self) -> str:
+        """Build weather URL for 2024 release."""
+        if self.res_com == "comstock" and self.weather == "amy2018":
+            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2018.csv"
+        else:
+            if self.weather == "tmy3":
+                return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_TMY3.csv"
+            elif self.weather == "amy2018":
+                return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_2018.csv"
+            elif self.weather == "amy2012":
+                return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_2012.csv"
+            else:
+                return ""
+
+    def _build_2025_weather_url(self) -> str:
+        """Build weather URL for 2025 release."""
+        if self.weather == "tmy3":
+            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_TMY3.csv"
+        elif self.weather == "amy2018":
+            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2018.csv"
+        elif self.weather == "amy2012":
+            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2012.csv"
+        else:
+            return ""
+
     def get_annual_load_curve_filename(self) -> str:
         """Generate the filename for the annual load curve."""
         if self.release_year == "2021":
@@ -301,6 +388,28 @@ class BuildingID:
             else:
                 return ""
         else:
+            return ""
+
+    def get_weather_station_name(self) -> str:
+        """Get the weather station name for this building."""
+        weather_map_df = pl.read_parquet(WEATHER_FILE_DIR)
+
+        # Filter by multiple fields for a more specific match
+        weather_station_map = weather_map_df.filter(
+            (pl.col("product") == self.res_com)
+            & (pl.col("release_year") == self.release_year)
+            & (pl.col("weather_file") == self.weather)
+            & (pl.col("release_version") == self.release_number)
+            & (pl.col("bldg_id") == self.bldg_id)
+        )
+
+        # Check if we found a match
+        if weather_station_map.height > 0:
+            # Return the weather station name from the first (and should be only) match
+            weather_station_name = weather_station_map.select("weather_station_name").item()
+            return str(weather_station_name) if weather_station_name is not None else ""
+        else:
+            # No match found, return empty string
             return ""
 
     def _build_annual_load_state_url(self) -> str:
@@ -504,13 +613,13 @@ def fetch_bldg_ids(
 def _download_with_progress(url: str, output_file: Path, progress: Progress, task_id: TaskID) -> int:
     """Download a file with progress tracking."""
     # Get file size first
-    response = requests.head(url, timeout=30)
+    response = requests.head(url, timeout=30, verify=True)
     response.raise_for_status()
     total_size = int(response.headers.get("content-length", 0))
     progress.update(task_id, total=total_size)
 
     # Download with streaming
-    response = requests.get(url, stream=True, timeout=30)
+    response = requests.get(url, stream=True, timeout=30, verify=True)
     response.raise_for_status()
 
     downloaded_size = 0
@@ -623,7 +732,7 @@ def _download_and_process_aggregate(
 ) -> int:
     """Download aggregate time step load curve to temporary file, process with Polars, and save result."""
     # Get file size first for progress tracking
-    response = requests.head(url, timeout=30)
+    response = requests.head(url, timeout=30, verify=True)
     response.raise_for_status()
     total_size = int(response.headers.get("content-length", 0))
     progress.update(task_id, total=total_size)
@@ -640,7 +749,7 @@ def _download_and_process_aggregate(
             session.mount("https://", retry_strategy)
 
             # Download with streaming to temp file
-            response = session.get(url, stream=True, timeout=60)
+            response = session.get(url, stream=True, timeout=60, verify=True)
             response.raise_for_status()
 
             downloaded_size = 0
@@ -711,7 +820,7 @@ def download_bldg_data(
         if progress and task_id is not None:
             _download_with_progress(download_url, output_file, progress, task_id)
         else:
-            response = requests.get(download_url, timeout=30)
+            response = requests.get(download_url, timeout=30, verify=True)
             response.raise_for_status()
             output_file.write_bytes(response.content)
 
@@ -780,7 +889,7 @@ def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
     if download_url == "":
         message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}"
         raise No15minLoadCurveError(message)
-    response = requests.get(download_url, timeout=30)
+    response = requests.get(download_url, timeout=30, verify=True)
     response.raise_for_status()
     output_file = (
         output_dir
@@ -828,7 +937,7 @@ def download_15min_load_curve_with_progress(
     if progress and task_id is not None:
         _download_with_progress(download_url, output_file, progress, task_id)
     else:
-        response = requests.get(download_url, timeout=30)
+        response = requests.get(download_url, timeout=30, verify=True)
         response.raise_for_status()
         output_file.write_bytes(response.content)
 
@@ -878,7 +987,7 @@ def download_aggregate_time_step_load_curve_with_progress(
         with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
             temp_path = Path(temp_file.name)
             try:
-                response = requests.get(download_url, timeout=30)
+                response = requests.get(download_url, timeout=30, verify=True)
                 response.raise_for_status()
                 temp_path.write_bytes(response.content)
 
@@ -914,6 +1023,8 @@ def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes
         file_type_obj.load_curve_monthly = True
     if "load_curve_annual" in file_type:
         file_type_obj.load_curve_annual = True
+    if "weather" in file_type:
+        file_type_obj.weather = True
     return file_type_obj
 
 
@@ -1018,6 +1129,26 @@ def _download_metadata_with_progress(
             console.print(f"[red]Download failed for metadata {bldg_id.bldg_id}: {e}[/red]")
 
     return downloaded_paths, failed_downloads
+
+
+def download_weather_file_with_progress(
+    bldg_id: BuildingID, output_dir: Path, progress: Progress, task_id: TaskID
+) -> Path:
+    """Download weather file with progress tracking."""
+    download_url = bldg_id.get_weather_file_url()
+    if download_url == "":
+        raise NoWeatherFileError()
+    output_file = (
+        output_dir
+        / bldg_id.get_release_name()
+        / "weather"
+        / f"state={bldg_id.state}"
+        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"{bldg_id.get_weather_station_name()}.csv"
+    )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    _download_with_progress(download_url, output_file, progress, task_id)
+    return output_file
 
 
 def _download_building_data_parallel(
@@ -1327,7 +1458,7 @@ def download_annual_load_curve_with_progress(
     if progress and task_id is not None:
         _download_with_progress(download_url, output_file, progress, task_id)
     else:
-        response = requests.get(download_url, timeout=30)
+        response = requests.get(download_url, timeout=30, verify=True)
         response.raise_for_status()
         with open(output_file, "wb") as file:
             file.write(response.content)
@@ -1394,6 +1525,97 @@ def _download_annual_load_curves_parallel(
                 console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
+def _download_weather_files_parallel(
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    max_workers: int,
+    progress: Progress,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+    weather_states: Union[list[str], None] = None,
+) -> None:
+    """Download weather files in parallel with progress tracking."""
+    # Initialize weather_states to empty list if None
+    if weather_states is None:
+        weather_states = []
+
+    # Break if weather_states is empty
+    if len(weather_states) == 0:
+        for bldg_id in bldg_ids:
+            output_file = (
+                output_dir
+                / bldg_id.get_release_name()
+                / "weather"
+                / f"state={bldg_id.state}"
+                / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                / f"{bldg_id.get_weather_station_name()}.csv"
+            )
+            failed_downloads.append(str(output_file))
+            console.print(f"[red]Weather file not available for {bldg_id.get_release_name()}[/red]")
+        return
+    # Create progress tasks for weather file downloads
+    weather_file_tasks = {}
+    for i, bldg_id in enumerate(bldg_ids):
+        if bldg_id.state in weather_states:
+            task_id = progress.add_task(
+                f"[magenta]Weather file {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
+                total=0,  # Will be updated when we get the file size
+            )
+            weather_file_tasks[i] = task_id
+        else:
+            output_file = (
+                output_dir
+                / bldg_id.get_release_name()
+                / "weather"
+                / f"state={bldg_id.state}"
+                / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                / f"{bldg_id.get_weather_station_name()}.csv"
+            )
+            failed_downloads.append(str(output_file))
+            console.print(f"[red]Weather file not available for {bldg_id.get_release_name()}[/red]")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Create a modified version of the download function that uses the specific task IDs
+        def download_weather_file_with_task_id(bldg_id: BuildingID, output_dir: Path, task_id: TaskID) -> Path:
+            return download_weather_file_with_progress(bldg_id, output_dir, progress, task_id)
+
+        future_to_bldg = {
+            executor.submit(download_weather_file_with_task_id, bldg_id, output_dir, weather_file_tasks[i]): bldg_id
+            for i, bldg_id in enumerate(bldg_ids)
+        }
+
+        for future in concurrent.futures.as_completed(future_to_bldg):
+            bldg_id = future_to_bldg[future]
+            try:
+                output_file = future.result()
+                downloaded_paths.append(output_file)
+            except NoWeatherFileError:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "weather"
+                    / f"state={bldg_id.state}"
+                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                    / f"{bldg_id.get_weather_station_name()}.csv"
+                )
+                failed_downloads.append(str(output_file))
+                console.print(f"[red]Weather file not available for {bldg_id.get_release_name()}[/red]")
+                raise
+            except Exception as e:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "weather"
+                    / f"state={bldg_id.state}"
+                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                    / f"{bldg_id.get_weather_station_name()}.csv"
+                )
+                failed_downloads.append(str(output_file))
+                console.print(f"[red]Download failed for weather file {bldg_id.bldg_id}: {e}[/red]")
+                raise
+
+
 def _print_download_summary(downloaded_paths: list[Path], failed_downloads: list[str], console: Console) -> None:
     """Print a summary of the download results."""
     console.print("\n[bold green]Download complete![/bold green]")
@@ -1405,7 +1627,11 @@ def _print_download_summary(downloaded_paths: list[Path], failed_downloads: list
 
 
 def fetch_bldg_data(
-    bldg_ids: list[BuildingID], file_type: tuple[str, ...], output_dir: Path, max_workers: int = 5
+    bldg_ids: list[BuildingID],
+    file_type: tuple[str, ...],
+    output_dir: Path,
+    max_workers: int = 5,
+    weather_states: Union[list[str], None] = None,
 ) -> tuple[list[Path], list[str]]:
     """Download building data for a given list of building ids
 
@@ -1419,6 +1645,10 @@ def fetch_bldg_data(
     """
     file_type_obj = _parse_requested_file_type(file_type)
     console = Console()
+
+    # Initialize weather_states to empty list if None
+    if weather_states is None:
+        weather_states = []
 
     downloaded_paths: list[Path] = []
     failed_downloads: list[str] = []
@@ -1434,6 +1664,9 @@ def fetch_bldg_data(
         total_files += len(bldg_ids)  # Add 15-minute load curve files
     if file_type_obj.load_curve_annual:
         total_files += len(bldg_ids)  # Add annual load curve files
+    if file_type_obj.weather:
+        available_bldg_ids = [bldg_id for bldg_id in bldg_ids if bldg_id.state in weather_states]
+        total_files += len(available_bldg_ids) * len(weather_states)  # Add weather map files
 
     console.print(f"\n[bold blue]Starting download of {total_files} files...[/bold blue]")
 
@@ -1451,45 +1684,90 @@ def fetch_bldg_data(
         console=console,
         transient=False,
     ) as progress:
-        # Download building data if requested.
-        if file_type_obj.hpxml or file_type_obj.schedule:
-            _download_building_data_parallel(
-                bldg_ids, file_type_obj, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
-            )
-
-        # Get metadata if requested. Only one building is needed to get the metadata.
-        if file_type_obj.metadata:
-            _download_metadata(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
-
-        # Get 15 min load profile timeseries if requested.
-        if file_type_obj.load_curve_15min:
-            _download_15min_load_curves_parallel(
-                bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
-            )
-
-        if file_type_obj.load_curve_monthly:
-            aggregate_time_step = "monthly"
-            _download_aggregate_load_curves_parallel(
-                bldg_ids,
-                output_dir,
-                aggregate_time_step,
-                max_workers,
-                progress,
-                downloaded_paths,
-                failed_downloads,
-                console,
-            )
-
-        # Get annual load curve if requested.
-        if file_type_obj.load_curve_annual:
-            _download_annual_load_curves_parallel(
-                bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
-            )
+        _execute_downloads(
+            file_type_obj,
+            bldg_ids,
+            output_dir,
+            max_workers,
+            progress,
+            downloaded_paths,
+            failed_downloads,
+            console,
+            weather_states,
+        )
 
     _print_download_summary(downloaded_paths, failed_downloads, console)
 
     return downloaded_paths, failed_downloads
 
 
+def _execute_downloads(
+    file_type_obj: RequestedFileTypes,
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    max_workers: int,
+    progress: Progress,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+    weather_states: Union[list[str], None] = None,
+) -> None:
+    """Execute all requested downloads based on file type configuration."""
+    # Initialize weather_states to empty list if None
+    if weather_states is None:
+        weather_states = []
+
+    # Download building data if requested.
+    if file_type_obj.hpxml or file_type_obj.schedule:
+        _download_building_data_parallel(
+            bldg_ids, file_type_obj, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+        )
+
+        # Get metadata if requested. Only one building is needed to get the metadata.
+        if file_type_obj.metadata:
+            _download_metadata(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
+
+    # Get 15 min load profile timeseries if requested.
+    if file_type_obj.load_curve_15min:
+        _download_15min_load_curves_parallel(
+            bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+        )
+
+    if file_type_obj.load_curve_monthly:
+        aggregate_time_step = "monthly"
+        _download_aggregate_load_curves_parallel(
+            bldg_ids,
+            output_dir,
+            aggregate_time_step,
+            max_workers,
+            progress,
+            downloaded_paths,
+            failed_downloads,
+            console,
+        )
+
+    # Get annual load curve if requested.
+    if file_type_obj.load_curve_annual:
+        _download_annual_load_curves_parallel(
+            bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+        )
+
+    # Get weather files if requested.
+    if file_type_obj.weather:
+        _download_weather_files_parallel(
+            bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console, weather_states
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
-    print(fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[:3])
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2024", res_com="comstock", weather="tmy3", upgrade_id="0", release_number="2"
+        ),
+    ]
+    file_type = ("weather",)
+    output_dir = Path("data")
+    weather_states: list[str] = []
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
+    print(downloaded_paths)
+    print(failed_downloads)
