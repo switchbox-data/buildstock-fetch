@@ -936,9 +936,8 @@ def _process_metadata_results(bldg_ids: list[BuildingID], output_dir: Path, down
                 metadata_to_bldg_id_mapping[output_file] = [bldg_id.bldg_id]
 
     for metadata_file, bldg_id_list in metadata_to_bldg_id_mapping.items():
-        metadata_df = pl.read_parquet(metadata_file)
-        # Filter to keep only rows where bldg_id is in the list
-        metadata_df_filtered = metadata_df.filter(pl.col("bldg_id").is_in(bldg_id_list))
+        # Use scan_parquet for lazy evaluation and better memory efficiency
+        metadata_df_filtered = pl.scan_parquet(metadata_file).filter(pl.col("bldg_id").is_in(bldg_id_list)).collect()
         # Write the filtered dataframe back to the same file
         metadata_df_filtered.write_parquet(metadata_file)
 
