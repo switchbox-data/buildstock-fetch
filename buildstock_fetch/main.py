@@ -1723,9 +1723,9 @@ def _execute_downloads(
             bldg_ids, file_type_obj, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
         )
 
-        # Get metadata if requested. Only one building is needed to get the metadata.
-        if file_type_obj.metadata:
-            _download_metadata(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
+    # Get metadata if requested. Only one building is needed to get the metadata.
+    if file_type_obj.metadata:
+        _download_metadata(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
 
     # Get 15 min load profile timeseries if requested.
     if file_type_obj.load_curve_15min:
