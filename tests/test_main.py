@@ -320,6 +320,48 @@ def test_fetch_metadata(cleanup_downloads):
     assert len(failed_downloads) == 1
 
 
+def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=320214,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=95261,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=95272,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="2",
+            state="NY",
+        ),
+    ]
+    file_type = ("metadata",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 3
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+    ).exists()
+
+
 def test_fetch_15min_load_curve(cleanup_downloads):
     bldg_ids = [
         BuildingID(
