@@ -3,6 +3,7 @@ import shutil
 import sys
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -12,7 +13,6 @@ from buildstock_fetch.main import (
     No15minLoadCurveError,
     NoAnnualLoadCurveError,
     NoBuildingDataError,
-    NoMetadataError,
     RequestedFileTypes,
     _parse_requested_file_type,
     download_bldg_data,
@@ -294,7 +294,7 @@ def test_fetch_metadata(cleanup_downloads):
         f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
 
-    # Test 2024 comstock release - should raise NoMetadataError
+    # Test 2024 comstock release - should fail
     bldg_ids = [
         BuildingID(
             bldg_id=7, release_year="2024", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="2"
@@ -303,10 +303,11 @@ def test_fetch_metadata(cleanup_downloads):
     file_type = ("metadata",)
     output_dir = Path("data")
 
-    with pytest.raises(NoMetadataError, match=f"Metadata is not available for {bldg_ids[0].get_release_name()}"):
-        fetch_bldg_data(bldg_ids, file_type, output_dir)
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 0
+    assert len(failed_downloads) == 1
 
-    # Test 2025 comstock release - should raise NoMetadataError
+    # Test 2025 comstock release - should fail
     bldg_ids = [
         BuildingID(
             bldg_id=7, release_year="2025", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="1"
@@ -315,8 +316,57 @@ def test_fetch_metadata(cleanup_downloads):
     file_type = ("metadata",)
     output_dir = Path("data")
 
-    with pytest.raises(NoMetadataError, match=f"Metadata is not available for {bldg_ids[0].get_release_name()}"):
-        fetch_bldg_data(bldg_ids, file_type, output_dir)
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 0
+    assert len(failed_downloads) == 1
+
+
+def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=320214,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=95261,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=95272,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="2",
+            state="NY",
+        ),
+    ]
+    file_type = ("metadata",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+    ).exists()
+    metadata_file_path = downloaded_paths[0]
+    metadata_file = pl.read_parquet(metadata_file_path)
+    assert metadata_file.height == 3
+    assert metadata_file.filter(pl.col("bldg_id") == 320214).height == 1
+    assert metadata_file.filter(pl.col("bldg_id") == 95261).height == 1
+    assert metadata_file.filter(pl.col("bldg_id") == 95272).height == 1
 
 
 def test_fetch_15min_load_curve(cleanup_downloads):
