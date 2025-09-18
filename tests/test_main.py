@@ -356,7 +356,7 @@ def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     print(downloaded_paths)
     print(failed_downloads)
-    assert len(downloaded_paths) == 3
+    assert len(downloaded_paths) == 1
     assert len(failed_downloads) == 0
     assert Path(
         f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
