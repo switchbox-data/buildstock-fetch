@@ -636,6 +636,65 @@ def _download_with_progress(url: str, output_file: Path, progress: Progress, tas
     return downloaded_size
 
 
+def _download_with_progress_metadata(url: str, output_file: Path, progress: Progress, task_id: TaskID) -> int:
+    """Download a metadata file with progress tracking and append to existing file if it exists."""
+    # Get file size first
+    response = requests.head(url, timeout=30, verify=True)
+    response.raise_for_status()
+    total_size = int(response.headers.get("content-length", 0))
+    progress.update(task_id, total=total_size)
+
+    # Download with streaming
+    response = requests.get(url, stream=True, timeout=30, verify=True)
+    response.raise_for_status()
+
+    downloaded_size = 0
+
+    # Check if output file already exists
+    if output_file.exists():
+        # Read existing parquet file
+        existing_df = pl.read_parquet(output_file)
+
+        # Download new data to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+            temp_path = Path(temp_file.name)
+
+            try:
+                # Download to temp file
+                with open(temp_path, "wb") as file:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            file.write(chunk)
+                            downloaded_size += len(chunk)
+                            if total_size > 0:
+                                progress.update(task_id, completed=downloaded_size)
+
+                # Read new data
+                new_df = pl.read_parquet(temp_path)
+
+                # Concatenate existing and new data, removing duplicates
+                combined_df = pl.concat([existing_df, new_df]).unique()
+
+                # Write combined data back to original file
+                combined_df.write_parquet(output_file)
+
+            finally:
+                # Clean up temp file
+                if temp_path.exists():
+                    temp_path.unlink()
+    else:
+        # File doesn't exist, download normally
+        with open(str(output_file), "wb") as file:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    file.write(chunk)
+                    downloaded_size += len(chunk)
+                    if total_size > 0:
+                        progress.update(task_id, completed=downloaded_size)
+
+    return downloaded_size
+
+
 def _get_time_step_grouping_key(aggregate_time_step: str) -> tuple[str, str]:
     """Get the grouping key and format string for a given time step.
 
@@ -1122,7 +1181,7 @@ def _download_metadata_with_progress(
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         try:
-            _download_with_progress(download_url, output_file, progress, metadata_task)
+            _download_with_progress_metadata(download_url, output_file, progress, metadata_task)
             downloaded_paths.append(output_file)
         except Exception as e:
             failed_downloads.append(str(output_file))
@@ -1407,10 +1466,6 @@ def _download_metadata(
     """Download metadata file (only one needed per release)."""
     if not bldg_ids:
         return
-
-    metadata_urls = list({bldg_id.get_metadata_url() for bldg_id in bldg_ids})
-    print(metadata_urls)
-
     _download_metadata_with_progress(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
     _process_metadata_results(bldg_ids, output_dir, downloaded_paths)
 
