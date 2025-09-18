@@ -3,6 +3,7 @@ import shutil
 import sys
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -360,6 +361,12 @@ def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
     assert Path(
         f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
+    metadata_file_path = downloaded_paths[0]
+    metadata_file = pl.read_parquet(metadata_file_path)
+    assert metadata_file.height == 3
+    assert metadata_file.filter(pl.col("bldg_id") == 320214).height == 1
+    assert metadata_file.filter(pl.col("bldg_id") == 95261).height == 1
+    assert metadata_file.filter(pl.col("bldg_id") == 95272).height == 1
 
 
 def test_fetch_15min_load_curve(cleanup_downloads):
