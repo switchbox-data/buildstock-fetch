@@ -1,5 +1,7 @@
 import concurrent.futures
+import gc
 import json
+import os
 import tempfile
 import zipfile
 from dataclasses import asdict, dataclass
@@ -652,10 +654,7 @@ def _download_with_progress_metadata(url: str, output_file: Path, progress: Prog
 
     # Check if output file already exists
     if output_file.exists():
-        # Read existing parquet file
-        existing_df = pl.read_parquet(output_file)
-
-        # Download new data to temporary file
+        # Use streaming approach to avoid loading entire files into memory
         with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
             temp_path = Path(temp_file.name)
 
@@ -669,14 +668,13 @@ def _download_with_progress_metadata(url: str, output_file: Path, progress: Prog
                             if total_size > 0:
                                 progress.update(task_id, completed=downloaded_size)
 
-                # Read new data
-                new_df = pl.read_parquet(temp_path)
-
-                # Concatenate existing and new data, removing duplicates
-                combined_df = pl.concat([existing_df, new_df]).unique()
-
-                # Write combined data back to original file
-                combined_df.write_parquet(output_file)
+                # Use streaming concatenation to avoid loading entire files into memory
+                # This streams both files and concatenates them without loading into memory
+                (
+                    pl.concat([pl.scan_parquet(output_file), pl.scan_parquet(temp_path)])
+                    .unique()
+                    .sink_parquet(output_file)
+                )
 
             finally:
                 # Clean up temp file
@@ -1106,10 +1104,41 @@ def _process_metadata_results(bldg_ids: list[BuildingID], output_dir: Path, down
                 metadata_to_bldg_id_mapping[output_file] = [bldg_id.bldg_id]
 
     for metadata_file, bldg_id_list in metadata_to_bldg_id_mapping.items():
-        # Use scan_parquet for lazy evaluation and better memory efficiency
-        metadata_df_filtered = pl.scan_parquet(metadata_file).filter(pl.col("bldg_id").is_in(bldg_id_list)).collect()
-        # Write the filtered dataframe back to the same file
-        metadata_df_filtered.write_parquet(metadata_file)
+        # First, get column names without loading data into memory
+        schema = pl.scan_parquet(metadata_file).collect_schema()
+
+        # Filter columns to only keep those containing "upgrade", "bldg_id", "metadata_index", or "in."
+        columns_to_keep = []
+        for col in schema:
+            if any(keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index", "in."]):
+                columns_to_keep.append(col)
+
+        # Use streaming operations to avoid loading entire file into memory
+        # Create a temporary file to write the filtered data
+        temp_file = str(metadata_file) + ".tmp"
+
+        try:
+            # Stream the data: filter rows, select columns, and write in one operation
+            (
+                pl.scan_parquet(metadata_file)
+                .filter(pl.col("bldg_id").is_in(bldg_id_list))
+                .select(columns_to_keep)
+                .sink_parquet(temp_file)
+            )
+
+            # Replace the original file with the filtered one
+            import shutil
+
+            shutil.move(temp_file, metadata_file)
+
+            # Force garbage collection to free memory immediately
+            gc.collect()
+
+        except Exception:
+            # Clean up temp file if something goes wrong
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            raise
 
     return
 
@@ -1170,7 +1199,7 @@ def _download_metadata_with_progress(
         if download_url in metadata_urls:
             metadata_urls.remove(download_url)
         metadata_task = progress.add_task(
-            f"[yellow]Downloading metadata: {download_url}",
+            f"[yellow]Downloading metadata: {bldg_id.get_release_name()} - (upgrade {bldg_id.upgrade_id}) - {bldg_id.state}",
             total=0,  # Will be updated when we get the file size
         )
         # Get file size first
