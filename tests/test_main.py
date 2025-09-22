@@ -293,12 +293,12 @@ def test_fetch_metadata(cleanup_downloads):
     assert len(downloaded_paths) == 1
     assert len(failed_downloads) == 0
     metadata_file = pl.read_parquet(downloaded_paths[0])
-    # Check that each required column pattern is contained in at least one actual column name
+    # Check that each required column pattern is a prefix of at least one actual column name
     for required_col in METADATA_COLUMNS:
-        found = any(required_col in actual_col for actual_col in metadata_file.columns)
+        found = any(actual_col.startswith(required_col) for actual_col in metadata_file.columns)
         assert found
     for not_required_col in NOT_METADATA_COLUMNS:
-        found = any(not_required_col in actual_col for actual_col in metadata_file.columns)
+        found = any(actual_col.startswith(not_required_col) for actual_col in metadata_file.columns)
         assert not found
     assert Path(
         f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
@@ -375,12 +375,12 @@ def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
     ).exists()
     metadata_file_path = downloaded_paths[0]
     metadata_file = pl.read_parquet(metadata_file_path)
-    # Check that each required column pattern is contained in at least one actual column name
+    # Check that each required column pattern is a prefix of at least one actual column name
     for required_col in METADATA_COLUMNS:
-        found = any(required_col in actual_col for actual_col in metadata_file.columns)
+        found = any(actual_col.startswith(required_col) for actual_col in metadata_file.columns)
         assert found
     for not_required_col in NOT_METADATA_COLUMNS:
-        found = any(not_required_col in actual_col for actual_col in metadata_file.columns)
+        found = any(actual_col.startswith(not_required_col) for actual_col in metadata_file.columns)
         assert not found
     assert metadata_file.height == 3
     assert metadata_file.filter(pl.col("bldg_id") == 320214).height == 1
