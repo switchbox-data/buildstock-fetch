@@ -279,6 +279,7 @@ def test_fetch_bldg_data(cleanup_downloads):
 
 def test_fetch_metadata(cleanup_downloads):
     METADATA_COLUMNS = ["bldg_id", "upgrade", "in."]
+    NOT_METADATA_COLUMNS = ["out."]
     bldg_ids = [
         BuildingID(
             bldg_id=7, release_year="2024", res_com="resstock", weather="tmy3", upgrade_id="1", release_number="2"
@@ -296,6 +297,9 @@ def test_fetch_metadata(cleanup_downloads):
     for required_col in METADATA_COLUMNS:
         found = any(required_col in actual_col for actual_col in metadata_file.columns)
         assert found
+    for not_required_col in NOT_METADATA_COLUMNS:
+        found = any(not_required_col in actual_col for actual_col in metadata_file.columns)
+        assert not found
     assert Path(
         f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
@@ -329,6 +333,7 @@ def test_fetch_metadata(cleanup_downloads):
 
 def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
     METADATA_COLUMNS = ["bldg_id", "upgrade", "in."]
+    NOT_METADATA_COLUMNS = ["out."]
     bldg_ids = [
         BuildingID(
             bldg_id=320214,
@@ -374,6 +379,9 @@ def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
     for required_col in METADATA_COLUMNS:
         found = any(required_col in actual_col for actual_col in metadata_file.columns)
         assert found
+    for not_required_col in NOT_METADATA_COLUMNS:
+        found = any(not_required_col in actual_col for actual_col in metadata_file.columns)
+        assert not found
     assert metadata_file.height == 3
     assert metadata_file.filter(pl.col("bldg_id") == 320214).height == 1
     assert metadata_file.filter(pl.col("bldg_id") == 95261).height == 1
