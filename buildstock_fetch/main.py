@@ -1151,12 +1151,15 @@ def _process_annual_load_curve_file(file_path: Path) -> None:
     """
     # First, get column names without loading data into memory
     schema = pl.scan_parquet(file_path).collect_schema()
+    print(f"Columns before filtering in {file_path}: {list(schema.keys())}")
 
     # Filter columns to only keep those containing "bldg_id", "upgrade", "metadata_index", or "out."
     columns_to_keep = []
     for col in schema:
         if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index", "out."]):
             columns_to_keep.append(col)
+
+    print(f"Columns after filtering in {file_path}: {columns_to_keep}")
 
     # Use streaming operations to avoid loading entire file into memory
     # Create a temporary file to write the filtered data

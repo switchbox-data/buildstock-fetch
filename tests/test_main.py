@@ -539,16 +539,16 @@ def _assert_annual_load_curve_columns(
 
     Args:
         file_path: Path to the parquet file to check
-        required_columns: List of column patterns that must be present
-        not_required_columns: List of column patterns that must not be present
+        required_columns: List of column patterns that must be present (checked as prefix)
+        not_required_columns: List of column patterns that must not be present (checked as prefix)
     """
     annual_load_curve_file = pl.read_parquet(file_path)
-    # Check that each required column pattern is contained in at least one actual column name
+    # Check that each required column pattern is a prefix of at least one actual column name
     for required_col in required_columns:
-        found = any(required_col in actual_col for actual_col in annual_load_curve_file.columns)
+        found = any(actual_col.startswith(required_col) for actual_col in annual_load_curve_file.columns)
         assert found
     for not_required_col in not_required_columns:
-        found = any(not_required_col in actual_col for actual_col in annual_load_curve_file.columns)
+        found = any(actual_col.startswith(not_required_col) for actual_col in annual_load_curve_file.columns)
         assert not found
 
 
