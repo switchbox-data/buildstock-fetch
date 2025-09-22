@@ -1153,9 +1153,12 @@ def _process_annual_load_curve_file(file_path: Path) -> None:
     schema = pl.scan_parquet(file_path).collect_schema()
 
     # Filter columns to only keep those containing "bldg_id", "upgrade", "metadata_index", or "out."
+    # and remove columns that start with "in."
     columns_to_keep = []
     for col in schema:
-        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index", "out."]):
+        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index", "out."]) and not col.startswith(
+            "in."
+        ):
             columns_to_keep.append(col)
 
     # Use streaming operations to avoid loading entire file into memory
