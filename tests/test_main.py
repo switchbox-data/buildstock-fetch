@@ -532,7 +532,29 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     ).exists()
 
 
+def _assert_annual_load_curve_columns(
+    file_path: Path, required_columns: list[str], not_required_columns: list[str]
+) -> None:
+    """Helper function to assert column patterns in annual load curve files.
+
+    Args:
+        file_path: Path to the parquet file to check
+        required_columns: List of column patterns that must be present
+        not_required_columns: List of column patterns that must not be present
+    """
+    annual_load_curve_file = pl.read_parquet(file_path)
+    # Check that each required column pattern is contained in at least one actual column name
+    for required_col in required_columns:
+        found = any(required_col in actual_col for actual_col in annual_load_curve_file.columns)
+        assert found
+    for not_required_col in not_required_columns:
+        found = any(not_required_col in actual_col for actual_col in annual_load_curve_file.columns)
+        assert not found
+
+
 def test_fetch_annual_load_curve(cleanup_downloads):
+    ANNUAL_LOAD_CURVE_COLUMNS = ["bldg_id", "upgrade", "out."]
+    NOT_ANNUAL_LOAD_CURVE_COLUMNS = ["in."]
     # 2021 release - should raise NoAnnualLoadCurveError
     bldg_ids = [BuildingID(bldg_id=7, release_year="2021", res_com="resstock", weather="tmy3", upgrade_id="1")]
     file_type = ("load_curve_annual",)
@@ -571,6 +593,8 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     output_dir = Path("data")
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     assert len(downloaded_paths) == 2
+    _assert_annual_load_curve_columns(downloaded_paths[0], ANNUAL_LOAD_CURVE_COLUMNS, NOT_ANNUAL_LOAD_CURVE_COLUMNS)
+    _assert_annual_load_curve_columns(downloaded_paths[1], ANNUAL_LOAD_CURVE_COLUMNS, NOT_ANNUAL_LOAD_CURVE_COLUMNS)
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
@@ -595,6 +619,8 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
+    _assert_annual_load_curve_columns(downloaded_paths[0], ANNUAL_LOAD_CURVE_COLUMNS, NOT_ANNUAL_LOAD_CURVE_COLUMNS)
+    _assert_annual_load_curve_columns(downloaded_paths[1], ANNUAL_LOAD_CURVE_COLUMNS, NOT_ANNUAL_LOAD_CURVE_COLUMNS)
     bldg_id = bldg_ids[0]
     assert Path(
         f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
@@ -630,6 +656,8 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
+    _assert_annual_load_curve_columns(downloaded_paths[0], ANNUAL_LOAD_CURVE_COLUMNS, NOT_ANNUAL_LOAD_CURVE_COLUMNS)
+    _assert_annual_load_curve_columns(downloaded_paths[1], ANNUAL_LOAD_CURVE_COLUMNS, NOT_ANNUAL_LOAD_CURVE_COLUMNS)
     bldg_id = bldg_ids[0]
     assert Path(
         f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
@@ -695,6 +723,8 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
+    _assert_annual_load_curve_columns(downloaded_paths[0], ANNUAL_LOAD_CURVE_COLUMNS, NOT_ANNUAL_LOAD_CURVE_COLUMNS)
+    _assert_annual_load_curve_columns(downloaded_paths[1], ANNUAL_LOAD_CURVE_COLUMNS, NOT_ANNUAL_LOAD_CURVE_COLUMNS)
     bldg_id = bldg_ids[0]
     assert Path(
         f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
