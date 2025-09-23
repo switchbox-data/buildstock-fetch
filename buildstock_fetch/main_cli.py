@@ -29,7 +29,7 @@ app = typer.Typer(
 BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json"))
 
 # File types that haven't been implemented yet
-UNAVAILABLE_FILE_TYPES = ["load_curve_hourly", "load_curve_daily"]
+UNAVAILABLE_FILE_TYPES = ["load_curve_daily"]
 
 
 class InvalidProductError(Exception):
@@ -785,9 +785,6 @@ def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
             if isinstance(output_dir, list):
                 output_dir = output_dir[0] if output_dir else "."
 
-            print(selected_bldg_ids)
-            print(available_weather_states)
-            print(file_type_tuple)
             fetch_bldg_data(
                 selected_bldg_ids, file_type_tuple, Path(output_dir), weather_states=available_weather_states
             )
