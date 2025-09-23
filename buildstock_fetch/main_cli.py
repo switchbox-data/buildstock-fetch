@@ -125,6 +125,14 @@ def _get_release_versions_options(
     )
     available_release_versions = list({parsed_releases[release]["release_version"] for release in available_releases})
 
+    if (
+        product_type == "resstock"
+        and weather_file == "tmy3"
+        and release_year == "2024"
+        and "1" in available_release_versions
+    ):
+        available_release_versions.remove("1")
+
     # Define the desired order: "2", "1.1", "1"
     display_order = ["2", "1.1", "1"]
 

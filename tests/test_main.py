@@ -1,6 +1,7 @@
 import json
 import shutil
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import polars as pl
@@ -722,6 +723,49 @@ def test_fetch_monthly_load_curve(cleanup_downloads):
     assert Path(
         f"data/{bldg_id.get_release_name()}/load_curve_monthly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_monthly.parquet"
     ).exists()
+
+
+def test_fetch_hourly_load_curve(cleanup_downloads):
+    # 2024 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=173038,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+        BuildingID(
+            bldg_id=119411,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
 
 
 def test_fetch_weather_station_name(cleanup_downloads):
