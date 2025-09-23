@@ -1715,8 +1715,10 @@ def fetch_bldg_data(
         total_files += len(unique_metadata_urls)  # Add metadata file
     if file_type_obj.load_curve_15min:
         total_files += len(bldg_ids)  # Add 15-minute load curve files
+    if file_type_obj.load_curve_hourly:
+        total_files += len(bldg_ids)  # Add hourly load curve files
     if file_type_obj.load_curve_monthly:
-        total_files += len(bldg_ids)  # Add 15-minute load curve files
+        total_files += len(bldg_ids)  # Add monthly load curve files
     if file_type_obj.load_curve_annual:
         total_files += len(bldg_ids)  # Add annual load curve files
     if file_type_obj.weather:
@@ -1786,6 +1788,19 @@ def _execute_downloads(
     if file_type_obj.load_curve_15min:
         _download_15min_load_curves_parallel(
             bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+        )
+
+    if file_type_obj.load_curve_hourly:
+        aggregate_time_step = "hourly"
+        _download_aggregate_load_curves_parallel(
+            bldg_ids,
+            output_dir,
+            aggregate_time_step,
+            max_workers,
+            progress,
+            downloaded_paths,
+            failed_downloads,
+            console,
         )
 
     if file_type_obj.load_curve_monthly:
