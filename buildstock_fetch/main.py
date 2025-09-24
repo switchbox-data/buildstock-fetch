@@ -717,28 +717,6 @@ def _get_time_step_grouping_key(aggregate_time_step: str) -> tuple[str, str]:
     return time_step_configs[aggregate_time_step]
 
 
-def _get_expected_timesteps_per_period(aggregate_time_step: str) -> int:
-    """Get the expected number of 15-minute timesteps per aggregation period.
-
-    Args:
-        aggregate_time_step: The time step to aggregate to ("hourly", "daily")
-
-    Returns:
-        Expected number of 15-minute timesteps per period
-    """
-    # Assuming original data is 15-minute intervals
-    timesteps_per_period = {
-        "hourly": 4,  # 4 x 15-minute intervals per hour
-        "daily": 96,  # 24 hours * 4 intervals per hour
-    }
-
-    if aggregate_time_step not in timesteps_per_period:
-        msg = f"Unknown aggregate time step: {aggregate_time_step}"
-        raise ValueError(msg)
-
-    return timesteps_per_period[aggregate_time_step]
-
-
 def _create_aggregation_expressions(load_curve: pl.DataFrame, column_aggregations: dict[str, str]) -> list[pl.Expr]:
     """Create aggregation expressions for each column based on the aggregation rules.
 
@@ -777,7 +755,7 @@ def _create_aggregation_expressions(load_curve: pl.DataFrame, column_aggregation
 def _aggregate_load_curve_aggregate(load_curve: pl.DataFrame, aggregate_time_step: str) -> pl.DataFrame:
     """Aggregate the 15-minute load curve to specified time step based on aggregation rules.
 
-    Only includes periods with complete timesteps (e.g., 4 timesteps for hourly aggregation).
+    Removes the last row to ensure complete aggregation periods.
     """
     # Read the aggregation rules from CSV
     aggregation_rules = pl.read_csv(LOAD_CURVE_COLUMN_AGGREGATION)
@@ -793,37 +771,14 @@ def _aggregate_load_curve_aggregate(load_curve: pl.DataFrame, aggregate_time_ste
     # Convert timestamp to datetime if it's not already
     load_curve = load_curve.with_columns(pl.col("timestamp").cast(pl.Datetime))
 
+    # Remove the last row to ensure complete aggregation periods
+    load_curve = load_curve.slice(0, -1)
+
     # Get the grouping key configuration
     grouping_key, format_string = _get_time_step_grouping_key(aggregate_time_step)
 
     # Create grouping key
     load_curve = load_curve.with_columns(pl.col("timestamp").dt.strftime(format_string).alias(grouping_key))
-
-    # Filter for complete periods only
-    if aggregate_time_step == "monthly":
-        # For monthly, we need to calculate expected timesteps based on days in month
-        # Get the count of timesteps per group and filter for complete months
-        # A complete month should have all days * 96 timesteps per day
-        load_curve = load_curve.with_columns(pl.col("timestamp").dt.days_in_month().alias("days_in_month"))
-
-        # Count timesteps per group and filter for complete periods
-        group_counts = load_curve.group_by(grouping_key).agg(pl.len().alias("timestep_count"))
-
-        # For monthly, filter groups where timestep_count equals days_in_month * 96
-        load_curve = load_curve.join(
-            group_counts.filter(pl.col("timestep_count") == pl.col("days_in_month") * 96), on=grouping_key, how="inner"
-        )
-    else:
-        # For hourly and daily, use fixed expected timesteps
-        expected_timesteps = _get_expected_timesteps_per_period(aggregate_time_step)
-
-        # Count timesteps per group and filter for complete periods
-        group_counts = load_curve.group_by(grouping_key).agg(pl.len().alias("timestep_count"))
-
-        # For hourly and daily, filter groups with exact expected count
-        load_curve = load_curve.join(
-            group_counts.filter(pl.col("timestep_count") == expected_timesteps), on=grouping_key, how="inner"
-        )
 
     # Create aggregation expressions
     agg_exprs = _create_aggregation_expressions(load_curve, column_aggregations)
