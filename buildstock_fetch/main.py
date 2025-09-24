@@ -3,6 +3,7 @@ import json
 import tempfile
 import zipfile
 from dataclasses import asdict, dataclass
+from datetime import timedelta
 from importlib.resources import files
 from pathlib import Path
 from typing import Optional, Union
@@ -771,8 +772,12 @@ def _aggregate_load_curve_aggregate(load_curve: pl.DataFrame, aggregate_time_ste
     # Convert timestamp to datetime if it's not already
     load_curve = load_curve.with_columns(pl.col("timestamp").cast(pl.Datetime))
 
-    # Remove the last row to ensure complete aggregation periods
-    load_curve = load_curve.slice(0, -1)
+    # We want to subtract 15 minutes because the original load curve provides information
+    # for the previous 15 minutes for each timestamp. For example, the first timestamp is 00:00:15,
+    # and the columns correspond to consumption from 00:00:00 to 00:00:15. When aggregating,
+    # we want the 00:00:00 timestamp to correspond to the consumption from 00:00:00 to whenever the
+    # next timestamp is.
+    load_curve = load_curve.with_columns((pl.col("timestamp") - timedelta(minutes=15)).alias("timestamp"))
 
     # Get the grouping key configuration
     grouping_key, format_string = _get_time_step_grouping_key(aggregate_time_step)
