@@ -199,10 +199,14 @@ class BuildingID:
                 return f"{self.base_url}metadata/upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
         elif self.release_year == "2024":
             if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "2":
-                return ""
-                # This release does not have a single national metadata file.
-                # Instead, it has a metadata file for each county.
-                # We need a way to download them all and combine based on the state
+                if self.upgrade_id == "0":
+                    upgrade_filename = "baseline"
+                else:
+                    upgrade_filename = f"upgrade{str(int(self.upgrade_id)).zfill(2)}"
+                return (
+                    f"{self.base_url}metadata_and_annual_results/by_state_and_county/full/parquet/"
+                    f"state={self.state}/county={self._get_county_name()}/{self.state}_{self._get_county_name()}_{upgrade_filename}.parquet"
+                )
             else:
                 if self.upgrade_id == "0":
                     return f"{self.base_url}metadata/baseline.parquet"
