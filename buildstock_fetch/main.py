@@ -757,7 +757,7 @@ def _aggregate_load_curve_aggregate(
     if release_year == "2024":
         load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
     elif release_year == "2022":
-        load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_load_curve_columns.csv")
+        load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_resstock_load_curve_columns.csv")
     aggregation_rules = pl.read_csv(load_curve_map)
 
     # Create a dictionary mapping column names to their aggregation functions
