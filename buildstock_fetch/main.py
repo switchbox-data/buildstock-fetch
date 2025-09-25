@@ -82,14 +82,7 @@ METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
 RELEASE_JSON_FILE = Path(str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")))
-LOAD_CURVE_COLUMN_AGGREGATION = Path(
-    str(
-        files("buildstock_fetch")
-        .joinpath("data")
-        .joinpath("load_curve_column_map")
-        .joinpath("2024_resstock_load_curve_columns.csv")
-    )
-)
+LOAD_CURVE_COLUMN_AGGREGATION = Path(str(files("buildstock_fetch").joinpath("data").joinpath("load_curve_column_map")))
 WEATHER_FILE_DIR = Path(str(files("buildstock_fetch").joinpath("data").joinpath("weather_station_map")))
 
 
@@ -753,13 +746,19 @@ def _create_aggregation_expressions(load_curve: pl.DataFrame, column_aggregation
     return agg_exprs
 
 
-def _aggregate_load_curve_aggregate(load_curve: pl.DataFrame, aggregate_time_step: str) -> pl.DataFrame:
+def _aggregate_load_curve_aggregate(
+    load_curve: pl.DataFrame, aggregate_time_step: str, release_year: str
+) -> pl.DataFrame:
     """Aggregate the 15-minute load curve to specified time step based on aggregation rules.
 
     Removes the last row to ensure complete aggregation periods.
     """
     # Read the aggregation rules from CSV
-    aggregation_rules = pl.read_csv(LOAD_CURVE_COLUMN_AGGREGATION)
+    if release_year == "2024":
+        load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
+    elif release_year == "2022":
+        load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_load_curve_columns.csv")
+    aggregation_rules = pl.read_csv(load_curve_map)
 
     # Create a dictionary mapping column names to their aggregation functions
     column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
@@ -798,7 +797,7 @@ def _aggregate_load_curve_aggregate(load_curve: pl.DataFrame, aggregate_time_ste
 
 
 def _download_and_process_aggregate(
-    url: str, output_file: Path, progress: Progress, task_id: TaskID, aggregate_time_step: str
+    url: str, output_file: Path, progress: Progress, task_id: TaskID, aggregate_time_step: str, release_year: str
 ) -> int:
     """Download aggregate time step load curve to temporary file, process with Polars, and save result."""
     # Get file size first for progress tracking
@@ -833,7 +832,7 @@ def _download_and_process_aggregate(
 
             # Process with Polars
             load_curve_15min = pl.read_parquet(temp_path)
-            load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step)
+            load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step, release_year)
 
             # Save processed file to final destination
             load_curve_aggregate.write_parquet(output_file)
@@ -1051,7 +1050,9 @@ def download_aggregate_time_step_load_curve_with_progress(
 
     # Download with progress tracking if progress object is provided
     if progress and task_id is not None:
-        _download_and_process_aggregate(download_url, output_file, progress, task_id, aggregate_time_step)
+        _download_and_process_aggregate(
+            download_url, output_file, progress, task_id, aggregate_time_step, bldg_id.release_year
+        )
     else:
         # For non-progress downloads, still use temp file approach for consistency
         with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
@@ -1063,7 +1064,9 @@ def download_aggregate_time_step_load_curve_with_progress(
 
                 # Process with Polars
                 load_curve_15min = pl.read_parquet(temp_path)
-                load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step)
+                load_curve_aggregate = _aggregate_load_curve_aggregate(
+                    load_curve_15min, aggregate_time_step, bldg_id.release_year
+                )
 
                 # Save processed file to final destination
                 load_curve_aggregate.write_parquet(output_file)
