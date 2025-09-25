@@ -764,7 +764,7 @@ def test_fetch_hourly_load_curve(cleanup_downloads):
 
     hourly_load_curve = pl.read_parquet(downloaded_paths[0])
     timestamps = hourly_load_curve["timestamp"].to_list()
-    assert len(timestamps) == 8760
+    assert len(timestamps) == 8784
     assert timestamps[1] - timestamps[0] == timedelta(hours=1)
 
     bldg_ids = [
@@ -804,7 +804,7 @@ def test_fetch_hourly_load_curve(cleanup_downloads):
 
     hourly_load_curve = pl.read_parquet(downloaded_paths[0])
     timestamps = hourly_load_curve["timestamp"].to_list()
-    assert len(timestamps) == 8760
+    assert len(timestamps) == 8784
     assert timestamps[1] - timestamps[0] == timedelta(hours=1)
 
     # 2024 release - should work fine
