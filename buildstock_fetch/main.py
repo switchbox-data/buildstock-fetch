@@ -3,6 +3,7 @@ import json
 import tempfile
 import zipfile
 from dataclasses import asdict, dataclass
+from datetime import timedelta
 from importlib.resources import files
 from pathlib import Path
 from typing import Optional, Union
@@ -81,14 +82,7 @@ METADATA_DIR = Path(
     str(files("buildstock_fetch").joinpath("data").joinpath("building_data").joinpath("combined_metadata.parquet"))
 )
 RELEASE_JSON_FILE = Path(str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")))
-LOAD_CURVE_COLUMN_AGGREGATION = Path(
-    str(
-        files("buildstock_fetch")
-        .joinpath("data")
-        .joinpath("load_curve_column_map")
-        .joinpath("2024_resstock_load_curve_columns.csv")
-    )
-)
+LOAD_CURVE_COLUMN_AGGREGATION = Path(str(files("buildstock_fetch").joinpath("data").joinpath("load_curve_column_map")))
 WEATHER_FILE_DIR = Path(str(files("buildstock_fetch").joinpath("data").joinpath("weather_station_map")))
 
 
@@ -752,10 +746,19 @@ def _create_aggregation_expressions(load_curve: pl.DataFrame, column_aggregation
     return agg_exprs
 
 
-def _aggregate_load_curve_aggregate(load_curve: pl.DataFrame, aggregate_time_step: str) -> pl.DataFrame:
-    """Aggregate the 15-minute load curve to specified time step based on aggregation rules."""
+def _aggregate_load_curve_aggregate(
+    load_curve: pl.DataFrame, aggregate_time_step: str, release_year: str
+) -> pl.DataFrame:
+    """Aggregate the 15-minute load curve to specified time step based on aggregation rules.
+
+    Removes the last row to ensure complete aggregation periods.
+    """
     # Read the aggregation rules from CSV
-    aggregation_rules = pl.read_csv(LOAD_CURVE_COLUMN_AGGREGATION)
+    if release_year == "2024":
+        load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
+    elif release_year == "2022":
+        load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_resstock_load_curve_columns.csv")
+    aggregation_rules = pl.read_csv(load_curve_map)
 
     # Create a dictionary mapping column names to their aggregation functions
     column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
@@ -767,6 +770,13 @@ def _aggregate_load_curve_aggregate(load_curve: pl.DataFrame, aggregate_time_ste
 
     # Convert timestamp to datetime if it's not already
     load_curve = load_curve.with_columns(pl.col("timestamp").cast(pl.Datetime))
+
+    # We want to subtract 15 minutes because the original load curve provides information
+    # for the previous 15 minutes for each timestamp. For example, the first timestamp is 00:00:15,
+    # and the columns correspond to consumption from 00:00:00 to 00:00:15. When aggregating,
+    # we want the 00:00:00 timestamp to correspond to the consumption from 00:00:00 to whenever the
+    # next timestamp is.
+    load_curve = load_curve.with_columns((pl.col("timestamp") - timedelta(minutes=15)).alias("timestamp"))
 
     # Get the grouping key configuration
     grouping_key, format_string = _get_time_step_grouping_key(aggregate_time_step)
@@ -787,7 +797,7 @@ def _aggregate_load_curve_aggregate(load_curve: pl.DataFrame, aggregate_time_ste
 
 
 def _download_and_process_aggregate(
-    url: str, output_file: Path, progress: Progress, task_id: TaskID, aggregate_time_step: str
+    url: str, output_file: Path, progress: Progress, task_id: TaskID, aggregate_time_step: str, release_year: str
 ) -> int:
     """Download aggregate time step load curve to temporary file, process with Polars, and save result."""
     # Get file size first for progress tracking
@@ -822,7 +832,7 @@ def _download_and_process_aggregate(
 
             # Process with Polars
             load_curve_15min = pl.read_parquet(temp_path)
-            load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step)
+            load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step, release_year)
 
             # Save processed file to final destination
             load_curve_aggregate.write_parquet(output_file)
@@ -1040,7 +1050,9 @@ def download_aggregate_time_step_load_curve_with_progress(
 
     # Download with progress tracking if progress object is provided
     if progress and task_id is not None:
-        _download_and_process_aggregate(download_url, output_file, progress, task_id, aggregate_time_step)
+        _download_and_process_aggregate(
+            download_url, output_file, progress, task_id, aggregate_time_step, bldg_id.release_year
+        )
     else:
         # For non-progress downloads, still use temp file approach for consistency
         with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
@@ -1052,7 +1064,9 @@ def download_aggregate_time_step_load_curve_with_progress(
 
                 # Process with Polars
                 load_curve_15min = pl.read_parquet(temp_path)
-                load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step)
+                load_curve_aggregate = _aggregate_load_curve_aggregate(
+                    load_curve_15min, aggregate_time_step, bldg_id.release_year
+                )
 
                 # Save processed file to final destination
                 load_curve_aggregate.write_parquet(output_file)
@@ -1715,8 +1729,10 @@ def fetch_bldg_data(
         total_files += len(unique_metadata_urls)  # Add metadata file
     if file_type_obj.load_curve_15min:
         total_files += len(bldg_ids)  # Add 15-minute load curve files
+    if file_type_obj.load_curve_hourly:
+        total_files += len(bldg_ids)  # Add hourly load curve files
     if file_type_obj.load_curve_monthly:
-        total_files += len(bldg_ids)  # Add 15-minute load curve files
+        total_files += len(bldg_ids)  # Add monthly load curve files
     if file_type_obj.load_curve_annual:
         total_files += len(bldg_ids)  # Add annual load curve files
     if file_type_obj.weather:
@@ -1786,6 +1802,19 @@ def _execute_downloads(
     if file_type_obj.load_curve_15min:
         _download_15min_load_curves_parallel(
             bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
+        )
+
+    if file_type_obj.load_curve_hourly:
+        aggregate_time_step = "hourly"
+        _download_aggregate_load_curves_parallel(
+            bldg_ids,
+            output_dir,
+            aggregate_time_step,
+            max_workers,
+            progress,
+            downloaded_paths,
+            failed_downloads,
+            console,
         )
 
     if file_type_obj.load_curve_monthly:

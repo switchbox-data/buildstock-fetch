@@ -1,6 +1,7 @@
 import json
 import shutil
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import polars as pl
@@ -722,6 +723,325 @@ def test_fetch_monthly_load_curve(cleanup_downloads):
     assert Path(
         f"data/{bldg_id.get_release_name()}/load_curve_monthly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_monthly.parquet"
     ).exists()
+
+
+def test_fetch_hourly_load_curve(cleanup_downloads):
+    # 2022 release
+    bldg_ids = [
+        BuildingID(
+            bldg_id=386459,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="ME",
+        ),
+        BuildingID(
+            bldg_id=247072,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="ME",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8784
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=43469,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1.1",
+            state="FL",
+        ),
+        BuildingID(
+            bldg_id=25395,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1.1",
+            state="FL",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8784
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=349561,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1.1",
+            state="CO",
+        ),
+        BuildingID(
+            bldg_id=547230,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1.1",
+            state="CO",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=37283,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+        BuildingID(
+            bldg_id=436794,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=276508,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1",
+            state="DE",
+        ),
+        BuildingID(
+            bldg_id=330393,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1",
+            state="DE",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=394846,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1.1",
+            state="IN",
+        ),
+        BuildingID(
+            bldg_id=159923,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1.1",
+            state="IN",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=37283,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+        BuildingID(
+            bldg_id=436794,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    # 2024 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=173038,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+        BuildingID(
+            bldg_id=119411,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
 
 
 def test_fetch_weather_station_name(cleanup_downloads):
