@@ -9,7 +9,7 @@ A CLI tool, and python library, to simplify downloading building characteristics
 
 - **Github repository**: <https://github.com/switchbox-data/buildstock-fetch/>
 - **Documentation**: <https://switchbox-data.github.io/buildstock-fetch/>
-- **PyPI page***: <https://pypi.org/project/buildstock-fetch/>
+- **PyPI page**: <https://pypi.org/project/buildstock-fetch/>
 
 ## Installing the CLI tool
 
