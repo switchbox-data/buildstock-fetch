@@ -216,12 +216,12 @@ class BuildingID:
             self.release_year == "2025"
             and self.res_com == "comstock"
             and self.weather == "amy2018"
-            and self.release_number == "1"
+            and (self.release_number == "1" or self.release_number == "2")
         ):
-            return ""
-            # This release does not have a single national metadata file.
-            # Instead, it has a metadata file for each county.
-            # We need a way to download them all and combine based on the state
+            return (
+                f"{self.base_url}metadata_and_annual_results/by_state_and_county/full/parquet/"
+                f"state={self.state}/county={self._get_county_name()}/{self.state}_{self._get_county_name()}_upgrade{self.upgrade_id}.parquet"
+            )
         else:
             return ""
 
