@@ -1261,7 +1261,7 @@ def test_fetch_daily_load_curve(cleanup_downloads):
             state="IN",
         ),
     ]
-    file_type = ("load_curve_hourly",)
+    file_type = ("load_curve_daily",)
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
@@ -1269,11 +1269,11 @@ def test_fetch_daily_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
     ).exists()
 
     daily_load_curve = pl.read_parquet(downloaded_paths[0])
