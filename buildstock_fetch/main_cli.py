@@ -29,7 +29,7 @@ app = typer.Typer(
 BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json"))
 
 # File types that haven't been implemented yet
-UNAVAILABLE_FILE_TYPES = ["load_curve_daily"]
+UNAVAILABLE_FILE_TYPES = []
 
 
 class InvalidProductError(Exception):
