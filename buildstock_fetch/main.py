@@ -1731,6 +1731,8 @@ def fetch_bldg_data(
         total_files += len(bldg_ids)  # Add 15-minute load curve files
     if file_type_obj.load_curve_hourly:
         total_files += len(bldg_ids)  # Add hourly load curve files
+    if file_type_obj.load_curve_daily:
+        total_files += len(bldg_ids)  # Add daily load curve files
     if file_type_obj.load_curve_monthly:
         total_files += len(bldg_ids)  # Add monthly load curve files
     if file_type_obj.load_curve_annual:
@@ -1806,6 +1808,19 @@ def _execute_downloads(
 
     if file_type_obj.load_curve_hourly:
         aggregate_time_step = "hourly"
+        _download_aggregate_load_curves_parallel(
+            bldg_ids,
+            output_dir,
+            aggregate_time_step,
+            max_workers,
+            progress,
+            downloaded_paths,
+            failed_downloads,
+            console,
+        )
+
+    if file_type_obj.load_curve_daily:
+        aggregate_time_step = "daily"
         _download_aggregate_load_curves_parallel(
             bldg_ids,
             output_dir,
