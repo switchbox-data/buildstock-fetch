@@ -86,7 +86,8 @@ packages = ["buildstock_fetch"]
 "buildstock_fetch" = [
     "data/buildstock_releases.json",
     "data/building_data/**/*",
-    "data/**/*.parquet"
+    "data/**/*.parquet",
+    "data/load_curve_column_map/*.csv"
 ]
 
 
