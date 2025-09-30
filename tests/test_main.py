@@ -10,11 +10,13 @@ import pytest
 sys.path.append(str(Path(__file__).parent.parent))
 
 from buildstock_fetch.main import (
+    LOAD_CURVE_COLUMN_AGGREGATION,
     BuildingID,
     No15minLoadCurveError,
     NoAnnualLoadCurveError,
     NoBuildingDataError,
     RequestedFileTypes,
+    _aggregate_load_curve_aggregate,
     _parse_requested_file_type,
     download_bldg_data,
     fetch_bldg_data,
@@ -26,6 +28,11 @@ from buildstock_fetch.main_cli import BUILDSTOCK_RELEASES_FILE
 @pytest.fixture(scope="function")
 def buildstock_releases_json():
     return json.loads(Path(BUILDSTOCK_RELEASES_FILE).read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="function")
+def load_curve_column_map():
+    return pl.read_csv(LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv"))
 
 
 @pytest.fixture(scope="function")
@@ -1462,3 +1469,37 @@ def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
     assert len(downloaded_paths) == 0
     assert len(failed_downloads) == 1
+
+
+def test_aggregation_functions(cleanup_downloads, load_curve_column_map):
+    aggregate_timesteps = ["monthly", "hourly", "daily"]
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=100000,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            release_number="2",
+            upgrade_id="0",
+            state="OH",
+        ),
+    ]
+    file_type = ("load_curve_15min",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    load_curve_15min = pl.read_parquet(downloaded_paths[0])
+
+    # load_curve_map = load_curve_column_map.joinpath("2024_resstock_load_curve_columns.csv")
+    # aggregation_rules = pl.read_csv(load_curve_map)
+
+    for aggregate_timestep in aggregate_timesteps:
+        load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_timestep, "2024")
+        if aggregate_timestep == "monthly":
+            assert load_curve_aggregate.shape[0] == 12
+        elif aggregate_timestep == "hourly":
+            assert load_curve_aggregate.shape[0] == 8784
+        elif aggregate_timestep == "daily":
+            assert load_curve_aggregate.shape[0] == 365
