@@ -1552,3 +1552,44 @@ def test_aggregation_functions(cleanup_downloads):
         _analyze_aggregation_data(
             load_curve_15min_processed, load_curve_aggregate, column_aggregations, aggregate_timestep
         )
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=386459,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="ME",
+        )
+    ]
+    file_type = ("load_curve_15min",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    load_curve_15min = pl.read_parquet(downloaded_paths[0])
+
+    load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_resstock_load_curve_columns.csv")
+    aggregation_rules = pl.read_csv(load_curve_map)
+    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
+
+    for aggregate_timestep in aggregate_timesteps:
+        # Create a copy of the 15min data and apply the same timestamp adjustment as the aggregation function
+        load_curve_15min_processed = load_curve_15min.with_columns(
+            (pl.col("timestamp") - timedelta(minutes=15)).alias("timestamp")
+        )
+
+        load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_timestep, "2022")
+        if aggregate_timestep == "monthly":
+            assert load_curve_aggregate.shape[0] == 12
+        elif aggregate_timestep == "hourly":
+            assert load_curve_aggregate.shape[0] == 8784
+        elif aggregate_timestep == "daily":
+            assert load_curve_aggregate.shape[0] == 366
+
+        # Analyze aggregation data for this timestep using the processed 15min data
+        _analyze_aggregation_data(
+            load_curve_15min_processed, load_curve_aggregate, column_aggregations, aggregate_timestep
+        )
