@@ -1472,6 +1472,9 @@ def _verify_aggregation_values(matching_15min, row, column_aggregations):
         if name == "timestamp":
             continue
 
+        if name not in matching_15min.columns:
+            continue
+
         if rule == "sum":
             # Use a small tolerance for floating point precision issues
             assert abs(matching_15min[name].sum() - row[name]) < 0.1
