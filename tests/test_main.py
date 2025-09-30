@@ -1500,6 +1500,6 @@ def test_aggregation_functions(cleanup_downloads, load_curve_column_map):
         if aggregate_timestep == "monthly":
             assert load_curve_aggregate.shape[0] == 12
         elif aggregate_timestep == "hourly":
-            assert load_curve_aggregate.shape[0] == 8784
+            assert load_curve_aggregate.shape[0] == 8760
         elif aggregate_timestep == "daily":
             assert load_curve_aggregate.shape[0] == 365
