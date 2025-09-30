@@ -31,11 +31,6 @@ def buildstock_releases_json():
 
 
 @pytest.fixture(scope="function")
-def load_curve_column_map():
-    return pl.read_csv(LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv"))
-
-
-@pytest.fixture(scope="function")
 def cleanup_downloads():
     # Setup - clean up any existing files before test
     data_dir = Path("data")
@@ -1482,42 +1477,39 @@ def _verify_aggregation_values(matching_15min, row, column_aggregations):
             assert matching_15min[name].first() == row[name]
 
 
-def _analyze_hourly_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations):
-    """Analyze hourly aggregation by finding matching 15-minute data for each hour."""
+def _analyze_aggregation_data(load_curve_15min, load_curve_aggregate, column_aggregations, aggregate_timestep):
+    """Analyze aggregation data by finding matching 15-minute data for each timestep."""
     for row in load_curve_aggregate.iter_rows(named=True):
         agg_timestamp = row["timestamp"]
-        agg_hour = agg_timestamp.hour
-        agg_date = agg_timestamp.date()
 
-        # Find matching 15-minute data for this hour
-        matching_15min = load_curve_15min.filter(
-            (pl.col("timestamp").dt.date() == agg_date) & (pl.col("timestamp").dt.hour == agg_hour)
-        )
-        _verify_aggregation_values(matching_15min, row, column_aggregations)
+        if aggregate_timestep == "hourly":
+            # Extract hour from aggregated timestamp
+            agg_hour = agg_timestamp.hour
+            agg_date = agg_timestamp.date()
 
+            # Find matching 15-minute data for this hour
+            matching_15min = load_curve_15min.filter(
+                (pl.col("timestamp").dt.date() == agg_date) & (pl.col("timestamp").dt.hour == agg_hour)
+            )
 
-def _analyze_daily_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations):
-    """Analyze daily aggregation by finding matching 15-minute data for each day."""
-    for row in load_curve_aggregate.iter_rows(named=True):
-        agg_timestamp = row["timestamp"]
-        agg_date = agg_timestamp.date()
+        elif aggregate_timestep == "daily":
+            # Extract date from aggregated timestamp
+            agg_date = agg_timestamp.date()
 
-        # Find all 15-minute data for this day
-        matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.date() == agg_date)
-        _verify_aggregation_values(matching_15min, row, column_aggregations)
+            # Find all 15-minute data for this day
+            matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.date() == agg_date)
 
+        elif aggregate_timestep == "monthly":
+            # Extract month and year from aggregated timestamp
+            agg_month = agg_timestamp.month
+            agg_year = agg_timestamp.year
 
-def _analyze_monthly_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations):
-    """Analyze monthly aggregation by finding matching 15-minute data for each month."""
-    for row in load_curve_aggregate.iter_rows(named=True):
-        agg_timestamp = row["timestamp"]
-        agg_month = agg_timestamp.month
-        agg_year = agg_timestamp.year
+            # Find all 15-minute data for this month
+            matching_15min = load_curve_15min.filter(
+                (pl.col("timestamp").dt.month == agg_month) & (pl.col("timestamp").dt.year == agg_year)
+            )
 
-        # Find all 15-minute data for this month
-        matching_15min = load_curve_15min.filter(
-            (pl.col("timestamp").dt.month == agg_month) & (pl.col("timestamp").dt.year == agg_year)
-        )
+        # Verify aggregation values for all timesteps
         _verify_aggregation_values(matching_15min, row, column_aggregations)
 
 
@@ -1543,7 +1535,7 @@ def test_aggregation_functions(cleanup_downloads, load_curve_column_map):
     assert len(failed_downloads) == 0
     load_curve_15min = pl.read_parquet(downloaded_paths[0])
 
-    load_curve_map = load_curve_column_map.joinpath("2024_resstock_load_curve_columns.csv")
+    load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
     aggregation_rules = pl.read_csv(load_curve_map)
     column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
 
@@ -1551,10 +1543,10 @@ def test_aggregation_functions(cleanup_downloads, load_curve_column_map):
         load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_timestep, "2024")
         if aggregate_timestep == "monthly":
             assert load_curve_aggregate.shape[0] == 12
-            _analyze_monthly_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations)
         elif aggregate_timestep == "hourly":
             assert load_curve_aggregate.shape[0] == 8760
-            _analyze_hourly_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations)
         elif aggregate_timestep == "daily":
             assert load_curve_aggregate.shape[0] == 365
-            _analyze_daily_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations)
+
+        # Analyze aggregation data for this timestep
+        _analyze_aggregation_data(load_curve_15min, load_curve_aggregate, column_aggregations, aggregate_timestep)
