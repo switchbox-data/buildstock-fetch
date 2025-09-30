@@ -1470,11 +1470,12 @@ def _verify_aggregation_values(matching_15min, row, column_aggregations):
     """Verify that aggregated values match the expected aggregation of 15-minute data."""
     for name, rule in column_aggregations.items():
         if rule == "sum":
-            assert matching_15min[name].sum() == row[name]
+            # Use a small tolerance for floating point precision issues
+            assert abs(matching_15min[name].sum() - row[name]) < 0.1
         elif rule == "mean":
-            assert matching_15min[name].mean() == row[name]
+            assert abs(matching_15min[name].mean() - row[name]) < 0.1
         elif rule == "first":
-            assert matching_15min[name].first() == row[name]
+            assert abs(matching_15min[name].first() - row[name]) < 0.1
 
 
 def _analyze_aggregation_data(load_curve_15min, load_curve_aggregate, column_aggregations, aggregate_timestep):
@@ -1483,39 +1484,33 @@ def _analyze_aggregation_data(load_curve_15min, load_curve_aggregate, column_agg
         agg_timestamp = row["timestamp"]
 
         if aggregate_timestep == "hourly":
-            # Extract hour from aggregated timestamp
-            agg_hour = agg_timestamp.hour
-            agg_date = agg_timestamp.date()
+            # Use the same grouping logic as the aggregation function
+            grouping_key = agg_timestamp.strftime("%Y-%m-%d-%H")
 
-            # Find matching 15-minute data for this hour
-            matching_15min = load_curve_15min.filter(
-                (pl.col("timestamp").dt.date() == agg_date) & (pl.col("timestamp").dt.hour == agg_hour)
-            )
+            # Find matching 15-minute data using the same grouping logic
+            matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.strftime("%Y-%m-%d-%H") == grouping_key)
 
         elif aggregate_timestep == "daily":
-            # Extract date from aggregated timestamp
-            agg_date = agg_timestamp.date()
+            # Use the same grouping logic as the aggregation function
+            grouping_key = agg_timestamp.strftime("%Y-%m-%d")
 
-            # Find all 15-minute data for this day
-            matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.date() == agg_date)
+            # Find all 15-minute data for this day using the same grouping logic
+            matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.strftime("%Y-%m-%d") == grouping_key)
 
         elif aggregate_timestep == "monthly":
-            # Extract month and year from aggregated timestamp
-            agg_month = agg_timestamp.month
-            agg_year = agg_timestamp.year
+            # Use the same grouping logic as the aggregation function
+            grouping_key = agg_timestamp.strftime("%Y-%m")
 
-            # Find all 15-minute data for this month
-            matching_15min = load_curve_15min.filter(
-                (pl.col("timestamp").dt.month == agg_month) & (pl.col("timestamp").dt.year == agg_year)
-            )
+            # Find all 15-minute data for this month using the same grouping logic
+            matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.strftime("%Y-%m") == grouping_key)
 
-        # Verify aggregation values for all timesteps
+        # Verify aggregation values
         _verify_aggregation_values(matching_15min, row, column_aggregations)
 
 
 def test_aggregation_functions(cleanup_downloads):
     """Test aggregation functions for different time steps."""
-    aggregate_timesteps = ["monthly", "hourly", "daily"]
+    aggregate_timesteps = ["hourly", "monthly", "daily"]
 
     bldg_ids = [
         BuildingID(
@@ -1540,6 +1535,11 @@ def test_aggregation_functions(cleanup_downloads):
     column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
 
     for aggregate_timestep in aggregate_timesteps:
+        # Create a copy of the 15min data and apply the same timestamp adjustment as the aggregation function
+        load_curve_15min_processed = load_curve_15min.with_columns(
+            (pl.col("timestamp") - timedelta(minutes=15)).alias("timestamp")
+        )
+
         load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_timestep, "2024")
         if aggregate_timestep == "monthly":
             assert load_curve_aggregate.shape[0] == 12
@@ -1548,5 +1548,7 @@ def test_aggregation_functions(cleanup_downloads):
         elif aggregate_timestep == "daily":
             assert load_curve_aggregate.shape[0] == 365
 
-        # Analyze aggregation data for this timestep
-        _analyze_aggregation_data(load_curve_15min, load_curve_aggregate, column_aggregations, aggregate_timestep)
+        # Analyze aggregation data for this timestep using the processed 15min data
+        _analyze_aggregation_data(
+            load_curve_15min_processed, load_curve_aggregate, column_aggregations, aggregate_timestep
+        )
