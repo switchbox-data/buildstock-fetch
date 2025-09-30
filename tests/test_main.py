@@ -1513,7 +1513,7 @@ def _analyze_aggregation_data(load_curve_15min, load_curve_aggregate, column_agg
         _verify_aggregation_values(matching_15min, row, column_aggregations)
 
 
-def test_aggregation_functions(cleanup_downloads, load_curve_column_map):
+def test_aggregation_functions(cleanup_downloads):
     """Test aggregation functions for different time steps."""
     aggregate_timesteps = ["monthly", "hourly", "daily"]
 
