@@ -1469,8 +1469,7 @@ def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
 def _verify_aggregation_values(matching_15min, row, column_aggregations):
     """Verify that aggregated values match the expected aggregation of 15-minute data."""
     for name, rule in column_aggregations.items():
-        # Skip timedelta columns as they can't be compared with float tolerance
-        if isinstance(row[name], timedelta):
+        if name == "timestamp":
             continue
 
         if rule == "sum":
