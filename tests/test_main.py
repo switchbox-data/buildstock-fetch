@@ -1471,7 +1471,58 @@ def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
     assert len(failed_downloads) == 1
 
 
+def _verify_aggregation_values(matching_15min, row, column_aggregations):
+    """Verify that aggregated values match the expected aggregation of 15-minute data."""
+    for name, rule in column_aggregations.items():
+        if rule == "sum":
+            assert matching_15min[name].sum() == row[name]
+        elif rule == "mean":
+            assert matching_15min[name].mean() == row[name]
+        elif rule == "first":
+            assert matching_15min[name].first() == row[name]
+
+
+def _analyze_hourly_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations):
+    """Analyze hourly aggregation by finding matching 15-minute data for each hour."""
+    for row in load_curve_aggregate.iter_rows(named=True):
+        agg_timestamp = row["timestamp"]
+        agg_hour = agg_timestamp.hour
+        agg_date = agg_timestamp.date()
+
+        # Find matching 15-minute data for this hour
+        matching_15min = load_curve_15min.filter(
+            (pl.col("timestamp").dt.date() == agg_date) & (pl.col("timestamp").dt.hour == agg_hour)
+        )
+        _verify_aggregation_values(matching_15min, row, column_aggregations)
+
+
+def _analyze_daily_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations):
+    """Analyze daily aggregation by finding matching 15-minute data for each day."""
+    for row in load_curve_aggregate.iter_rows(named=True):
+        agg_timestamp = row["timestamp"]
+        agg_date = agg_timestamp.date()
+
+        # Find all 15-minute data for this day
+        matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.date() == agg_date)
+        _verify_aggregation_values(matching_15min, row, column_aggregations)
+
+
+def _analyze_monthly_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations):
+    """Analyze monthly aggregation by finding matching 15-minute data for each month."""
+    for row in load_curve_aggregate.iter_rows(named=True):
+        agg_timestamp = row["timestamp"]
+        agg_month = agg_timestamp.month
+        agg_year = agg_timestamp.year
+
+        # Find all 15-minute data for this month
+        matching_15min = load_curve_15min.filter(
+            (pl.col("timestamp").dt.month == agg_month) & (pl.col("timestamp").dt.year == agg_year)
+        )
+        _verify_aggregation_values(matching_15min, row, column_aggregations)
+
+
 def test_aggregation_functions(cleanup_downloads, load_curve_column_map):
+    """Test aggregation functions for different time steps."""
     aggregate_timesteps = ["monthly", "hourly", "daily"]
 
     bldg_ids = [
@@ -1492,14 +1543,18 @@ def test_aggregation_functions(cleanup_downloads, load_curve_column_map):
     assert len(failed_downloads) == 0
     load_curve_15min = pl.read_parquet(downloaded_paths[0])
 
-    # load_curve_map = load_curve_column_map.joinpath("2024_resstock_load_curve_columns.csv")
-    # aggregation_rules = pl.read_csv(load_curve_map)
+    load_curve_map = load_curve_column_map.joinpath("2024_resstock_load_curve_columns.csv")
+    aggregation_rules = pl.read_csv(load_curve_map)
+    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
 
     for aggregate_timestep in aggregate_timesteps:
         load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_timestep, "2024")
         if aggregate_timestep == "monthly":
             assert load_curve_aggregate.shape[0] == 12
+            _analyze_monthly_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations)
         elif aggregate_timestep == "hourly":
             assert load_curve_aggregate.shape[0] == 8760
+            _analyze_hourly_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations)
         elif aggregate_timestep == "daily":
             assert load_curve_aggregate.shape[0] == 365
+            _analyze_daily_aggregation(load_curve_15min, load_curve_aggregate, column_aggregations)
