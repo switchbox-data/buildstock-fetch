@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Union, cast
 
 import questionary
-import tomllib
+import tomli
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -727,7 +727,7 @@ def _get_version() -> str:
         pyproject_path = project_root / "pyproject.toml"
 
         with open(pyproject_path, "rb") as f:
-            data = tomllib.load(f)
+            data = tomli.load(f)
             version = data["project"]["version"]
             return str(version)
     except (FileNotFoundError, KeyError, Exception):
