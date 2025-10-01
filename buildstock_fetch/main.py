@@ -749,10 +749,7 @@ def _create_aggregation_expressions(load_curve: pl.DataFrame, column_aggregation
 def _aggregate_load_curve_aggregate(
     load_curve: pl.DataFrame, aggregate_time_step: str, release_year: str
 ) -> pl.DataFrame:
-    """Aggregate the 15-minute load curve to specified time step based on aggregation rules.
-
-    Removes the last row to ensure complete aggregation periods.
-    """
+    """Aggregate the 15-minute load curve to specified time step based on aggregation rules."""
     # Read the aggregation rules from CSV
     if release_year == "2024":
         load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
@@ -1835,6 +1832,8 @@ def fetch_bldg_data(
         total_files += len(bldg_ids)  # Add 15-minute load curve files
     if file_type_obj.load_curve_hourly:
         total_files += len(bldg_ids)  # Add hourly load curve files
+    if file_type_obj.load_curve_daily:
+        total_files += len(bldg_ids)  # Add daily load curve files
     if file_type_obj.load_curve_monthly:
         total_files += len(bldg_ids)  # Add monthly load curve files
     if file_type_obj.load_curve_annual:
@@ -1910,6 +1909,19 @@ def _execute_downloads(
 
     if file_type_obj.load_curve_hourly:
         aggregate_time_step = "hourly"
+        _download_aggregate_load_curves_parallel(
+            bldg_ids,
+            output_dir,
+            aggregate_time_step,
+            max_workers,
+            progress,
+            downloaded_paths,
+            failed_downloads,
+            console,
+        )
+
+    if file_type_obj.load_curve_daily:
+        aggregate_time_step = "daily"
         _download_aggregate_load_curves_parallel(
             bldg_ids,
             output_dir,
