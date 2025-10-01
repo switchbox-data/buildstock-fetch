@@ -749,10 +749,7 @@ def _create_aggregation_expressions(load_curve: pl.DataFrame, column_aggregation
 def _aggregate_load_curve_aggregate(
     load_curve: pl.DataFrame, aggregate_time_step: str, release_year: str
 ) -> pl.DataFrame:
-    """Aggregate the 15-minute load curve to specified time step based on aggregation rules.
-
-    Removes the last row to ensure complete aggregation periods.
-    """
+    """Aggregate the 15-minute load curve to specified time step based on aggregation rules."""
     # Read the aggregation rules from CSV
     if release_year == "2024":
         load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
