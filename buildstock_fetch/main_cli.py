@@ -816,7 +816,6 @@ def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
             output_dir = inputs["output_directory"]
             if isinstance(output_dir, list):
                 output_dir = output_dir[0] if output_dir else "."
-
             fetch_bldg_data(
                 selected_bldg_ids, file_type_tuple, Path(output_dir), weather_states=available_weather_states
             )

@@ -667,7 +667,6 @@ def _download_with_progress_metadata(url: str, output_file: Path, progress: Prog
                                 progress.update(task_id, completed=downloaded_size)
 
                 # Use streaming concatenation to avoid loading entire files into memory
-                # This streams both files and concatenates them without loading into memory
                 (
                     pl.concat([pl.scan_parquet(output_file), pl.scan_parquet(temp_path)])
                     .unique()
@@ -680,6 +679,7 @@ def _download_with_progress_metadata(url: str, output_file: Path, progress: Prog
                     temp_path.unlink()
     else:
         # File doesn't exist, download normally
+        print("TEST TEST")
         with open(str(output_file), "wb") as file:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
@@ -1261,7 +1261,9 @@ def _download_metadata_with_progress(
             / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
             / "metadata.parquet"
         )
+        print("TEST")
         download_url = bldg_id.get_metadata_url()
+        print("TEST 1")
         if download_url == "":
             failed_downloads.append(str(output_file))
             continue
@@ -1270,6 +1272,7 @@ def _download_metadata_with_progress(
         downloaded_urls.append(download_url)
         if download_url in metadata_urls:
             metadata_urls.remove(download_url)
+        print("TEST 2")
         metadata_task = progress.add_task(
             f"[yellow]Downloading metadata: {bldg_id.get_release_name()} - (upgrade {bldg_id.upgrade_id}) - {bldg_id.state}",
             total=0,  # Will be updated when we get the file size
@@ -1282,6 +1285,7 @@ def _download_metadata_with_progress(
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         try:
+            print("TEST TEST TEST")
             _download_with_progress_metadata(download_url, output_file, progress, metadata_task)
             downloaded_paths.append(output_file)
         except Exception as e:
