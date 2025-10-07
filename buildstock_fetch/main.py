@@ -1,5 +1,7 @@
 import concurrent.futures
+import gc
 import json
+import os
 import tempfile
 import zipfile
 from dataclasses import asdict, dataclass
@@ -650,10 +652,7 @@ def _download_with_progress_metadata(url: str, output_file: Path, progress: Prog
 
     # Check if output file already exists
     if output_file.exists():
-        # Read existing parquet file
-        existing_df = pl.read_parquet(output_file)
-
-        # Download new data to temporary file
+        # Use streaming approach to avoid loading entire files into memory
         with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
             temp_path = Path(temp_file.name)
 
@@ -667,14 +666,12 @@ def _download_with_progress_metadata(url: str, output_file: Path, progress: Prog
                             if total_size > 0:
                                 progress.update(task_id, completed=downloaded_size)
 
-                # Read new data
-                new_df = pl.read_parquet(temp_path)
-
-                # Concatenate existing and new data, removing duplicates
-                combined_df = pl.concat([existing_df, new_df]).unique()
-
-                # Write combined data back to original file
-                combined_df.write_parquet(output_file)
+                # Use streaming concatenation to avoid loading entire files into memory
+                (
+                    pl.concat([pl.scan_parquet(output_file), pl.scan_parquet(temp_path)])
+                    .unique()
+                    .sink_parquet(output_file)
+                )
 
             finally:
                 # Clean up temp file
@@ -682,6 +679,7 @@ def _download_with_progress_metadata(url: str, output_file: Path, progress: Prog
                     temp_path.unlink()
     else:
         # File doesn't exist, download normally
+        print("TEST TEST")
         with open(str(output_file), "wb") as file:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
@@ -1121,12 +1119,100 @@ def _process_metadata_results(bldg_ids: list[BuildingID], output_dir: Path, down
                 metadata_to_bldg_id_mapping[output_file] = [bldg_id.bldg_id]
 
     for metadata_file, bldg_id_list in metadata_to_bldg_id_mapping.items():
-        # Use scan_parquet for lazy evaluation and better memory efficiency
-        metadata_df_filtered = pl.scan_parquet(metadata_file).filter(pl.col("bldg_id").is_in(bldg_id_list)).collect()
-        # Write the filtered dataframe back to the same file
-        metadata_df_filtered.write_parquet(metadata_file)
+        # First, get column names without loading data into memory
+        schema = pl.scan_parquet(metadata_file).collect_schema()
+
+        # Filter columns to only keep those containing "upgrade", "bldg_id", "metadata_index", or "in."
+        columns_to_keep = []
+        for col in schema:
+            if any(keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index", "in."]):
+                columns_to_keep.append(col)
+
+        # Use streaming operations to avoid loading entire file into memory
+        # Create a temporary file to write the filtered data
+        temp_file = str(metadata_file) + ".tmp"
+
+        try:
+            # Stream the data: filter rows, select columns, and write in one operation
+            (
+                pl.scan_parquet(metadata_file)
+                .filter(pl.col("bldg_id").is_in(bldg_id_list))
+                .select(columns_to_keep)
+                .sink_parquet(temp_file)
+            )
+
+            # Replace the original file with the filtered one
+            import shutil
+
+            shutil.move(temp_file, metadata_file)
+
+            # Force garbage collection to free memory immediately
+            gc.collect()
+
+        except Exception:
+            # Clean up temp file if something goes wrong
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            raise
 
     return
+
+
+def _process_annual_load_curve_file(file_path: Path) -> None:
+    """Process an annual load curve file to keep only columns containing specified keywords.
+
+    Args:
+        file_path: Path to the annual load curve parquet file to process.
+    """
+    # First, get column names without loading data into memory
+    schema = pl.scan_parquet(file_path).collect_schema()
+
+    # Filter columns to only keep those containing "bldg_id", "upgrade", "metadata_index", or "out."
+    # and remove columns that start with "in."
+    columns_to_keep = []
+    for col in schema:
+        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index", "out."]) and not col.startswith(
+            "in."
+        ):
+            columns_to_keep.append(col)
+
+    # Use streaming operations to avoid loading entire file into memory
+    # Create a temporary file to write the filtered data
+    temp_file = str(file_path) + ".tmp"
+
+    try:
+        # Stream the data: select columns and write in one operation
+        (pl.scan_parquet(file_path).select(columns_to_keep).sink_parquet(temp_file))
+
+        # Replace the original file with the filtered one
+        import shutil
+
+        shutil.move(temp_file, file_path)
+
+        # Force garbage collection to free memory immediately
+        gc.collect()
+
+    except Exception:
+        # Clean up temp file if something goes wrong
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+        raise
+
+
+def _process_annual_load_curve_results(downloaded_paths: list[Path]) -> None:
+    """Process all downloaded annual load curve files to filter columns.
+
+    Args:
+        downloaded_paths: List of all downloaded file paths.
+    """
+    # Filter for annual load curve files
+    annual_load_curve_files = [
+        path for path in downloaded_paths if "load_curve_annual" in str(path) and path.suffix == ".parquet"
+    ]
+
+    # Process each annual load curve file
+    for file_path in annual_load_curve_files:
+        _process_annual_load_curve_file(file_path)
 
 
 def _process_download_results(
@@ -1175,7 +1261,9 @@ def _download_metadata_with_progress(
             / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
             / "metadata.parquet"
         )
+        print("TEST")
         download_url = bldg_id.get_metadata_url()
+        print("TEST 1")
         if download_url == "":
             failed_downloads.append(str(output_file))
             continue
@@ -1184,8 +1272,9 @@ def _download_metadata_with_progress(
         downloaded_urls.append(download_url)
         if download_url in metadata_urls:
             metadata_urls.remove(download_url)
+        print("TEST 2")
         metadata_task = progress.add_task(
-            f"[yellow]Downloading metadata: {download_url}",
+            f"[yellow]Downloading metadata: {bldg_id.get_release_name()} - (upgrade {bldg_id.upgrade_id}) - {bldg_id.state}",
             total=0,  # Will be updated when we get the file size
         )
         # Get file size first
@@ -1196,6 +1285,7 @@ def _download_metadata_with_progress(
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         try:
+            print("TEST TEST TEST")
             _download_with_progress_metadata(download_url, output_file, progress, metadata_task)
             downloaded_paths.append(output_file)
         except Exception as e:
@@ -1955,6 +2045,8 @@ def _execute_downloads(
         _download_annual_load_curves_parallel(
             bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
         )
+        # Process annual load curve files to filter columns
+        _process_annual_load_curve_results(downloaded_paths)
 
     # Get weather files if requested.
     if file_type_obj.weather:
