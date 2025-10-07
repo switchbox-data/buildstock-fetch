@@ -4,7 +4,7 @@ Utility script to download NHTS (National Household Travel Survey) data.
 
 Downloads the zip file from https://nhts.ornl.gov/media/2022/download/csv.zip,
 extracts the tripv2pub.csv file, and saves it as NHTS_v2_1_trip_surveys.csv.
-Cleans up temporary files after extraction. For more information on the datset, see: https://nhts.ornl.gov/media/2022/doc/codebook.pdf
+Cleans up temporary files after extraction. For more information on the dataset, see: https://nhts.ornl.gov/media/2022/doc/codebook.pdf
 """
 
 import argparse

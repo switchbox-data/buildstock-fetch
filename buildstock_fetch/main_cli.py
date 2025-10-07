@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Union, cast
 
 import questionary
+import tomli
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -29,7 +30,7 @@ app = typer.Typer(
 BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json"))
 
 # File types that haven't been implemented yet
-UNAVAILABLE_FILE_TYPES = ["load_curve_hourly", "load_curve_daily"]
+UNAVAILABLE_FILE_TYPES: list[str] = []
 
 
 class InvalidProductError(Exception):
@@ -124,6 +125,14 @@ def _get_release_versions_options(
         list(parsed_releases.keys()), product_type=product_type, release_year=release_year, weather_file=weather_file
     )
     available_release_versions = list({parsed_releases[release]["release_version"] for release in available_releases})
+
+    if (
+        product_type == "resstock"
+        and weather_file == "tmy3"
+        and release_year == "2024"
+        and "1" in available_release_versions
+    ):
+        available_release_versions.remove("1")
 
     # Define the desired order: "2", "1.1", "1"
     display_order = ["2", "1.1", "1"]
@@ -707,6 +716,29 @@ UPGRADE_ID_OPTION = typer.Option(
     None, "--upgrade_id", "-u", help="Upgrade IDs (multiple can be provided, inside quotes and separated by spaces)"
 )
 OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='e.g., "data" or "../output"')
+VERSION_OPTION = typer.Option(False, "--version", "-v", help="Show version information and exit")
+
+
+def _get_version() -> str:
+    """Get the version from pyproject.toml."""
+    try:
+        # Get the path to pyproject.toml (assuming it's in the project root)
+        project_root = Path(__file__).parent.parent
+        pyproject_path = project_root / "pyproject.toml"
+
+        with open(pyproject_path, "rb") as f:
+            data = tomli.load(f)
+            version = data["project"]["version"]
+            return str(version)
+    except (FileNotFoundError, KeyError, Exception):
+        return "unknown"
+
+
+def _show_version() -> None:
+    """Display version information and exit."""
+    version = _get_version()
+    console.print(f"buildstock-fetch version {version}")
+    raise typer.Exit(0) from None
 
 
 def _run_interactive_mode_wrapper() -> dict[str, Union[str, list[str]]]:
@@ -785,9 +817,6 @@ def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
             if isinstance(output_dir, list):
                 output_dir = output_dir[0] if output_dir else "."
 
-            print(selected_bldg_ids)
-            print(available_weather_states)
-            print(file_type_tuple)
             fetch_bldg_data(
                 selected_bldg_ids, file_type_tuple, Path(output_dir), weather_states=available_weather_states
             )
@@ -806,10 +835,15 @@ def main_callback(
     file_type: str = FILE_TYPE_OPTION,
     upgrade_id: str = UPGRADE_ID_OPTION,
     output_directory: str = OUTPUT_DIRECTORY_OPTION,
+    version: bool = VERSION_OPTION,
 ) -> None:
     """
     Buildstock Fetch CLI tool. Run without arguments for interactive mode.
     """
+
+    # Handle version option first
+    if version:
+        _show_version()
 
     # If no arguments provided, run interactive mode
     if not any([product, release_year, weather_file, release_version, states, file_type]):
