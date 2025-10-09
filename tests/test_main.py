@@ -1,23 +1,33 @@
+import json
 import shutil
 import sys
+from datetime import timedelta
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
 from buildstock_fetch.main import (
+    LOAD_CURVE_COLUMN_AGGREGATION,
     BuildingID,
     No15minLoadCurveError,
     NoAnnualLoadCurveError,
     NoBuildingDataError,
-    NoMetadataError,
     RequestedFileTypes,
+    _aggregate_load_curve_aggregate,
     _parse_requested_file_type,
     download_bldg_data,
     fetch_bldg_data,
     fetch_bldg_ids,
 )
+from buildstock_fetch.main_cli import BUILDSTOCK_RELEASES_FILE
+
+
+@pytest.fixture(scope="function")
+def buildstock_releases_json():
+    return json.loads(Path(BUILDSTOCK_RELEASES_FILE).read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="function")
@@ -160,7 +170,7 @@ def test_download_bldg_data(cleanup_downloads):
         output_dir=Path("data"),
     )
     assert Path(
-        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
+        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
     ).exists()
 
     # Test fetching schedule files
@@ -171,7 +181,7 @@ def test_download_bldg_data(cleanup_downloads):
         output_dir=Path("data"),
     )
     assert Path(
-        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
+        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
     ).exists()
 
     # Test fetching both HPXML and schedule files
@@ -182,10 +192,10 @@ def test_download_bldg_data(cleanup_downloads):
         output_dir=Path("data"),
     )
     assert Path(
-        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
+        f"data/{bldg_id.get_release_name()}/hpxml/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
+        f"data/{bldg_id.get_release_name()}/schedule/{bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
     ).exists()
 
 
@@ -198,25 +208,25 @@ def test_fetch_bldg_data(cleanup_downloads):
     print(failed_downloads)
     assert len(downloaded_paths) == 7
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
+        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up00_schedule.csv"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[1].get_release_name()}/hpxml/{bldg_ids[1].state}/up{str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00.xml"
+        f"data/{bldg_ids[1].get_release_name()}/hpxml/{bldg_ids[1].state}/upgrade={str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[1].get_release_name()}/schedule/{bldg_ids[1].state}/up{str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00_schedule.csv"
+        f"data/{bldg_ids[1].get_release_name()}/schedule/{bldg_ids[1].state}/upgrade={str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg0000008-up00_schedule.csv"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[2].get_release_name()}/hpxml/{bldg_ids[2].state}/up{str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00.xml"
+        f"data/{bldg_ids[2].get_release_name()}/hpxml/{bldg_ids[2].state}/upgrade={str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[2].get_release_name()}/schedule/{bldg_ids[2].state}/up{str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00_schedule.csv"
+        f"data/{bldg_ids[2].get_release_name()}/schedule/{bldg_ids[2].state}/upgrade={str(int(bldg_ids[2].upgrade_id)).zfill(2)}/bldg0000011-up00_schedule.csv"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/metadata/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
 
     # Test 2021 release - should raise NoBuildingDataError
@@ -263,10 +273,10 @@ def test_fetch_bldg_data(cleanup_downloads):
     assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up01.xml"
+        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up01.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up01_schedule.csv"
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up01_schedule.csv"
     ).exists()
 
 
@@ -284,32 +294,195 @@ def test_fetch_metadata(cleanup_downloads):
     assert len(downloaded_paths) == 1
     assert len(failed_downloads) == 0
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/metadata/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
 
-    # Test 2024 comstock release - should raise NoMetadataError
+    # Test 2024 comstock release
     bldg_ids = [
         BuildingID(
-            bldg_id=7, release_year="2024", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="2"
-        )
+            bldg_id=19713,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+        ),
+        BuildingID(
+            bldg_id=658,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+        ),
+        BuildingID(
+            bldg_id=659,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+        ),
     ]
     file_type = ("metadata",)
     output_dir = Path("data")
 
-    with pytest.raises(NoMetadataError, match=f"Metadata is not available for {bldg_ids[0].get_release_name()}"):
-        fetch_bldg_data(bldg_ids, file_type, output_dir)
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+    ).exists()
 
-    # Test 2025 comstock release - should raise NoMetadataError
+    # Test 2024 comstock release
     bldg_ids = [
         BuildingID(
-            bldg_id=7, release_year="2025", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="1"
-        )
+            bldg_id=19713,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+        ),
+        BuildingID(
+            bldg_id=658,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+        ),
+        BuildingID(
+            bldg_id=70769,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="NV",
+        ),
+        BuildingID(
+            bldg_id=68227,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="NV",
+        ),
     ]
     file_type = ("metadata",)
     output_dir = Path("data")
 
-    with pytest.raises(NoMetadataError, match=f"Metadata is not available for {bldg_ids[0].get_release_name()}"):
-        fetch_bldg_data(bldg_ids, file_type, output_dir)
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+    ).exists()
+    assert Path(
+        f"data/{bldg_ids[-1].get_release_name()}/metadata/state={bldg_ids[-1].state}/upgrade={str(int(bldg_ids[-1].upgrade_id)).zfill(2)}/metadata.parquet"
+    ).exists()
+
+    # Test 2025 comstock release - should fail
+    bldg_ids = [
+        BuildingID(
+            bldg_id=150914,
+            release_year="2025",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="MA",
+        ),
+        BuildingID(
+            bldg_id=149336,
+            release_year="2025",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="MA",
+        ),
+        BuildingID(
+            bldg_id=87123,
+            release_year="2025",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="MO",
+        ),
+        BuildingID(
+            bldg_id=87232,
+            release_year="2025",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="MO",
+        ),
+    ]
+    file_type = ("metadata",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+    ).exists()
+    assert Path(
+        f"data/{bldg_ids[2].get_release_name()}/metadata/state={bldg_ids[2].state}/upgrade={str(int(bldg_ids[2].upgrade_id)).zfill(2)}/metadata.parquet"
+    ).exists()
+
+
+def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=320214,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=95261,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=95272,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="1",
+            release_number="2",
+            state="NY",
+        ),
+    ]
+    file_type = ("metadata",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+    ).exists()
+    metadata_file_path = downloaded_paths[0]
+    metadata_file = pl.read_parquet(metadata_file_path)
+    assert metadata_file.height == 3
+    assert metadata_file.filter(pl.col("bldg_id") == 320214).height == 1
+    assert metadata_file.filter(pl.col("bldg_id") == 95261).height == 1
+    assert metadata_file.filter(pl.col("bldg_id") == 95272).height == 1
 
 
 def test_fetch_15min_load_curve(cleanup_downloads):
@@ -331,7 +504,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -346,7 +519,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/load_curve_15min/{bldg_ids[0].state}/up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/load_curve_15min/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -367,7 +540,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -414,11 +587,11 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
     bldg_ids = [
@@ -448,11 +621,11 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}-up{str(int(bldg_id.upgrade_id)).zfill(2)}_load_curve_15min.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{str(bldg_id.bldg_id).zfill(7)}_load_curve_15min.parquet"
     ).exists()
 
 
@@ -498,11 +671,11 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     # 2023 release - should work fine
@@ -521,11 +694,11 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     # 2024 comstock amy2018 v2 release - should work fine
@@ -556,11 +729,11 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     # 2024 resstock tmy3 v1 release - should crash
@@ -621,12 +794,924 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/{bldg_id.state}/up{str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
+
+
+def test_fetch_monthly_load_curve(cleanup_downloads):
+    # 2024 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=173038,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+        BuildingID(
+            bldg_id=119411,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+    ]
+    file_type = ("load_curve_monthly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_monthly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_monthly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_monthly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_monthly.parquet"
+    ).exists()
+
+
+def test_fetch_hourly_load_curve(cleanup_downloads):
+    # 2022 release
+    bldg_ids = [
+        BuildingID(
+            bldg_id=386459,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="ME",
+        ),
+        BuildingID(
+            bldg_id=247072,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="ME",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8784
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=43469,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1.1",
+            state="FL",
+        ),
+        BuildingID(
+            bldg_id=25395,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1.1",
+            state="FL",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8784
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=349561,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1.1",
+            state="CO",
+        ),
+        BuildingID(
+            bldg_id=547230,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1.1",
+            state="CO",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=37283,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+        BuildingID(
+            bldg_id=436794,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=276508,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1",
+            state="DE",
+        ),
+        BuildingID(
+            bldg_id=330393,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1",
+            state="DE",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=394846,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1.1",
+            state="IN",
+        ),
+        BuildingID(
+            bldg_id=159923,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1.1",
+            state="IN",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=37283,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+        BuildingID(
+            bldg_id=436794,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+    # 2024 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=173038,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+        BuildingID(
+            bldg_id=119411,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+    ]
+    file_type = ("load_curve_hourly",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_hourly.parquet"
+    ).exists()
+
+    hourly_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = hourly_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 8760
+    assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+
+
+def test_fetch_daily_load_curve(cleanup_downloads):
+    # 2022 release
+    bldg_ids = [
+        BuildingID(
+            bldg_id=386459,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="ME",
+        ),
+        BuildingID(
+            bldg_id=247072,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="ME",
+        ),
+    ]
+    file_type = ("load_curve_daily",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+
+    daily_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = daily_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 366
+    assert timestamps[1] - timestamps[0] == timedelta(days=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=43469,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1.1",
+            state="FL",
+        ),
+        BuildingID(
+            bldg_id=25395,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1.1",
+            state="FL",
+        ),
+    ]
+    file_type = ("load_curve_daily",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+
+    daily_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = daily_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 366
+    assert timestamps[1] - timestamps[0] == timedelta(days=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=349561,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1.1",
+            state="CO",
+        ),
+        BuildingID(
+            bldg_id=547230,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1.1",
+            state="CO",
+        ),
+    ]
+    file_type = ("load_curve_daily",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+
+    daily_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = daily_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 365
+    assert timestamps[1] - timestamps[0] == timedelta(days=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=37283,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+        BuildingID(
+            bldg_id=436794,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+    ]
+    file_type = ("load_curve_daily",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+
+    daily_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = daily_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 365
+    assert timestamps[1] - timestamps[0] == timedelta(days=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=276508,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1",
+            state="DE",
+        ),
+        BuildingID(
+            bldg_id=330393,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1",
+            state="DE",
+        ),
+    ]
+    file_type = ("load_curve_daily",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=394846,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1.1",
+            state="IN",
+        ),
+        BuildingID(
+            bldg_id=159923,
+            release_year="2022",
+            res_com="resstock",
+            weather="tmy3",
+            upgrade_id="0",
+            release_number="1.1",
+            state="IN",
+        ),
+    ]
+    file_type = ("load_curve_daily",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+
+    daily_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = daily_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 365
+    assert timestamps[1] - timestamps[0] == timedelta(days=1)
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=37283,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+        BuildingID(
+            bldg_id=436794,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="GA",
+        ),
+    ]
+    file_type = ("load_curve_daily",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+
+    daily_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = daily_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 365
+    assert timestamps[1] - timestamps[0] == timedelta(days=1)
+
+    # 2024 release - should work fine
+    bldg_ids = [
+        BuildingID(
+            bldg_id=173038,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+        BuildingID(
+            bldg_id=119411,
+            release_year="2024",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="RI",
+        ),
+    ]
+    file_type = ("load_curve_daily",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_daily.parquet"
+    ).exists()
+
+    daily_load_curve = pl.read_parquet(downloaded_paths[0])
+    timestamps = daily_load_curve["timestamp"].to_list()
+    assert len(timestamps) == 365
+    assert timestamps[1] - timestamps[0] == timedelta(days=1)
+
+
+def test_fetch_weather_station_name(cleanup_downloads):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=69, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=132, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+        BuildingID(
+            bldg_id=161, release_year="2022", res_com="resstock", weather="amy2012", upgrade_id="0", release_number="1"
+        ),
+    ]
+
+    expected_weather_station_names = [
+        "G3600130",
+        "G3600810",
+        "G3600810",
+        "G3600710",
+    ]
+
+    for i, bldg_id in enumerate(bldg_ids):
+        weather_station_name = bldg_id.get_weather_station_name()
+        assert weather_station_name == expected_weather_station_names[i]
+
+
+def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
+    bldg_ids = [
+        BuildingID(
+            bldg_id=376421,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=347694,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=47568,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=200309,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="NY",
+        ),
+    ]
+
+    file_type = ("weather",)
+    output_dir = Path("data")
+
+    release_name = "res_2022_amy2012_1"
+    weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
+    assert len(downloaded_paths) == len(bldg_ids)
+    assert len(failed_downloads) == 0
+    for bldg_id in bldg_ids:
+        assert Path(
+            f"data/{bldg_id.get_release_name()}/weather/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_weather_station_name()}.csv"
+        ).exists()
+
+    # Invalid weather file test
+    bldg_ids = [
+        BuildingID(
+            bldg_id=67, release_year="2024", res_com="comstock", weather="amy2018", upgrade_id="0", release_number="1"
+        ),
+    ]
+    file_type = ("weather",)
+    output_dir = Path("data")
+
+    release_name = "com_2024_amy2018_1"
+    if "weather_map_available_states" in buildstock_releases_json[release_name]:
+        weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
+    else:
+        weather_states = []
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
+    assert len(downloaded_paths) == 0
+    assert len(failed_downloads) == 1
+
+
+def _verify_aggregation_values(matching_15min, row, column_aggregations):
+    """Verify that aggregated values match the expected aggregation of 15-minute data."""
+    for name, rule in column_aggregations.items():
+        if name == "timestamp":
+            continue
+
+        if name not in matching_15min.columns:
+            continue
+
+        if rule == "sum":
+            # Use a small tolerance for floating point precision issues
+            assert abs(matching_15min[name].sum() - row[name]) < 0.1
+        elif rule == "mean":
+            assert abs(matching_15min[name].mean() - row[name]) < 0.1
+        elif rule == "first":
+            assert abs(matching_15min[name].first() - row[name]) < 0.1
+
+
+def _analyze_aggregation_data(load_curve_15min, load_curve_aggregate, column_aggregations, aggregate_timestep):
+    """Analyze aggregation data by finding matching 15-minute data for each timestep."""
+    for row in load_curve_aggregate.iter_rows(named=True):
+        agg_timestamp = row["timestamp"]
+
+        if aggregate_timestep == "hourly":
+            # Use the same grouping logic as the aggregation function
+            grouping_key = agg_timestamp.strftime("%Y-%m-%d-%H")
+
+            # Find matching 15-minute data using the same grouping logic
+            matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.strftime("%Y-%m-%d-%H") == grouping_key)
+
+        elif aggregate_timestep == "daily":
+            # Use the same grouping logic as the aggregation function
+            grouping_key = agg_timestamp.strftime("%Y-%m-%d")
+
+            # Find all 15-minute data for this day using the same grouping logic
+            matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.strftime("%Y-%m-%d") == grouping_key)
+
+        elif aggregate_timestep == "monthly":
+            # Use the same grouping logic as the aggregation function
+            grouping_key = agg_timestamp.strftime("%Y-%m")
+
+            # Find all 15-minute data for this month using the same grouping logic
+            matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.strftime("%Y-%m") == grouping_key)
+
+        # Verify aggregation values
+        _verify_aggregation_values(matching_15min, row, column_aggregations)
+
+
+def test_aggregation_functions(cleanup_downloads):
+    """Test aggregation functions for different time steps."""
+    aggregate_timesteps = ["hourly", "monthly", "daily"]
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=100000,
+            release_year="2024",
+            res_com="resstock",
+            weather="tmy3",
+            release_number="2",
+            upgrade_id="0",
+            state="OH",
+        ),
+    ]
+    file_type = ("load_curve_15min",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    load_curve_15min = pl.read_parquet(downloaded_paths[0])
+
+    load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
+    aggregation_rules = pl.read_csv(load_curve_map)
+    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
+
+    for aggregate_timestep in aggregate_timesteps:
+        # Create a copy of the 15min data and apply the same timestamp adjustment as the aggregation function
+        load_curve_15min_processed = load_curve_15min.with_columns(
+            (pl.col("timestamp") - timedelta(minutes=15)).alias("timestamp")
+        )
+
+        load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_timestep, "2024")
+        if aggregate_timestep == "monthly":
+            assert load_curve_aggregate.shape[0] == 12
+        elif aggregate_timestep == "hourly":
+            assert load_curve_aggregate.shape[0] == 8760
+        elif aggregate_timestep == "daily":
+            assert load_curve_aggregate.shape[0] == 365
+
+        # Analyze aggregation data for this timestep using the processed 15min data
+        _analyze_aggregation_data(
+            load_curve_15min_processed, load_curve_aggregate, column_aggregations, aggregate_timestep
+        )
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=386459,
+            release_year="2022",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="ME",
+        )
+    ]
+    file_type = ("load_curve_15min",)
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    load_curve_15min = pl.read_parquet(downloaded_paths[0])
+
+    load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_resstock_load_curve_columns.csv")
+    aggregation_rules = pl.read_csv(load_curve_map)
+    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
+
+    for aggregate_timestep in aggregate_timesteps:
+        # Create a copy of the 15min data and apply the same timestamp adjustment as the aggregation function
+        load_curve_15min_processed = load_curve_15min.with_columns(
+            (pl.col("timestamp") - timedelta(minutes=15)).alias("timestamp")
+        )
+
+        load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_timestep, "2022")
+        if aggregate_timestep == "monthly":
+            assert load_curve_aggregate.shape[0] == 12
+        elif aggregate_timestep == "hourly":
+            assert load_curve_aggregate.shape[0] == 8784
+        elif aggregate_timestep == "daily":
+            assert load_curve_aggregate.shape[0] == 366
+
+        # Analyze aggregation data for this timestep using the processed 15min data
+        _analyze_aggregation_data(
+            load_curve_15min_processed, load_curve_aggregate, column_aggregations, aggregate_timestep
+        )
 
 
 def test_fetch_trip_schedules(cleanup_downloads):

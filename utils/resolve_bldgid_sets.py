@@ -4,6 +4,7 @@ import re
 import tempfile
 import time
 import zipfile
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -26,6 +27,10 @@ class BuildStockRelease(TypedDict):
 
 class CommonPrefix(TypedDict):
     Prefix: str
+
+
+DATA_DIR = Path(str(files("buildstock_fetch").joinpath("data")))
+RELEASE_JSON_FILE = Path(str(DATA_DIR.joinpath("buildstock_releases.json")))
 
 
 def _find_model_directory(s3_client: Any, bucket_name: str, prefix: str) -> str:
@@ -233,6 +238,7 @@ def _find_available_data(s3_client: Any, bucket_name: str, prefix: str) -> list[
         "metadata",
         "timeseries_individual_buildings",
         "metadata_and_annual_results",
+        "weather",
     ]
     paginator = s3_client.get_paginator("list_objects_v2")
 
@@ -464,8 +470,7 @@ def resolve_bldgid_sets(
     append_avail_trip_schedules(releases)
 
     # Save to JSON file with consistent formatting
-    output_path = Path(__file__).parent / output_file
-    with open(output_path, "w", encoding="utf-8", newline="\n") as f:
+    with open(RELEASE_JSON_FILE, "w", encoding="utf-8", newline="\n") as f:
         json.dump(releases, f, indent=2, sort_keys=False, ensure_ascii=False)
         f.write("\n")  # Ensure newline at end of file
 
