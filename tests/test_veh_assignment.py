@@ -3,6 +3,7 @@ from datetime import datetime
 import numpy as np
 import polars as pl
 import pytest
+from pytest import approx
 
 from utils.ev_demand import (
     EVDemandCalculator,
@@ -99,8 +100,6 @@ def test_fit_vehicle_ownership_model_caps_vehicles_at_2(calculator):
 
 def test_fit_vehicle_ownership_model_with_sample_weights(calculator):
     """Test model fitting with sample weights."""
-    from pytest import approx
-
     # With fixed random_state=42 and fixed input data, coefficients should be exactly:
     expected_coef = np.array([
         [-0.6273701443561746, -0.5479382238614515, 0.14318094439321308],
