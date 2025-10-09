@@ -6,10 +6,13 @@ from dataclasses import asdict, dataclass
 from datetime import timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
+import boto3
 import polars as pl
 import requests
+from botocore import UNSIGNED
+from botocore.config import Config
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -22,6 +25,8 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
+
+# from buildstock_fetch.main_cli import _get_all_available_releases
 
 
 class InvalidProductError(ValueError):
@@ -96,6 +101,7 @@ class RequestedFileTypes:
     load_curve_daily: bool = False
     load_curve_monthly: bool = False
     load_curve_annual: bool = False
+    trip_schedules: bool = False
     weather: bool = False
 
 
@@ -1081,24 +1087,26 @@ def download_aggregate_time_step_load_curve_with_progress(
 def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes:
     """Parse the file type string into a RequestedFileTypes object."""
     file_type_obj = RequestedFileTypes()
-    if "hpxml" in file_type:
-        file_type_obj.hpxml = True
-    if "schedule" in file_type:
-        file_type_obj.schedule = True
-    if "metadata" in file_type:
-        file_type_obj.metadata = True
-    if "load_curve_15min" in file_type:
-        file_type_obj.load_curve_15min = True
-    if "load_curve_hourly" in file_type:
-        file_type_obj.load_curve_hourly = True
-    if "load_curve_daily" in file_type:
-        file_type_obj.load_curve_daily = True
-    if "load_curve_monthly" in file_type:
-        file_type_obj.load_curve_monthly = True
-    if "load_curve_annual" in file_type:
-        file_type_obj.load_curve_annual = True
-    if "weather" in file_type:
-        file_type_obj.weather = True
+
+    # Map file type strings to their corresponding attributes
+    type_mapping = {
+        "hpxml": "hpxml",
+        "schedule": "schedule",
+        "metadata": "metadata",
+        "load_curve_15min": "load_curve_15min",
+        "load_curve_hourly": "load_curve_hourly",
+        "load_curve_daily": "load_curve_daily",
+        "load_curve_monthly": "load_curve_monthly",
+        "load_curve_annual": "load_curve_annual",
+        "trip_schedules": "trip_schedules",
+        "weather": "weather",
+    }
+
+    # Set attributes based on what's in the file_type tuple
+    for type_str, attr_name in type_mapping.items():
+        if type_str in file_type:
+            setattr(file_type_obj, attr_name, True)
+
     return file_type_obj
 
 
@@ -1699,6 +1707,132 @@ def _download_annual_load_curves_parallel(
                 console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
+def _get_parquet_files_for_state(s3_client: Any, bucket: str, s3_prefix: str) -> list[str]:
+    """Get list of parquet files for a given S3 prefix."""
+    paginator = s3_client.get_paginator("list_objects_v2")
+    parquet_files = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=s3_prefix):
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith(".parquet"):
+                parquet_files.append(obj["Key"])
+    return parquet_files
+
+
+def _download_and_read_parquet_files(
+    s3_client: Any, bucket: str, parquet_files: list[str], output_dir: Path
+) -> list[Any]:
+    """Download and read parquet files, returning a list of dataframes."""
+    # Ensure output directory exists
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    state_dataframes = []
+    for s3_key in parquet_files:
+        temp_file = output_dir / f"temp_{s3_key.split('/')[-1]}"
+        s3_client.download_file(bucket, s3_key, str(temp_file))
+        df = pl.read_parquet(str(temp_file))
+        state_dataframes.append(df)
+        temp_file.unlink()
+    return state_dataframes
+
+
+def _process_state_data(
+    s3_client: Any, bucket: str, prefix: str, release: str, state: str, output_dir: Path
+) -> tuple[list[Any], bool]:
+    """Process data for a single state, returning (dataframes, has_data)."""
+    s3_prefix = f"{prefix}release={release}/state={state}/"
+    parquet_files = _get_parquet_files_for_state(s3_client, bucket, s3_prefix)
+
+    if not parquet_files:
+        return [], False
+
+    state_dataframes = _download_and_read_parquet_files(s3_client, bucket, parquet_files, output_dir)
+    if state_dataframes:
+        state_combined_df = pl.concat(state_dataframes)
+        return [state_combined_df], True
+    return [], False
+
+
+def _save_filtered_state_data(
+    state_df: Any, state: str, bldg_ids: list[BuildingID], release: str, output_dir: Path, downloaded_paths: list[Path]
+) -> None:
+    """Save filtered data for a specific state."""
+    bldg_id_list = [str(bldg.bldg_id) for bldg in bldg_ids if bldg.state == state]
+    if not bldg_id_list:
+        return
+
+    filtered_df = state_df.filter(pl.col("bldg_id").is_in(bldg_id_list))
+    if filtered_df.height == 0:
+        return
+
+    output_file = output_dir / release / "trip_schedules" / f"state={state}" / "trip_schedules.parquet"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    filtered_df.write_parquet(str(output_file))
+    downloaded_paths.append(output_file)
+
+
+def _download_trip_schedules_data(
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    downloaded_paths: list[Path],
+    bucket: str = "buildstock-fetch",
+    prefix: str = "ev_demand/trip_schedules/",
+) -> None:
+    """
+    Download and filter trip schedules data for specific building IDs.
+
+    Args:
+        bldg_ids: List of BuildingID objects to filter for.
+        output_dir: Directory to save the downloaded files.
+        downloaded_paths: List to append successful download paths to.
+        bucket: Name of the S3 bucket.
+        prefix: S3 prefix for the trip schedules data.
+
+    Raises:
+        NoBuildingDataError: If no buildings from bldg_ids are found in any available state data.
+    """
+    import warnings
+
+    release = bldg_ids[0].get_release_name()
+    states_list = list({bldg.state for bldg in bldg_ids})
+
+    s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+
+    all_dataframes = []
+    available_states = []
+    unavailable_states = []
+
+    # Process each state
+    for state in states_list:
+        state_dataframes, has_data = _process_state_data(s3, bucket, prefix, release, state, output_dir)
+
+        if has_data:
+            available_states.append(state)
+            all_dataframes.extend(state_dataframes)
+        else:
+            unavailable_states.append(state)
+
+    # Issue warnings for unavailable states
+    if unavailable_states:
+        warnings.warn(
+            f"No trip schedules data found for {release} in states: {', '.join(unavailable_states)}. "
+            f"Continuing with available states: {', '.join(available_states)}.",
+            stacklevel=2,
+        )
+
+    if not all_dataframes:
+        msg = f"No trip schedules data found for {release} in any of the requested states: {', '.join(states_list)}"
+        raise NoBuildingDataError(msg)
+
+    # Save filtered data for each available state separately
+    for i, state_df in enumerate(all_dataframes):
+        state = available_states[i]
+        _save_filtered_state_data(state_df, state, bldg_ids, release, output_dir, downloaded_paths)
+
+    if not any(bldg.state in available_states for bldg in bldg_ids):
+        msg = f"No trip schedules data found for buildings {[bldg.bldg_id for bldg in bldg_ids]} in {release} for any available state"
+        raise NoBuildingDataError(msg)
+
+
 def _download_weather_files_parallel(
     bldg_ids: list[BuildingID],
     output_dir: Path,
@@ -1873,6 +2007,13 @@ def fetch_bldg_data(
             console,
             weather_states,
         )
+
+        # TODO: add EV related files
+        # TODO: Write a function for downloading EV related files from SB's s3 bucket.
+        # It should dynamically build the download url based on the release_name + state combo.
+        # Make sure to follow the directory structure for downloading the files.
+        if file_type_obj.trip_schedules:
+            _download_trip_schedules_data(bldg_ids, output_dir, downloaded_paths)
 
     _print_download_summary(downloaded_paths, failed_downloads, console)
 

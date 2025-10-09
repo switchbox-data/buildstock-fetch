@@ -12,6 +12,9 @@ import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+output_file_path: str = os.path.join(PROJECT_ROOT, "buildstock_fetch", "data", "buildstock_releases.json")
+
 
 class BuildStockRelease(TypedDict):
     release_year: str
@@ -294,6 +297,48 @@ def _find_upgrade_ids(s3_client: Any, bucket_name: str, prefix: str) -> list[str
     return upgrade_ids
 
 
+def _find_trip_schedules(sb_bucket_name: str, sb_prefix: str):
+    """
+    Scan an S3 bucket for EV trip schedule files and return a mapping of release versions to their available states.
+
+    This function checks for trip schedule files under the given prefix in a public S3 bucket and returns a dictionary
+    where the keys are release versions and the values are lists of states that have trip schedule data available.
+
+    Args:
+        bucket_name: Name of the S3 bucket to scan
+        prefix: Path prefix to start scanning from
+
+    Returns:
+        dict[str, list[str]]: Dictionary mapping release versions to lists of states with available trip schedules
+    """
+    s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    paginator = s3.get_paginator("list_objects_v2")
+
+    subdirs = {}
+
+    # --- Releases ---
+    for page in paginator.paginate(Bucket=sb_bucket_name, Prefix=sb_prefix, Delimiter="/"):
+        if "CommonPrefixes" in page:
+            for cp in page["CommonPrefixes"]:
+                sub1 = cp["Prefix"].rstrip("/").split("/")[-1]
+                # Extract just the value after "release="
+                if "release=" in sub1:
+                    sub1 = sub1.split("release=")[1]
+                subdirs[sub1] = []
+
+                # --- Level 2 for each level1 folder ---
+                for subpage in paginator.paginate(Bucket=sb_bucket_name, Prefix=cp["Prefix"], Delimiter="/"):
+                    if "CommonPrefixes" in subpage:
+                        for subcp in subpage["CommonPrefixes"]:
+                            sub2 = subcp["Prefix"].rstrip("/").split("/")[-1]
+                            # Extract just the value after "state="
+                            if "state=" in sub2:
+                                sub2 = sub2.split("state=")[1]
+                            subdirs[sub1].append(sub2)
+
+    return subdirs
+
+
 def _process_release(
     s3_client: Any,
     bucket_name: str,
@@ -334,10 +379,22 @@ def _process_release(
     releases[key] = release_data
 
 
+def append_avail_trip_schedules(
+    releases: dict[str, BuildStockRelease],
+    sb_bucket_name: str = "buildstock-fetch",
+    sb_prefix: str = "ev_demand/trip_schedules/",
+):
+    trip_schedules = _find_trip_schedules(sb_bucket_name, sb_prefix)
+    common_keys = [key for key in trip_schedules if key in releases]
+    for key in common_keys:
+        releases[key]["available_data"].append("trip_schedules")
+        releases[key]["trip_schedule_states"] = trip_schedules[key]
+
+
 def resolve_bldgid_sets(
     bucket_name: str = "oedi-data-lake",
     prefix: str = "nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock",
-    output_file: str = "buildstock_releases.json",
+    output_file: str = output_file_path,
 ) -> dict[str, BuildStockRelease]:
     """
     Get URLs containing 'building_energy_models' from the NREL S3 bucket.
@@ -410,6 +467,7 @@ def resolve_bldgid_sets(
                         _process_release(
                             s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data
                         )
+    append_avail_trip_schedules(releases)
 
     # Save to JSON file with consistent formatting
     with open(RELEASE_JSON_FILE, "w", encoding="utf-8", newline="\n") as f:

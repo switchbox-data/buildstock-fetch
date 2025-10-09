@@ -480,3 +480,84 @@ def test_cli_help():
     assert "--file_type" in clean_output
     assert "--upgrade_id" in clean_output
     assert "--output_directory" in clean_output
+
+
+def test_cli_direct_arguments_trip_schedules(cleanup_downloads):
+    """Test CLI with direct command line arguments (non-interactive mode)."""
+    # Test with direct arguments for metadata download
+    result = runner.invoke(
+        app,
+        [
+            "--product",
+            "resstock",
+            "--release_year",
+            "2024",
+            "--weather_file",
+            "tmy3",
+            "--release_version",
+            "2",
+            "--states",
+            "NY",
+            "--file_type",
+            "trip_schedules",
+            "--upgrade_id",
+            "0",
+            "--output_directory",
+            "test_output",
+        ],
+    )
+
+    # Debug output
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+    print(f"Exception: {result.exception}")
+
+    assert "Downloading data for:" in result.stdout
+    assert "Product: resstock" in result.stdout
+    assert "Release year: 2024" in result.stdout
+    assert "Weather file: tmy3" in result.stdout
+    assert "Release version: 2" in result.stdout
+    assert "States: ['NY']" in result.stdout
+    assert "File type: ['trip_schedules']" in result.stdout
+    assert "Upgrade ids: ['0']" in result.stdout
+    assert "test_output" in result.stdout
+
+    """Test CLI with direct command line arguments (non-interactive mode)."""
+    # Test with direct arguments for metadata download
+    result = runner.invoke(
+        app,
+        [
+            "--product",
+            "resstock",
+            "--release_year",
+            "2024",
+            "--weather_file",
+            "tmy3",
+            "--release_version",
+            "2",
+            "--states",
+            "WY",
+            "--file_type",
+            "trip_schedules",
+            "--upgrade_id",
+            "0",
+            "--output_directory",
+            "test_output",
+        ],
+    )
+
+    # Debug output
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+    print(f"Exception: {result.exception}")
+
+    assert "Downloading data for:" in result.stdout
+    assert "Product: resstock" in result.stdout
+    assert "Release year: 2024" in result.stdout
+    assert "Weather file: tmy3" in result.stdout
+    assert "Release version: 2" in result.stdout
+    assert "States: ['WY']" in result.stdout
+    assert "File type: ['trip_schedules']" in result.stdout
+    assert "Upgrade ids: ['0']" in result.stdout
+    assert "test_output" in result.stdout
+    assert "The following state is not available for trip schedules: WY" in result.stdout
