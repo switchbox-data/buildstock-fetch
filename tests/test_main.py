@@ -285,7 +285,7 @@ def test_fetch_metadata(cleanup_downloads):
     NOT_METADATA_COLUMNS = ["out."]
     bldg_ids = [
         BuildingID(
-            bldg_id=7, release_year="2024", res_com="resstock", weather="tmy3", upgrade_id="1", release_number="2"
+            bldg_id=303470, release_year="2024", res_com="resstock", weather="tmy3", upgrade_id="1", release_number="2"
         )
     ]
     file_type = ("metadata",)
@@ -347,20 +347,22 @@ def test_fetch_metadata(cleanup_downloads):
     # Test 2024 comstock release
     bldg_ids = [
         BuildingID(
-            bldg_id=19713,
+            bldg_id=21023,
             release_year="2024",
             res_com="comstock",
             weather="amy2018",
             upgrade_id="0",
             release_number="2",
+            state="NY",
         ),
         BuildingID(
-            bldg_id=658,
+            bldg_id=18403,
             release_year="2024",
             res_com="comstock",
             weather="amy2018",
             upgrade_id="0",
             release_number="2",
+            state="NY",
         ),
         BuildingID(
             bldg_id=70769,
