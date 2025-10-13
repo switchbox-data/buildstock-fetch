@@ -1,5 +1,7 @@
 import concurrent.futures
+import gc
 import json
+import os
 import tempfile
 import zipfile
 from dataclasses import asdict, dataclass
@@ -640,6 +642,21 @@ def _download_with_progress(url: str, output_file: Path, progress: Progress, tas
     return downloaded_size
 
 
+def _extract_metadata_columns_to_keep(metadata_file: Path) -> list[str]:
+    """Extract metadata columns from a schema."""
+    schema = pl.scan_parquet(metadata_file).collect_schema()
+
+    columns_to_keep = []
+    for col in schema:
+        if (
+            any(keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index"])
+            or col.startswith("in.")
+            or col.startswith("in.")
+        ):
+            columns_to_keep.append(col)
+    return columns_to_keep
+
+
 def _download_with_progress_metadata(url: str, output_file: Path, progress: Progress, task_id: TaskID) -> int:
     """Download a metadata file with progress tracking and append to existing file if it exists."""
     # Get file size first
@@ -656,36 +673,26 @@ def _download_with_progress_metadata(url: str, output_file: Path, progress: Prog
 
     # Check if output file already exists
     if output_file.exists():
-        # Read existing parquet file
-        existing_df = pl.read_parquet(output_file)
-
-        # Download new data to temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
             temp_path = Path(temp_file.name)
+            with open(temp_path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        file.write(chunk)
+                        downloaded_size += len(chunk)
+                        if total_size > 0:
+                            progress.update(task_id, completed=downloaded_size)
+            _process_single_metadata_file(temp_path)
 
-            try:
-                # Download to temp file
-                with open(temp_path, "wb") as file:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            file.write(chunk)
-                            downloaded_size += len(chunk)
-                            if total_size > 0:
-                                progress.update(task_id, completed=downloaded_size)
+            existing_file = pl.scan_parquet(output_file)
+            new_file = pl.scan_parquet(temp_path)
+            combined_file = pl.concat([existing_file, new_file])
+            # Remove duplicate rows based on bldg_id column
+            deduplicated_file = combined_file.collect().unique(subset=["bldg_id"], keep="first")
+            deduplicated_file.write_parquet(output_file)
+            gc.collect()
+            os.remove(temp_path)
 
-                # Read new data
-                new_df = pl.read_parquet(temp_path)
-
-                # Concatenate existing and new data, removing duplicates
-                combined_df = pl.concat([existing_df, new_df]).unique()
-
-                # Write combined data back to original file
-                combined_df.write_parquet(output_file)
-
-            finally:
-                # Clean up temp file
-                if temp_path.exists():
-                    temp_path.unlink()
     else:
         # File doesn't exist, download normally
         with open(str(output_file), "wb") as file:
@@ -696,7 +703,45 @@ def _download_with_progress_metadata(url: str, output_file: Path, progress: Prog
                     if total_size > 0:
                         progress.update(task_id, completed=downloaded_size)
 
+        _process_single_metadata_file(output_file)
+
     return downloaded_size
+
+
+def _process_single_metadata_file(metadata_file: Path) -> None:
+    """Process a single metadata file to keep only columns containing specified keywords."""
+    # First, get column names without loading data into memory
+    schema = pl.scan_parquet(metadata_file).collect_schema()
+
+    # Filter columns to only keep those containing "bldg_id", "upgrade", "metadata_index", or "out."
+    # and remove columns that start with "in."
+    columns_to_keep = []
+    for col in schema:
+        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("in."):
+            columns_to_keep.append(col)
+
+    # Use streaming operations to avoid loading entire file into memory
+    # Create a temporary file to write the filtered data
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+        temp_file_path = temp_file.name
+
+        try:
+            # Stream the data: select columns and write in one operation
+            filtered_metadata_file = pl.scan_parquet(metadata_file).select(columns_to_keep).collect()
+            filtered_metadata_file.write_parquet(temp_file_path)
+
+            # Replace the original file with the filtered one
+            os.replace(temp_file_path, metadata_file)
+
+            # Force garbage collection to free memory immediately
+            gc.collect()
+
+        except Exception:
+            # Clean up temp file if something goes wrong
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            raise
+    return
 
 
 def _get_time_step_grouping_key(aggregate_time_step: str) -> tuple[str, str]:
@@ -1110,7 +1155,9 @@ def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes
     return file_type_obj
 
 
-def _process_metadata_results(bldg_ids: list[BuildingID], output_dir: Path, downloaded_paths: list[Path]) -> None:
+def _filter_metadata_requested_bldg_ids(
+    bldg_ids: list[BuildingID], output_dir: Path, downloaded_paths: list[Path]
+) -> None:
     """Process the results of a completed metadata download."""
     metadata_to_bldg_id_mapping: dict[Path, list[int]] = {}
     for bldg_id in bldg_ids:
@@ -1129,12 +1176,67 @@ def _process_metadata_results(bldg_ids: list[BuildingID], output_dir: Path, down
                 metadata_to_bldg_id_mapping[output_file] = [bldg_id.bldg_id]
 
     for metadata_file, bldg_id_list in metadata_to_bldg_id_mapping.items():
-        # Use scan_parquet for lazy evaluation and better memory efficiency
-        metadata_df_filtered = pl.scan_parquet(metadata_file).filter(pl.col("bldg_id").is_in(bldg_id_list)).collect()
-        # Write the filtered dataframe back to the same file
-        metadata_df_filtered.write_parquet(metadata_file)
+        # Use streaming operations to avoid loading entire file into memory
+        # Stream the data: filter rows, select columns, and write in one operation
+        filtered_metadata_file = pl.scan_parquet(metadata_file).filter(pl.col("bldg_id").is_in(bldg_id_list)).collect()
+
+        # Replace the original file with the filtered one
+        filtered_metadata_file.write_parquet(metadata_file)
+
+        # Force garbage collection to free memory immediately
+        gc.collect()
 
     return
+
+
+def _process_annual_load_curve_file(file_path: Path) -> None:
+    """Process an annual load curve file to keep only columns containing specified keywords.
+
+    Args:
+        file_path: Path to the annual load curve parquet file to process.
+    """
+    # First, get column names without loading data into memory
+    schema = pl.scan_parquet(file_path).collect_schema()
+
+    # Filter columns to only keep those containing "bldg_id", "upgrade", "metadata_index", or "out."
+    # and remove columns that start with "in."
+    columns_to_keep = []
+    for col in schema:
+        if (
+            any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("out.")
+        ) and not col.startswith("in."):
+            columns_to_keep.append(col)
+
+    # Use streaming operations to avoid loading entire file into memory
+    # Create a temporary file to write the filtered data
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+        temp_file_path = temp_file.name
+
+    # Stream the data: select columns and write in one operation
+    filtered_file = pl.scan_parquet(file_path).select(columns_to_keep).collect()
+    filtered_file.write_parquet(temp_file_path)
+
+    # Replace the original file with the filtered one
+    os.replace(temp_file_path, file_path)
+
+    # Force garbage collection to free memory immediately
+    gc.collect()
+
+
+def _process_annual_load_curve_results(downloaded_paths: list[Path]) -> None:
+    """Process all downloaded annual load curve files to filter columns.
+
+    Args:
+        downloaded_paths: List of all downloaded file paths.
+    """
+    # Filter for annual load curve files
+    annual_load_curve_files = [
+        path for path in downloaded_paths if "load_curve_annual" in str(path) and path.suffix == ".parquet"
+    ]
+
+    # Process each annual load curve file
+    for file_path in annual_load_curve_files:
+        _process_annual_load_curve_file(file_path)
 
 
 def _process_download_results(
@@ -1193,14 +1295,9 @@ def _download_metadata_with_progress(
         if download_url in metadata_urls:
             metadata_urls.remove(download_url)
         metadata_task = progress.add_task(
-            f"[yellow]Downloading metadata: {download_url}",
+            f"[yellow]Downloading metadata: {bldg_id.get_release_name()} - (upgrade {bldg_id.upgrade_id}) - {bldg_id.state}",
             total=0,  # Will be updated when we get the file size
         )
-        # Get file size first
-        response = requests.head(download_url, timeout=30)
-        response.raise_for_status()
-        total_size = int(response.headers.get("content-length", 0))
-        progress.update(metadata_task, total=total_size)
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -1594,7 +1691,8 @@ def _download_metadata(
     if not bldg_ids:
         return
     _download_metadata_with_progress(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
-    _process_metadata_results(bldg_ids, output_dir, downloaded_paths)
+    # Only keep the requested bldg_ids in the metadata file
+    _filter_metadata_requested_bldg_ids(bldg_ids, output_dir, downloaded_paths)
 
 
 def download_annual_load_curve_with_progress(
@@ -2096,6 +2194,8 @@ def _execute_downloads(
         _download_annual_load_curves_parallel(
             bldg_ids, output_dir, max_workers, progress, downloaded_paths, failed_downloads, console
         )
+        # Process annual load curve files to filter columns
+        _process_annual_load_curve_results(downloaded_paths)
 
     # Get weather files if requested.
     if file_type_obj.weather:
@@ -2107,12 +2207,78 @@ def _execute_downloads(
 if __name__ == "__main__":  # pragma: no cover
     bldg_ids = [
         BuildingID(
-            bldg_id=67, release_year="2024", res_com="comstock", weather="tmy3", upgrade_id="0", release_number="2"
+            bldg_id=19713,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=658,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=659,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="NY",
         ),
     ]
-    file_type = ("weather",)
+    file_type = ("metadata",)
     output_dir = Path("data")
-    weather_states: list[str] = []
-    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     print(downloaded_paths)
     print(failed_downloads)
+    bldg_ids = [
+        BuildingID(
+            bldg_id=21023,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=18403,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="NY",
+        ),
+        BuildingID(
+            bldg_id=70769,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="NV",
+        ),
+        BuildingID(
+            bldg_id=68227,
+            release_year="2024",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="NV",
+        ),
+    ]
+    file_type = ("metadata",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
