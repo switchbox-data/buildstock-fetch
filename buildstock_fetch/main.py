@@ -2,7 +2,6 @@ import concurrent.futures
 import gc
 import json
 import os
-import shutil
 import tempfile
 import zipfile
 from dataclasses import asdict, dataclass
@@ -721,10 +720,11 @@ def _process_single_metadata_file(metadata_file: Path) -> None:
 
     try:
         # Stream the data: select columns and write in one operation
-        (pl.scan_parquet(metadata_file).select(columns_to_keep).sink_parquet(temp_file))
+        filtered_metadata_file = pl.scan_parquet(metadata_file).select(columns_to_keep).collect()
+        filtered_metadata_file.write_parquet(temp_file)
 
         # Replace the original file with the filtered one
-        shutil.move(temp_file, metadata_file)
+        os.replace(temp_file, metadata_file)
 
         # Force garbage collection to free memory immediately
         gc.collect()
@@ -1219,7 +1219,7 @@ def _process_annual_load_curve_file(file_path: Path) -> None:
         (pl.scan_parquet(file_path).select(columns_to_keep).sink_parquet(temp_file))
 
         # Replace the original file with the filtered one
-        shutil.move(temp_file, file_path)
+        os.replace(temp_file, file_path)
 
         # Force garbage collection to free memory immediately
         gc.collect()
