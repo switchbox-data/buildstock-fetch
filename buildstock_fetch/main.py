@@ -1306,11 +1306,6 @@ def _download_metadata_with_progress(
             f"[yellow]Downloading metadata: {bldg_id.get_release_name()} - (upgrade {bldg_id.upgrade_id}) - {bldg_id.state}",
             total=0,  # Will be updated when we get the file size
         )
-        # Get file size first
-        response = requests.head(download_url, timeout=30)
-        response.raise_for_status()
-        total_size = int(response.headers.get("content-length", 0))
-        progress.update(metadata_task, total=total_size)
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -1704,6 +1699,7 @@ def _download_metadata(
     if not bldg_ids:
         return
     _download_metadata_with_progress(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
+    # Only keep the requested bldg_ids in the metadata file
     _filter_metadata_requested_bldg_ids(bldg_ids, output_dir, downloaded_paths)
 
 
