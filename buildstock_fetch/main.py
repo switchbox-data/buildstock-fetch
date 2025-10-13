@@ -716,24 +716,25 @@ def _process_single_metadata_file(metadata_file: Path) -> None:
 
     # Use streaming operations to avoid loading entire file into memory
     # Create a temporary file to write the filtered data
-    temp_file = str(metadata_file) + ".tmp"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+        temp_file_path = temp_file.name
 
-    try:
-        # Stream the data: select columns and write in one operation
-        filtered_metadata_file = pl.scan_parquet(metadata_file).select(columns_to_keep).collect()
-        filtered_metadata_file.write_parquet(temp_file)
+        try:
+            # Stream the data: select columns and write in one operation
+            filtered_metadata_file = pl.scan_parquet(metadata_file).select(columns_to_keep).collect()
+            filtered_metadata_file.write_parquet(temp_file_path)
 
-        # Replace the original file with the filtered one
-        os.replace(temp_file, metadata_file)
+            # Replace the original file with the filtered one
+            os.replace(temp_file_path, metadata_file)
 
-        # Force garbage collection to free memory immediately
-        gc.collect()
+            # Force garbage collection to free memory immediately
+            gc.collect()
 
-    except Exception:
-        # Clean up temp file if something goes wrong
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
-        raise
+        except Exception:
+            # Clean up temp file if something goes wrong
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            raise
     return
 
 
@@ -1168,26 +1169,14 @@ def _filter_metadata_requested_bldg_ids(
 
     for metadata_file, bldg_id_list in metadata_to_bldg_id_mapping.items():
         # Use streaming operations to avoid loading entire file into memory
-        # Create a temporary file to write the filtered data
-        temp_file = str(metadata_file) + ".tmp"
+        # Stream the data: filter rows, select columns, and write in one operation
+        filtered_metadata_file = pl.scan_parquet(metadata_file).filter(pl.col("bldg_id").is_in(bldg_id_list)).collect()
 
-        try:
-            # Stream the data: filter rows, select columns, and write in one operation
-            filtered_metadata_file = (
-                pl.scan_parquet(metadata_file).filter(pl.col("bldg_id").is_in(bldg_id_list)).collect()
-            )
+        # Replace the original file with the filtered one
+        filtered_metadata_file.write_parquet(metadata_file)
 
-            # Replace the original file with the filtered one
-            filtered_metadata_file.write_parquet(metadata_file)
-
-            # Force garbage collection to free memory immediately
-            gc.collect()
-
-        except Exception:
-            # Clean up temp file if something goes wrong
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-            raise
+        # Force garbage collection to free memory immediately
+        gc.collect()
 
     return
 
@@ -1205,30 +1194,25 @@ def _process_annual_load_curve_file(file_path: Path) -> None:
     # and remove columns that start with "in."
     columns_to_keep = []
     for col in schema:
-        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index", "out."]) and not col.startswith(
-            "in."
+        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or (
+            col.startswith("out.") and not col.startswith("in.")
         ):
             columns_to_keep.append(col)
 
     # Use streaming operations to avoid loading entire file into memory
     # Create a temporary file to write the filtered data
-    temp_file = str(file_path) + ".tmp"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+        temp_file_path = temp_file.name
 
-    try:
-        # Stream the data: select columns and write in one operation
-        (pl.scan_parquet(file_path).select(columns_to_keep).sink_parquet(temp_file))
+    # Stream the data: select columns and write in one operation
+    filtered_file = pl.scan_parquet(file_path).select(columns_to_keep).collect()
+    filtered_file.write_parquet(temp_file_path)
 
-        # Replace the original file with the filtered one
-        os.replace(temp_file, file_path)
+    # Replace the original file with the filtered one
+    os.replace(temp_file_path, file_path)
 
-        # Force garbage collection to free memory immediately
-        gc.collect()
-
-    except Exception:
-        # Clean up temp file if something goes wrong
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
-        raise
+    # Force garbage collection to free memory immediately
+    gc.collect()
 
 
 def _process_annual_load_curve_results(downloaded_paths: list[Path]) -> None:
