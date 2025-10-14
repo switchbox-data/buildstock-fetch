@@ -76,7 +76,7 @@ def _get_release_years_options(available_releases: list[str], product_type: str)
     parsed_releases = _parse_buildstock_releases(available_releases)
     available_releases = _filter_available_releases(list(parsed_releases.keys()), product_type=product_type)
     available_release_years = list({parsed_releases[release]["release_year"] for release in available_releases})
-    available_release_years.sort()
+    available_release_years.sort(reverse=True)  # Sort in descending order (latest first)
 
     return available_releases, available_release_years
 
