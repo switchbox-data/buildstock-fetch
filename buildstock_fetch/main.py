@@ -885,6 +885,7 @@ def _download_and_process_aggregate(
             # Process with Polars
             load_curve_15min = pl.read_parquet(temp_path)
             load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step, release_year)
+            _add_time_aggregation_columns(load_curve_aggregate, aggregate_time_step)
 
             # Save processed file to final destination
             load_curve_aggregate.write_parquet(output_file)
@@ -1065,6 +1066,39 @@ def download_15min_load_curve_with_progress(
     return output_file
 
 
+def _add_time_aggregation_columns(load_curve_aggregate: pl.DataFrame, aggregate_time_step: str) -> None:
+    """Add time-based columns to the dataframe based on aggregation type.
+
+    Args:
+        df: Polars DataFrame with a 'timestamp' column
+        aggregate_time_step: Type of aggregation ('hourly', 'daily', 'monthly')
+    """
+    if aggregate_time_step == "hourly":
+        # Add year, month, day, and hour columns
+        new_df = load_curve_aggregate.with_columns([
+            pl.col("timestamp").dt.year().alias("year"),
+            pl.col("timestamp").dt.month().alias("month"),
+            pl.col("timestamp").dt.day().alias("day"),
+            pl.col("timestamp").dt.hour().alias("hour"),
+        ])
+        load_curve_aggregate.__dict__.update(new_df.__dict__)
+    elif aggregate_time_step == "daily":
+        # Add year, month, and day columns
+        new_df = load_curve_aggregate.with_columns([
+            pl.col("timestamp").dt.year().alias("year"),
+            pl.col("timestamp").dt.month().alias("month"),
+            pl.col("timestamp").dt.day().alias("day"),
+        ])
+        load_curve_aggregate.__dict__.update(new_df.__dict__)
+    elif aggregate_time_step == "monthly":
+        # Add year and month columns
+        new_df = load_curve_aggregate.with_columns([
+            pl.col("timestamp").dt.year().alias("year"),
+            pl.col("timestamp").dt.month().alias("month"),
+        ])
+        load_curve_aggregate.__dict__.update(new_df.__dict__)
+
+
 def download_aggregate_time_step_load_curve_with_progress(
     bldg_id: BuildingID,
     output_dir: Path,
@@ -1119,6 +1153,7 @@ def download_aggregate_time_step_load_curve_with_progress(
                 load_curve_aggregate = _aggregate_load_curve_aggregate(
                     load_curve_15min, aggregate_time_step, bldg_id.release_year
                 )
+                _add_time_aggregation_columns(load_curve_aggregate, aggregate_time_step)
 
                 # Save processed file to final destination
                 load_curve_aggregate.write_parquet(output_file)
@@ -1621,7 +1656,7 @@ def _download_aggregate_load_curves_parallel(
     failed_downloads: list[str],
     console: Console,
 ) -> None:
-    """Download monthly load curves in parallel with progress tracking."""
+    """Download aggregate load curves in parallel with progress tracking."""
 
     # Create progress tasks based on dataset size
     if len(bldg_ids) > 500:

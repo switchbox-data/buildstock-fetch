@@ -890,6 +890,12 @@ def test_fetch_monthly_load_curve(cleanup_downloads):
         f"data/{bldg_id.get_release_name()}/load_curve_monthly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/bldg{bldg_id.bldg_id:07d}_load_curve_monthly.parquet"
     ).exists()
 
+    monthly_load_curve = pl.read_parquet(downloaded_paths[0])
+    assert "year" in monthly_load_curve.columns
+    assert "month" in monthly_load_curve.columns
+    assert all(monthly_load_curve["year"] == monthly_load_curve["timestamp"].dt.year())
+    assert all(monthly_load_curve["month"] == monthly_load_curve["timestamp"].dt.month())
+
 
 def test_fetch_hourly_load_curve(cleanup_downloads):
     # 2022 release
@@ -932,6 +938,14 @@ def test_fetch_hourly_load_curve(cleanup_downloads):
     timestamps = hourly_load_curve["timestamp"].to_list()
     assert len(timestamps) == 8784
     assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+    assert "year" in hourly_load_curve.columns
+    assert "month" in hourly_load_curve.columns
+    assert "day" in hourly_load_curve.columns
+    assert "hour" in hourly_load_curve.columns
+    assert all(hourly_load_curve["year"] == hourly_load_curve["timestamp"].dt.year())
+    assert all(hourly_load_curve["month"] == hourly_load_curve["timestamp"].dt.month())
+    assert all(hourly_load_curve["day"] == hourly_load_curve["timestamp"].dt.day())
+    assert all(hourly_load_curve["hour"] == hourly_load_curve["timestamp"].dt.hour())
 
     bldg_ids = [
         BuildingID(
@@ -972,6 +986,14 @@ def test_fetch_hourly_load_curve(cleanup_downloads):
     timestamps = hourly_load_curve["timestamp"].to_list()
     assert len(timestamps) == 8784
     assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+    assert "year" in hourly_load_curve.columns
+    assert "month" in hourly_load_curve.columns
+    assert "day" in hourly_load_curve.columns
+    assert "hour" in hourly_load_curve.columns
+    assert all(hourly_load_curve["year"] == hourly_load_curve["timestamp"].dt.year())
+    assert all(hourly_load_curve["month"] == hourly_load_curve["timestamp"].dt.month())
+    assert all(hourly_load_curve["day"] == hourly_load_curve["timestamp"].dt.day())
+    assert all(hourly_load_curve["hour"] == hourly_load_curve["timestamp"].dt.hour())
 
     bldg_ids = [
         BuildingID(
@@ -1012,6 +1034,14 @@ def test_fetch_hourly_load_curve(cleanup_downloads):
     timestamps = hourly_load_curve["timestamp"].to_list()
     assert len(timestamps) == 8760
     assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+    assert "year" in hourly_load_curve.columns
+    assert "month" in hourly_load_curve.columns
+    assert "day" in hourly_load_curve.columns
+    assert "hour" in hourly_load_curve.columns
+    assert all(hourly_load_curve["year"] == hourly_load_curve["timestamp"].dt.year())
+    assert all(hourly_load_curve["month"] == hourly_load_curve["timestamp"].dt.month())
+    assert all(hourly_load_curve["day"] == hourly_load_curve["timestamp"].dt.day())
+    assert all(hourly_load_curve["hour"] == hourly_load_curve["timestamp"].dt.hour())
 
     bldg_ids = [
         BuildingID(
@@ -1052,6 +1082,14 @@ def test_fetch_hourly_load_curve(cleanup_downloads):
     timestamps = hourly_load_curve["timestamp"].to_list()
     assert len(timestamps) == 8760
     assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+    assert "year" in hourly_load_curve.columns
+    assert "month" in hourly_load_curve.columns
+    assert "day" in hourly_load_curve.columns
+    assert "hour" in hourly_load_curve.columns
+    assert all(hourly_load_curve["year"] == hourly_load_curve["timestamp"].dt.year())
+    assert all(hourly_load_curve["month"] == hourly_load_curve["timestamp"].dt.month())
+    assert all(hourly_load_curve["day"] == hourly_load_curve["timestamp"].dt.day())
+    assert all(hourly_load_curve["hour"] == hourly_load_curve["timestamp"].dt.hour())
 
     bldg_ids = [
         BuildingID(
@@ -1127,6 +1165,14 @@ def test_fetch_hourly_load_curve(cleanup_downloads):
     timestamps = hourly_load_curve["timestamp"].to_list()
     assert len(timestamps) == 8760
     assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+    assert "year" in hourly_load_curve.columns
+    assert "month" in hourly_load_curve.columns
+    assert "day" in hourly_load_curve.columns
+    assert "hour" in hourly_load_curve.columns
+    assert all(hourly_load_curve["year"] == hourly_load_curve["timestamp"].dt.year())
+    assert all(hourly_load_curve["month"] == hourly_load_curve["timestamp"].dt.month())
+    assert all(hourly_load_curve["day"] == hourly_load_curve["timestamp"].dt.day())
+    assert all(hourly_load_curve["hour"] == hourly_load_curve["timestamp"].dt.hour())
 
     bldg_ids = [
         BuildingID(
@@ -1167,6 +1213,14 @@ def test_fetch_hourly_load_curve(cleanup_downloads):
     timestamps = hourly_load_curve["timestamp"].to_list()
     assert len(timestamps) == 8760
     assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+    assert "year" in hourly_load_curve.columns
+    assert "month" in hourly_load_curve.columns
+    assert "day" in hourly_load_curve.columns
+    assert "hour" in hourly_load_curve.columns
+    assert all(hourly_load_curve["year"] == hourly_load_curve["timestamp"].dt.year())
+    assert all(hourly_load_curve["month"] == hourly_load_curve["timestamp"].dt.month())
+    assert all(hourly_load_curve["day"] == hourly_load_curve["timestamp"].dt.day())
+    assert all(hourly_load_curve["hour"] == hourly_load_curve["timestamp"].dt.hour())
 
     # 2024 release - should work fine
     bldg_ids = [
@@ -1208,6 +1262,14 @@ def test_fetch_hourly_load_curve(cleanup_downloads):
     timestamps = hourly_load_curve["timestamp"].to_list()
     assert len(timestamps) == 8760
     assert timestamps[1] - timestamps[0] == timedelta(hours=1)
+    assert "year" in hourly_load_curve.columns
+    assert "month" in hourly_load_curve.columns
+    assert "day" in hourly_load_curve.columns
+    assert "hour" in hourly_load_curve.columns
+    assert all(hourly_load_curve["year"] == hourly_load_curve["timestamp"].dt.year())
+    assert all(hourly_load_curve["month"] == hourly_load_curve["timestamp"].dt.month())
+    assert all(hourly_load_curve["day"] == hourly_load_curve["timestamp"].dt.day())
+    assert all(hourly_load_curve["hour"] == hourly_load_curve["timestamp"].dt.hour())
 
 
 def test_fetch_daily_load_curve(cleanup_downloads):
@@ -1251,6 +1313,12 @@ def test_fetch_daily_load_curve(cleanup_downloads):
     timestamps = daily_load_curve["timestamp"].to_list()
     assert len(timestamps) == 366
     assert timestamps[1] - timestamps[0] == timedelta(days=1)
+    assert "year" in daily_load_curve.columns
+    assert "month" in daily_load_curve.columns
+    assert "day" in daily_load_curve.columns
+    assert all(daily_load_curve["year"] == daily_load_curve["timestamp"].dt.year())
+    assert all(daily_load_curve["month"] == daily_load_curve["timestamp"].dt.month())
+    assert all(daily_load_curve["day"] == daily_load_curve["timestamp"].dt.day())
 
     bldg_ids = [
         BuildingID(
@@ -1291,6 +1359,12 @@ def test_fetch_daily_load_curve(cleanup_downloads):
     timestamps = daily_load_curve["timestamp"].to_list()
     assert len(timestamps) == 366
     assert timestamps[1] - timestamps[0] == timedelta(days=1)
+    assert "year" in daily_load_curve.columns
+    assert "month" in daily_load_curve.columns
+    assert "day" in daily_load_curve.columns
+    assert all(daily_load_curve["year"] == daily_load_curve["timestamp"].dt.year())
+    assert all(daily_load_curve["month"] == daily_load_curve["timestamp"].dt.month())
+    assert all(daily_load_curve["day"] == daily_load_curve["timestamp"].dt.day())
 
     bldg_ids = [
         BuildingID(
@@ -1331,6 +1405,12 @@ def test_fetch_daily_load_curve(cleanup_downloads):
     timestamps = daily_load_curve["timestamp"].to_list()
     assert len(timestamps) == 365
     assert timestamps[1] - timestamps[0] == timedelta(days=1)
+    assert "year" in daily_load_curve.columns
+    assert "month" in daily_load_curve.columns
+    assert "day" in daily_load_curve.columns
+    assert all(daily_load_curve["year"] == daily_load_curve["timestamp"].dt.year())
+    assert all(daily_load_curve["month"] == daily_load_curve["timestamp"].dt.month())
+    assert all(daily_load_curve["day"] == daily_load_curve["timestamp"].dt.day())
 
     bldg_ids = [
         BuildingID(
@@ -1371,6 +1451,12 @@ def test_fetch_daily_load_curve(cleanup_downloads):
     timestamps = daily_load_curve["timestamp"].to_list()
     assert len(timestamps) == 365
     assert timestamps[1] - timestamps[0] == timedelta(days=1)
+    assert "year" in daily_load_curve.columns
+    assert "month" in daily_load_curve.columns
+    assert "day" in daily_load_curve.columns
+    assert all(daily_load_curve["year"] == daily_load_curve["timestamp"].dt.year())
+    assert all(daily_load_curve["month"] == daily_load_curve["timestamp"].dt.month())
+    assert all(daily_load_curve["day"] == daily_load_curve["timestamp"].dt.day())
 
     bldg_ids = [
         BuildingID(
@@ -1446,6 +1532,12 @@ def test_fetch_daily_load_curve(cleanup_downloads):
     timestamps = daily_load_curve["timestamp"].to_list()
     assert len(timestamps) == 365
     assert timestamps[1] - timestamps[0] == timedelta(days=1)
+    assert "year" in daily_load_curve.columns
+    assert "month" in daily_load_curve.columns
+    assert "day" in daily_load_curve.columns
+    assert all(daily_load_curve["year"] == daily_load_curve["timestamp"].dt.year())
+    assert all(daily_load_curve["month"] == daily_load_curve["timestamp"].dt.month())
+    assert all(daily_load_curve["day"] == daily_load_curve["timestamp"].dt.day())
 
     bldg_ids = [
         BuildingID(
@@ -1486,6 +1578,12 @@ def test_fetch_daily_load_curve(cleanup_downloads):
     timestamps = daily_load_curve["timestamp"].to_list()
     assert len(timestamps) == 365
     assert timestamps[1] - timestamps[0] == timedelta(days=1)
+    assert "year" in daily_load_curve.columns
+    assert "month" in daily_load_curve.columns
+    assert "day" in daily_load_curve.columns
+    assert all(daily_load_curve["year"] == daily_load_curve["timestamp"].dt.year())
+    assert all(daily_load_curve["month"] == daily_load_curve["timestamp"].dt.month())
+    assert all(daily_load_curve["day"] == daily_load_curve["timestamp"].dt.day())
 
     # 2024 release - should work fine
     bldg_ids = [
@@ -1527,6 +1625,12 @@ def test_fetch_daily_load_curve(cleanup_downloads):
     timestamps = daily_load_curve["timestamp"].to_list()
     assert len(timestamps) == 365
     assert timestamps[1] - timestamps[0] == timedelta(days=1)
+    assert "year" in daily_load_curve.columns
+    assert "month" in daily_load_curve.columns
+    assert "day" in daily_load_curve.columns
+    assert all(daily_load_curve["year"] == daily_load_curve["timestamp"].dt.year())
+    assert all(daily_load_curve["month"] == daily_load_curve["timestamp"].dt.month())
+    assert all(daily_load_curve["day"] == daily_load_curve["timestamp"].dt.day())
 
 
 def test_fetch_weather_station_name(cleanup_downloads):
