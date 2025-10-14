@@ -885,6 +885,7 @@ def _download_and_process_aggregate(
             # Process with Polars
             load_curve_15min = pl.read_parquet(temp_path)
             load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step, release_year)
+            _add_time_aggregation_columns(load_curve_aggregate, aggregate_time_step)
 
             # Save processed file to final destination
             load_curve_aggregate.write_parquet(output_file)
