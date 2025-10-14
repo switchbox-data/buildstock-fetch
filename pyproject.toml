@@ -24,6 +24,8 @@ dependencies = [
     "questionary>=1.11.0",
     "polars>=0.20.0",
     "tomli>=2.0.0",
+    "boto3>=1.33.0",
+    "botocore>=1.33.0",
 ]
 
 [project.urls]

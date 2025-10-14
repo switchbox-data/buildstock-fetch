@@ -93,6 +93,8 @@ name = "buildstock-fetch"
 version = "1.4.1"
 source = { editable = "." }
 dependencies = [
+    { name = "boto3" },
+    { name = "botocore" },
     { name = "polars" },
     { name = "questionary" },
     { name = "requests" },
@@ -164,7 +166,9 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "awscli", marker = "extra == 'dev-utils'", specifier = ">=1.32.0" },
+    { name = "boto3", specifier = ">=1.33.0" },
     { name = "boto3", marker = "extra == 'dev-utils'", specifier = ">=1.33.0" },
+    { name = "botocore", specifier = ">=1.33.0" },
     { name = "botocore", marker = "extra == 'dev-utils'", specifier = ">=1.33.0" },
     { name = "buildstock-fetch", extras = ["test", "docs", "lint", "dev-utils"], marker = "extra == 'dev'" },
     { name = "deptry", marker = "extra == 'lint'", specifier = ">=0.23.0" },
