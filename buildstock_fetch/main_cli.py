@@ -32,6 +32,9 @@ BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpa
 # File types that haven't been implemented yet
 UNAVAILABLE_FILE_TYPES: list[str] = []
 
+# Upgrade scenario description lookup file
+UPGRADES_LOOKUP_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_upgrades_lookup.json"))
+
 
 class InvalidProductError(Exception):
     """Exception raised when an invalid product is provided."""
@@ -152,6 +155,14 @@ def _get_upgrade_ids_options(release_name: str) -> list[str]:
     available_upgrade_ids = [int(upgrade_id) for upgrade_id in available_upgrade_ids]
     available_upgrade_ids.sort()
     available_upgrade_ids = [str(upgrade_id) for upgrade_id in available_upgrade_ids]
+
+    if release_name in json.loads(Path(UPGRADES_LOOKUP_FILE).read_text(encoding="utf-8")):
+        upgrade_descriptions = json.loads(Path(UPGRADES_LOOKUP_FILE).read_text(encoding="utf-8"))[release_name][
+            "upgrade_descriptions"
+        ]
+        available_upgrade_ids = [
+            f"{upgrade_id}: {upgrade_descriptions[upgrade_id]}" for upgrade_id in available_upgrade_ids
+        ]
 
     return cast(list[str], available_upgrade_ids)
 
