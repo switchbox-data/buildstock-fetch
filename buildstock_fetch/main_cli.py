@@ -156,12 +156,13 @@ def _get_upgrade_ids_options(release_name: str) -> list[str]:
     available_upgrade_ids.sort()
     available_upgrade_ids = [str(upgrade_id) for upgrade_id in available_upgrade_ids]
 
-    upgrade_descriptions = json.loads(Path(UPGRADES_LOOKUP_FILE).read_text(encoding="utf-8"))[release_name][
-        "upgrade_descriptions"
-    ]
-    available_upgrade_ids = [
-        f"{upgrade_id}: {upgrade_descriptions[upgrade_id]}" for upgrade_id in available_upgrade_ids
-    ]
+    if release_name in json.loads(Path(UPGRADES_LOOKUP_FILE).read_text(encoding="utf-8")):
+        upgrade_descriptions = json.loads(Path(UPGRADES_LOOKUP_FILE).read_text(encoding="utf-8"))[release_name][
+            "upgrade_descriptions"
+        ]
+        available_upgrade_ids = [
+            f"{upgrade_id}: {upgrade_descriptions[upgrade_id]}" for upgrade_id in available_upgrade_ids
+        ]
 
     return cast(list[str], available_upgrade_ids)
 
