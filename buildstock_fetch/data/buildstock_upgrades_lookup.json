@@ -1,0 +1,23 @@
+{
+  "res_2024_tmy3_2": {
+    "upgrade_descriptions": {
+      "0": "Baseline",
+      "1": "ENERGY STAR heat pump with elec backup",
+      "2": "High efficiency cold-climate heat pump with elec backup",
+      "3": "Ultra high efficiency heat pump with elec backup",
+      "4": "ENERGY STAR heat pump with existing system as backup",
+      "5": "Geothermal heat pump",
+      "6": "ENERGY STAR heat pump with elec backup + Light Touch Envelope",
+      "7": "High efficiency cold-climate heat pump with elec backup + Light Touch Envelope",
+      "8": "Ultra high efficiency heat pump with elec backup + Light Touch Envelope",
+      "9": "ENERGY STAR heat pump with existing system as backup + Light Touch Envelope",
+      "10": "Geothermal heat pump + Light Touch Envelope",
+      "11": "ENERGY STAR heat pump with elec backup + Light Touch Envelope + Full Appliance Electrification with Efficiency",
+      "12": "High efficiency cold-climate heat pump with elec backup + Light Touch Envelope + Full Appliance Electrification with Efficiency",
+      "13": "Ultra high efficiency heat pump with elec backup + Light Touch Envelope + Full Appliance Electrification with Efficiency",
+      "14": "ENERGY STAR heat pump with existing system as backup + Light Touch Envelope + Full Appliance Electrification with Efficiency",
+      "15": "Geothermal heat pump + Light Touch Envelope + Full Appliance Electrification with Efficiency",
+      "16": "Envelope Only - Light Touch Envelope"
+    }
+  }
+}
