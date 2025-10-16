@@ -3,6 +3,7 @@ End-to-end test that installs the library from PyPI and runs all tests.
 This test verifies that the published package works correctly.
 """
 
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -61,17 +62,36 @@ def test_package_functionality():
 
 
 def test_run_all_tests():
-    """Run all tests in the test directory using pytest."""
+    """Run all tests in the test directory using pytest with the PyPI-installed package."""
 
-    # Get the path to the test directory
-    test_dir = Path(__file__).parent
+    # Create a temporary directory for the test environment
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
 
-    # Run pytest on all test files
-    test_result = subprocess.run(
-        [sys.executable, "-m", "pytest", str(test_dir), "-v"], capture_output=True, text=True, cwd=test_dir
-    )
+        # Install the library from PyPI in the temp environment
+        install_result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "buildstock-fetch"], capture_output=True, text=True, cwd=temp_path
+        )
 
-    # Check if tests passed
-    assert test_result.returncode == 0, (
-        f"Tests failed with return code {test_result.returncode}. Output: {test_result.stdout}. Errors: {test_result.stderr}"
-    )
+        # Check if installation was successful
+        assert install_result.returncode == 0, f"Installation failed: {install_result.stderr}"
+
+        # Copy test files to temp directory (excluding this file to avoid recursion)
+        test_dir = Path(__file__).parent
+        temp_test_dir = temp_path / "tests"
+        temp_test_dir.mkdir()
+
+        # Copy all test files except this one
+        for test_file in test_dir.glob("test_*.py"):
+            if test_file.name != "test_release.py":
+                shutil.copy2(test_file, temp_test_dir)
+
+        # Run pytest on the copied test files in the temp environment
+        test_result = subprocess.run(
+            [sys.executable, "-m", "pytest", str(temp_test_dir), "-v"], capture_output=True, text=True, cwd=temp_path
+        )
+
+        # Check if tests passed
+        assert test_result.returncode == 0, (
+            f"Tests failed with return code {test_result.returncode}. Output: {test_result.stdout}. Errors: {test_result.stderr}"
+        )
