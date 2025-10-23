@@ -1,4 +1,39 @@
 {
+  "com_2024_amy2018_1": {
+    "upgrade_descriptions": {
+      "0": "Baseline",
+      "1": "Variable Speed HP RTU, Electric Backup",
+      "2": "Variable Speed HP RTU, Original Heating Fuel Backup",
+      "3": "Variable Speed HP RTU, Electric Backup, Energy Recovery",
+      "5": "VRF with DOAS",
+      "6": "VRF with 25pct Upsizing Allowance",
+      "7": "DOAS HP Minisplits",
+      "8": "HP Boiler, Electric Backup",
+      "9": "HP Boiler, Gas Backup",
+      "10": "Air Side Economizers for AHUs",
+      "11": "Demand Control Ventilation",
+      "12": "Energy Recovery for AHUs",
+      "13": "Advanced RTU Controls",
+      "14": "Unoccupied AHU Control",
+      "15": "Hydronic Water-to-Water Geothermal Heat Pump",
+      "16": "Packaged Water-to-Air Geothermal Heat Pump",
+      "17": "Console Water-to-Air Geothermal Heat Pump",
+      "18": "Comprehensive Geothermal Heat Pump Package, Hydronic GHP, Packaged GHP, or Console GHP",
+      "19": "Demand Flexibility, Thermostat Control, Load Shed",
+      "20": "Demand Flexibility, Thermostat Control, Load Shift",
+      "21": "LED Lighting",
+      "22": "Electric Kitchen Equipment",
+      "23": "Wall Insulation",
+      "24": "Roof Insulation",
+      "25": "Secondary Windows",
+      "26": "Window Film",
+      "27": "New Windows",
+      "28": "Package 1, Wall & Roof Insulation + New Windows",
+      "29": "Package 2, LED Lighting + Variable Speed HP RTU or HP Boilers",
+      "31": "Package 4, Package 1 + Package 2",
+      "32": "Package 5, Variable Speed HP RTU or HP Boilers + Economizer + DCV + Energy Recovery"
+    }
+  },
   "res_2024_amy2018_2": {
     "upgrade_descriptions": {
       "0": "Baseline",
