@@ -722,7 +722,7 @@ def _process_single_metadata_file(metadata_file: Path) -> None:
 
     # Use streaming operations to avoid loading entire file into memory
     # Create a temporary file to write the filtered data
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet", dir=metadata_file.parent) as temp_file:
         temp_file_path = temp_file.name
 
         try:
