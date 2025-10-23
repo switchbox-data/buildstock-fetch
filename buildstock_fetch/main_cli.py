@@ -161,7 +161,9 @@ def _get_upgrade_ids_options(release_name: str) -> list[str]:
             "upgrade_descriptions"
         ]
         available_upgrade_ids = [
-            f"{upgrade_id}: {upgrade_descriptions[upgrade_id]}" for upgrade_id in available_upgrade_ids
+            f"{upgrade_id}: {upgrade_descriptions[upgrade_id]}"
+            for upgrade_id in available_upgrade_ids
+            if upgrade_id in upgrade_descriptions
         ]
 
     return cast(list[str], available_upgrade_ids)
@@ -399,14 +401,25 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     )
 
     # Retrieve upgrade ids
-    selected_upgrade_ids = _handle_cancellation(
+    upgrade_options = _get_upgrade_ids_options(selected_release_name)
+    selected_upgrade_ids_raw = _handle_cancellation(
         questionary.checkbox(
             "Select upgrade ids:",
-            choices=_get_upgrade_ids_options(selected_release_name),
-            instruction="Use spacebar to select/deselect options, enter to confirm",
+            choices=upgrade_options,
+            instruction="Use spacebar to select/deselect options, 'a' to select all, 'i' to invert selection, enter to confirm",
             validate=lambda answer: "You must select at least one upgrade id" if len(answer) == 0 else True,
         ).ask()
     )
+
+    # Extract upgrade ID integers from the selected options
+    selected_upgrade_ids = []
+    for option in selected_upgrade_ids_raw:
+        if ":" in option:
+            # Extract the integer before the colon
+            upgrade_id = option.split(":")[0].strip()
+            selected_upgrade_ids.append(upgrade_id)
+        else:
+            selected_upgrade_ids.append(option)
 
     # Retrieve state
     selected_states: list[str] = cast(
