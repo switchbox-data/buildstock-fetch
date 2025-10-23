@@ -161,7 +161,9 @@ def _get_upgrade_ids_options(release_name: str) -> list[str]:
             "upgrade_descriptions"
         ]
         available_upgrade_ids = [
-            f"{upgrade_id}: {upgrade_descriptions[upgrade_id]}" for upgrade_id in available_upgrade_ids
+            f"{upgrade_id}: {upgrade_descriptions[upgrade_id]}"
+            for upgrade_id in available_upgrade_ids
+            if upgrade_id in upgrade_descriptions
         ]
 
     return cast(list[str], available_upgrade_ids)
