@@ -70,7 +70,7 @@ def test_run_all_tests():
 
         # Install the library from PyPI in the temp environment
         install_result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "buildstock-fetch"], capture_output=True, text=True, cwd=temp_path
+            ["uv", "pip", "install", "buildstock-fetch"], capture_output=True, text=True, cwd=temp_path
         )
 
         # Check if installation was successful
