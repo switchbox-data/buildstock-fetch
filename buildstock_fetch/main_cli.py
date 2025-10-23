@@ -401,11 +401,12 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     )
 
     # Retrieve upgrade ids
+    upgrade_options = _get_upgrade_ids_options(selected_release_name)
     selected_upgrade_ids_raw = _handle_cancellation(
         questionary.checkbox(
             "Select upgrade ids:",
-            choices=_get_upgrade_ids_options(selected_release_name),
-            instruction="Use spacebar to select/deselect options, enter to confirm",
+            choices=upgrade_options,
+            instruction="Use spacebar to select/deselect options, 'a' to select all, 'i' to invert selection, enter to confirm",
             validate=lambda answer: "You must select at least one upgrade id" if len(answer) == 0 else True,
         ).ask()
     )
