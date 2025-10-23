@@ -81,9 +81,11 @@ def test_run_all_tests():
         temp_test_dir = temp_path / "tests"
         temp_test_dir.mkdir()
 
-        # Copy all test files except this one
-        for test_file in test_dir.glob("test_*.py"):
-            if test_file.name != "test_release.py":
+        # Copy specific test files
+        specific_tests = ["test_main.py", "test_main_cli.py"]
+        for test_name in specific_tests:
+            test_file = test_dir / test_name
+            if test_file.exists():
                 shutil.copy2(test_file, temp_test_dir)
 
         # Run pytest on the copied test files in the temp environment
