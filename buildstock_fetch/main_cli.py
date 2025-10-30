@@ -671,6 +671,46 @@ def _get_user_download_choice(bldg_ids: list) -> list:
         return selected_bldg_ids
 
 
+def _select_bldg_ids_for_sample(bldg_ids: list, sample: Union[str, None]) -> list:
+    """Return a list of building IDs based on the provided sample argument.
+
+    - If sample is "all" or "a", return all bldg_ids
+    - If sample is an integer string, return the first N bldg_ids (capped at available)
+    - For invalid or non-positive integers, return an empty list and print a message
+    """
+    if sample is None:
+        return []
+
+    sample_str = str(sample).strip().lower()
+    if sample_str in ("all", "a"):
+        console.print(f"[green]Selected all {len(bldg_ids)} building IDs for download.[/green]")
+        return bldg_ids
+
+    try:
+        sample_size = int(sample_str)
+    except ValueError:
+        console.print(f"[red]Invalid value for --sample: {sample}. Use an integer, 'all', or 'a'.[/red]")
+        return []
+
+    if sample_size <= 0:
+        console.print("[yellow]Sample size must be greater than 0.[/yellow]")
+        return []
+
+    if len(bldg_ids) == 0:
+        console.print("[yellow]No building IDs found to sample.[/yellow]")
+        return []
+
+    actual_sample_size = min(sample_size, len(bldg_ids))
+    selected = bldg_ids[:actual_sample_size]
+    if actual_sample_size < sample_size:
+        console.print(
+            f"[yellow]Requested {sample_size} building IDs, but only {len(bldg_ids)} are available. Sampling {actual_sample_size}.[/yellow]"
+        )
+    else:
+        console.print(f"[green]Sampling {len(selected)} building IDs out of {len(bldg_ids)} total.[/green]")
+    return selected
+
+
 def _validate_required_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
     """Validate that all required inputs are provided."""
     if not all([
@@ -778,7 +818,7 @@ RELEASE_YEAR_OPTION = typer.Option(None, "--release_year", "-y", help="Release y
 WEATHER_FILE_OPTION = typer.Option(None, "--weather_file", "-w", help='"tmy3", "amy2012", "amy2018"')
 RELEASE_VERSION_OPTION = typer.Option(None, "--release_version", "-r", help="1, 1.1, or 2")
 STATES_OPTION = typer.Option(
-    None, "--states", "-s", help="List of states (multiple can be provided, inside quotes and separated by spaces)"
+    None, "--states", "-st", help="List of states (multiple can be provided, inside quotes and separated by spaces)"
 )
 FILE_TYPE_OPTION = typer.Option(
     None,
@@ -793,7 +833,7 @@ OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='e
 SAMPLE_OPTION = typer.Option(
     None,
     "--sample",
-    "-smpl",
+    "-sm",
     help="Number of building IDs to download across all upgrades (only applies to direct inputs)",
 )
 VERSION_OPTION = typer.Option(False, "--version", "-v", help="Show version information and exit")
@@ -843,8 +883,8 @@ def _process_direct_inputs(
     file_type: str,
     upgrade_id: str,
     output_directory: str,
-    sample: Union[int, None] = None,
-) -> tuple[dict[str, Union[str, list[str]]], Union[int, None]]:
+    sample: Union[str, None] = None,
+) -> tuple[dict[str, Union[str, list[str]]], Union[str, None]]:
     """Process direct command line inputs."""
     states_list = states.split() if states else []
     upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
@@ -873,7 +913,7 @@ def _process_direct_inputs(
     return direct_inputs, sample
 
 
-def _process_data_download(inputs: dict[str, Union[str, list[str]]], sample: Union[int, None] = None) -> None:
+def _process_data_download(inputs: dict[str, Union[str, list[str]]], sample: Union[str, None] = None) -> None:
     """Process data download based on available file types."""
     available_file_types, unavailable_file_types = _check_unavailable_file_types(inputs)
     if "weather" in inputs["file_type"]:
@@ -887,26 +927,7 @@ def _process_data_download(inputs: dict[str, Union[str, list[str]]], sample: Uni
 
         # If sample is provided (direct input mode), use it to sample building IDs
         if sample is not None:
-            sample_size = sample
-            if sample_size > 0 and len(bldg_ids) > 0:
-                # Sample the first N building IDs across all upgrades
-                # If sample size exceeds available IDs, just take all of them
-                actual_sample_size = min(sample_size, len(bldg_ids))
-                selected_bldg_ids = bldg_ids[:actual_sample_size]
-                if actual_sample_size < sample_size:
-                    console.print(
-                        f"[yellow]Requested {sample_size} building IDs, but only {len(bldg_ids)} are available. Sampling {actual_sample_size}.[/yellow]"
-                    )
-                else:
-                    console.print(
-                        f"[green]Sampling {len(selected_bldg_ids)} building IDs out of {len(bldg_ids)} total.[/green]"
-                    )
-            else:
-                selected_bldg_ids = []
-                if sample_size <= 0:
-                    console.print("[yellow]Sample size must be greater than 0.[/yellow]")
-                else:
-                    console.print("[yellow]No building IDs found to sample.[/yellow]")
+            selected_bldg_ids = _select_bldg_ids_for_sample(bldg_ids, sample)
         else:
             # Ask user about download choice (interactive mode)
             selected_bldg_ids = _get_user_download_choice(bldg_ids)
@@ -938,7 +959,7 @@ def main_callback(
     file_type: str = FILE_TYPE_OPTION,
     upgrade_id: str = UPGRADE_ID_OPTION,
     output_directory: str = OUTPUT_DIRECTORY_OPTION,
-    sample: int = SAMPLE_OPTION,
+    sample: str = SAMPLE_OPTION,
     version: bool = VERSION_OPTION,
 ) -> None:
     """
