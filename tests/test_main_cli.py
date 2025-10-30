@@ -330,10 +330,10 @@ def test_cli_direct_arguments(cleanup_downloads):
     assert "Weather file: tmy3" in result.stdout
     assert "Release version: 1" in result.stdout
     assert "States: ['CA']" in result.stdout
-    assert "File type: ['metadata']" in result.stdout
+    assert "File type: ['load_curve_15min']" in result.stdout
     assert "Upgrade ids: ['0']" in result.stdout
     assert "test_output" in result.stdout
-    assert "Sampling 3 buildings out of" in result.stdout
+    assert "Sampling 3 building IDs out of" in result.stdout
 
 
 def test_cli_multiple_file_types(cleanup_downloads):
