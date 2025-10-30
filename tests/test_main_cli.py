@@ -309,7 +309,7 @@ def test_cli_direct_arguments(cleanup_downloads):
             "--states",
             "CA",
             "--file_type",
-            "hpxml",
+            "load_curve_15min",
             "--upgrade_id",
             "0",
             "--output_directory",
