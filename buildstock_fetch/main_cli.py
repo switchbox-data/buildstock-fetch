@@ -793,7 +793,7 @@ OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='e
 SAMPLE_OPTION = typer.Option(
     None,
     "--sample",
-    "-s",
+    "-smpl",
     help="Number of building IDs to download across all upgrades (only applies to direct inputs)",
 )
 VERSION_OPTION = typer.Option(False, "--version", "-v", help="Show version information and exit")

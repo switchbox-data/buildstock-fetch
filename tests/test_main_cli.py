@@ -309,7 +309,7 @@ def test_cli_direct_arguments(cleanup_downloads):
             "--states",
             "CA",
             "--file_type",
-            "metadata",
+            "hpxml",
             "--upgrade_id",
             "0",
             "--output_directory",
