@@ -295,6 +295,46 @@ def test_cli_direct_arguments(cleanup_downloads):
     assert "Upgrade ids: ['0']" in result.stdout
     assert "test_output" in result.stdout
 
+    result = runner.invoke(
+        app,
+        [
+            "--product",
+            "resstock",
+            "--release_year",
+            "2021",
+            "--weather_file",
+            "tmy3",
+            "--release_version",
+            "1",
+            "--states",
+            "CA",
+            "--file_type",
+            "metadata",
+            "--upgrade_id",
+            "0",
+            "--output_directory",
+            "test_output",
+            "--sample",
+            "3",
+        ],
+    )
+
+    # Debug output
+    print(f"Exit code: {result.exit_code}")
+    print(f"Output: {result.output}")
+    print(f"Exception: {result.exception}")
+
+    assert "Downloading data for:" in result.stdout
+    assert "Product: resstock" in result.stdout
+    assert "Release year: 2021" in result.stdout
+    assert "Weather file: tmy3" in result.stdout
+    assert "Release version: 1" in result.stdout
+    assert "States: ['CA']" in result.stdout
+    assert "File type: ['metadata']" in result.stdout
+    assert "Upgrade ids: ['0']" in result.stdout
+    assert "test_output" in result.stdout
+    assert "Sampling 3 buildings out of" in result.stdout
+
 
 def test_cli_multiple_file_types(cleanup_downloads):
     """Test CLI with multiple file types."""
