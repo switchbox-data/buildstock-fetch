@@ -671,6 +671,58 @@ def _get_user_download_choice(bldg_ids: list) -> list:
         return selected_bldg_ids
 
 
+def _select_bldg_ids_for_sample(bldg_ids: list, sample: Union[str, None]) -> list:
+    """Return building IDs sampled per (state, upgrade_id) pair.
+
+    - Group by (state, upgrade_id)
+    - If sample is "all"/"a": return all IDs from each group
+    - If sample is an integer string N: return first N from each group
+    - Invalid or non-positive sample returns an empty list
+    """
+    if sample is None:
+        return []
+
+    # Group building IDs by (state, upgrade_id)
+    state_upgrade_groups: dict[tuple[str, str], list] = {}
+    for bldg_id in bldg_ids:
+        key = (bldg_id.state, bldg_id.upgrade_id)
+        if key not in state_upgrade_groups:
+            state_upgrade_groups[key] = []
+        state_upgrade_groups[key].append(bldg_id)
+
+    sample_str = str(sample).strip().lower()
+    if sample_str in ("all", "a"):
+        selected_all: list = []
+        for group_ids in state_upgrade_groups.values():
+            selected_all.extend(group_ids)
+        console.print(f"[green]Selected all {len(selected_all)} building IDs across all state/upgrade pairs.[/green]")
+        return selected_all
+
+    try:
+        sample_size = int(sample_str)
+    except ValueError:
+        console.print(f"[red]Invalid value for --sample: {sample}. Use an integer, 'all', or 'a'.[/red]")
+        return []
+
+    if sample_size <= 0:
+        console.print("[yellow]Sample size must be greater than 0.[/yellow]")
+        return []
+
+    # Select first N from each (state, upgrade_id) group
+    selected_per_group: list = []
+    for (state, upgrade_id), group_ids in state_upgrade_groups.items():
+        take = min(sample_size, len(group_ids))
+        selected_per_group.extend(group_ids[:take])
+        console.print(
+            f"[green]Sampling {take} building IDs for State {state}, Upgrade {upgrade_id} (of {len(group_ids)} available).[/green]"
+        )
+
+    if not selected_per_group and len(bldg_ids) > 0:
+        console.print("[yellow]No building IDs selected after sampling per group.[/yellow]")
+
+    return selected_per_group
+
+
 def _validate_required_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
     """Validate that all required inputs are provided."""
     if not all([
@@ -778,7 +830,7 @@ RELEASE_YEAR_OPTION = typer.Option(None, "--release_year", "-y", help="Release y
 WEATHER_FILE_OPTION = typer.Option(None, "--weather_file", "-w", help='"tmy3", "amy2012", "amy2018"')
 RELEASE_VERSION_OPTION = typer.Option(None, "--release_version", "-r", help="1, 1.1, or 2")
 STATES_OPTION = typer.Option(
-    None, "--states", "-s", help="List of states (multiple can be provided, inside quotes and separated by spaces)"
+    None, "--states", "-st", help="List of states (multiple can be provided, inside quotes and separated by spaces)"
 )
 FILE_TYPE_OPTION = typer.Option(
     None,
@@ -790,6 +842,12 @@ UPGRADE_ID_OPTION = typer.Option(
     None, "--upgrade_id", "-u", help="Upgrade IDs (multiple can be provided, inside quotes and separated by spaces)"
 )
 OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='e.g., "data" or "../output"')
+SAMPLE_OPTION = typer.Option(
+    None,
+    "--sample",
+    "-sm",
+    help="Number of building IDs to download across all upgrades (only applies to direct inputs)",
+)
 VERSION_OPTION = typer.Option(False, "--version", "-v", help="Show version information and exit")
 
 
@@ -837,7 +895,8 @@ def _process_direct_inputs(
     file_type: str,
     upgrade_id: str,
     output_directory: str,
-) -> dict[str, Union[str, list[str]]]:
+    sample: Union[str, None] = None,
+) -> tuple[dict[str, Union[str, list[str]]], Union[str, None]]:
     """Process direct command line inputs."""
     states_list = states.split() if states else []
     upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
@@ -863,10 +922,10 @@ def _process_direct_inputs(
         console.print(f"\n[red]Invalid product: {direct_inputs['product']}[/red]")
         raise typer.Exit(1) from None
 
-    return direct_inputs
+    return direct_inputs, sample
 
 
-def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
+def _process_data_download(inputs: dict[str, Union[str, list[str]]], sample: Union[str, None] = None) -> None:
     """Process data download based on available file types."""
     available_file_types, unavailable_file_types = _check_unavailable_file_types(inputs)
     if "weather" in inputs["file_type"]:
@@ -878,8 +937,12 @@ def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
         # Fetch the building ids and download data
         bldg_ids = _fetch_all_building_ids(inputs)
 
-        # Ask user about download choice
-        selected_bldg_ids = _get_user_download_choice(bldg_ids)
+        # If sample is provided (direct input mode), use it to sample building IDs
+        if sample is not None:
+            selected_bldg_ids = _select_bldg_ids_for_sample(bldg_ids, sample)
+        else:
+            # Ask user about download choice (interactive mode)
+            selected_bldg_ids = _get_user_download_choice(bldg_ids)
 
         if selected_bldg_ids:
             file_type_tuple = (
@@ -908,6 +971,7 @@ def main_callback(
     file_type: str = FILE_TYPE_OPTION,
     upgrade_id: str = UPGRADE_ID_OPTION,
     output_directory: str = OUTPUT_DIRECTORY_OPTION,
+    sample: str = SAMPLE_OPTION,
     version: bool = VERSION_OPTION,
 ) -> None:
     """
@@ -921,14 +985,23 @@ def main_callback(
     # If no arguments provided, run interactive mode
     if not any([product, release_year, weather_file, release_version, states, file_type]):
         inputs = _run_interactive_mode_wrapper()
+        sample_value = None
     else:
-        inputs = _process_direct_inputs(
-            product, release_year, weather_file, release_version, states, file_type, upgrade_id, output_directory
+        inputs, sample_value = _process_direct_inputs(
+            product,
+            release_year,
+            weather_file,
+            release_version,
+            states,
+            file_type,
+            upgrade_id,
+            output_directory,
+            sample,
         )
 
     # Process the data
     _print_data_processing_info(inputs)
-    _process_data_download(inputs)
+    _process_data_download(inputs, sample_value)
 
 
 app.command()(main_callback)
