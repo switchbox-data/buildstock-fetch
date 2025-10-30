@@ -672,19 +672,31 @@ def _get_user_download_choice(bldg_ids: list) -> list:
 
 
 def _select_bldg_ids_for_sample(bldg_ids: list, sample: Union[str, None]) -> list:
-    """Return a list of building IDs based on the provided sample argument.
+    """Return building IDs sampled per (state, upgrade_id) pair.
 
-    - If sample is "all" or "a", return all bldg_ids
-    - If sample is an integer string, return the first N bldg_ids (capped at available)
-    - For invalid or non-positive integers, return an empty list and print a message
+    - Group by (state, upgrade_id)
+    - If sample is "all"/"a": return all IDs from each group
+    - If sample is an integer string N: return first N from each group
+    - Invalid or non-positive sample returns an empty list
     """
     if sample is None:
         return []
 
+    # Group building IDs by (state, upgrade_id)
+    state_upgrade_groups: dict[tuple[str, str], list] = {}
+    for bldg_id in bldg_ids:
+        key = (bldg_id.state, bldg_id.upgrade_id)
+        if key not in state_upgrade_groups:
+            state_upgrade_groups[key] = []
+        state_upgrade_groups[key].append(bldg_id)
+
     sample_str = str(sample).strip().lower()
     if sample_str in ("all", "a"):
-        console.print(f"[green]Selected all {len(bldg_ids)} building IDs for download.[/green]")
-        return bldg_ids
+        selected_all: list = []
+        for group_ids in state_upgrade_groups.values():
+            selected_all.extend(group_ids)
+        console.print(f"[green]Selected all {len(selected_all)} building IDs across all state/upgrade pairs.[/green]")
+        return selected_all
 
     try:
         sample_size = int(sample_str)
@@ -696,19 +708,19 @@ def _select_bldg_ids_for_sample(bldg_ids: list, sample: Union[str, None]) -> lis
         console.print("[yellow]Sample size must be greater than 0.[/yellow]")
         return []
 
-    if len(bldg_ids) == 0:
-        console.print("[yellow]No building IDs found to sample.[/yellow]")
-        return []
-
-    actual_sample_size = min(sample_size, len(bldg_ids))
-    selected = bldg_ids[:actual_sample_size]
-    if actual_sample_size < sample_size:
+    # Select first N from each (state, upgrade_id) group
+    selected_per_group: list = []
+    for (state, upgrade_id), group_ids in state_upgrade_groups.items():
+        take = min(sample_size, len(group_ids))
+        selected_per_group.extend(group_ids[:take])
         console.print(
-            f"[yellow]Requested {sample_size} building IDs, but only {len(bldg_ids)} are available. Sampling {actual_sample_size}.[/yellow]"
+            f"[green]Sampling {take} building IDs for State {state}, Upgrade {upgrade_id} (of {len(group_ids)} available).[/green]"
         )
-    else:
-        console.print(f"[green]Sampling {len(selected)} building IDs out of {len(bldg_ids)} total.[/green]")
-    return selected
+
+    if not selected_per_group and len(bldg_ids) > 0:
+        console.print("[yellow]No building IDs selected after sampling per group.[/yellow]")
+
+    return selected_per_group
 
 
 def _validate_required_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
