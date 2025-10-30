@@ -790,6 +790,12 @@ UPGRADE_ID_OPTION = typer.Option(
     None, "--upgrade_id", "-u", help="Upgrade IDs (multiple can be provided, inside quotes and separated by spaces)"
 )
 OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='e.g., "data" or "../output"')
+SAMPLE_OPTION = typer.Option(
+    None,
+    "--sample",
+    "-s",
+    help="Number of building IDs to download across all upgrades (only applies to direct inputs)",
+)
 VERSION_OPTION = typer.Option(False, "--version", "-v", help="Show version information and exit")
 
 
@@ -837,7 +843,8 @@ def _process_direct_inputs(
     file_type: str,
     upgrade_id: str,
     output_directory: str,
-) -> dict[str, Union[str, list[str]]]:
+    sample: Union[int, None] = None,
+) -> tuple[dict[str, Union[str, list[str]]], Union[int, None]]:
     """Process direct command line inputs."""
     states_list = states.split() if states else []
     upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
@@ -863,10 +870,10 @@ def _process_direct_inputs(
         console.print(f"\n[red]Invalid product: {direct_inputs['product']}[/red]")
         raise typer.Exit(1) from None
 
-    return direct_inputs
+    return direct_inputs, sample
 
 
-def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
+def _process_data_download(inputs: dict[str, Union[str, list[str]]], sample: Union[int, None] = None) -> None:
     """Process data download based on available file types."""
     available_file_types, unavailable_file_types = _check_unavailable_file_types(inputs)
     if "weather" in inputs["file_type"]:
@@ -878,8 +885,31 @@ def _process_data_download(inputs: dict[str, Union[str, list[str]]]) -> None:
         # Fetch the building ids and download data
         bldg_ids = _fetch_all_building_ids(inputs)
 
-        # Ask user about download choice
-        selected_bldg_ids = _get_user_download_choice(bldg_ids)
+        # If sample is provided (direct input mode), use it to sample building IDs
+        if sample is not None:
+            sample_size = sample
+            if sample_size > 0 and len(bldg_ids) > 0:
+                # Sample the first N building IDs across all upgrades
+                # If sample size exceeds available IDs, just take all of them
+                actual_sample_size = min(sample_size, len(bldg_ids))
+                selected_bldg_ids = bldg_ids[:actual_sample_size]
+                if actual_sample_size < sample_size:
+                    console.print(
+                        f"[yellow]Requested {sample_size} building IDs, but only {len(bldg_ids)} are available. Sampling {actual_sample_size}.[/yellow]"
+                    )
+                else:
+                    console.print(
+                        f"[green]Sampling {len(selected_bldg_ids)} building IDs out of {len(bldg_ids)} total.[/green]"
+                    )
+            else:
+                selected_bldg_ids = []
+                if sample_size <= 0:
+                    console.print("[yellow]Sample size must be greater than 0.[/yellow]")
+                else:
+                    console.print("[yellow]No building IDs found to sample.[/yellow]")
+        else:
+            # Ask user about download choice (interactive mode)
+            selected_bldg_ids = _get_user_download_choice(bldg_ids)
 
         if selected_bldg_ids:
             file_type_tuple = (
@@ -908,6 +938,7 @@ def main_callback(
     file_type: str = FILE_TYPE_OPTION,
     upgrade_id: str = UPGRADE_ID_OPTION,
     output_directory: str = OUTPUT_DIRECTORY_OPTION,
+    sample: int = SAMPLE_OPTION,
     version: bool = VERSION_OPTION,
 ) -> None:
     """
@@ -921,14 +952,23 @@ def main_callback(
     # If no arguments provided, run interactive mode
     if not any([product, release_year, weather_file, release_version, states, file_type]):
         inputs = _run_interactive_mode_wrapper()
+        sample_value = None
     else:
-        inputs = _process_direct_inputs(
-            product, release_year, weather_file, release_version, states, file_type, upgrade_id, output_directory
+        inputs, sample_value = _process_direct_inputs(
+            product,
+            release_year,
+            weather_file,
+            release_version,
+            states,
+            file_type,
+            upgrade_id,
+            output_directory,
+            sample,
         )
 
     # Process the data
     _print_data_processing_info(inputs)
-    _process_data_download(inputs)
+    _process_data_download(inputs, sample_value)
 
 
 app.command()(main_callback)
