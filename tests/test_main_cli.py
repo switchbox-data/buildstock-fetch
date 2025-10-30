@@ -333,7 +333,7 @@ def test_cli_direct_arguments(cleanup_downloads):
     assert "File type: ['load_curve_15min']" in result.stdout
     assert "Upgrade ids: ['0']" in result.stdout
     assert "test_output" in result.stdout
-    assert "Sampling 3 building IDs out of" in result.stdout
+    assert "Sampling 3 building IDs for State CA, Upgrade 0" in result.stdout
 
     result = runner.invoke(
         app,
