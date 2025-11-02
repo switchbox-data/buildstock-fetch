@@ -702,64 +702,43 @@ def _download_with_progress_metadata(
     # Polars can use PyArrow's filesystem for efficient S3 access
     s3_filesystem = fs.S3FileSystem(anonymous=True, region="us-west-2")
 
-    print("TEST EST TESTE STE")
-
     for url in urls:
         s3_path = _convert_url_to_s3_path(url)
-        print("TEST TEST: S3 path: ", s3_path)
 
         try:
-            print("TEST TEST: Trying to get total file size from S3")
             # Get total file size from S3
             # Extract bucket and key from s3_path: s3://bucket/key
             s3_path_parts = s3_path.replace("s3://", "").split("/", 1)
             bucket_name = s3_path_parts[0]
             s3_key = s3_path_parts[1] if len(s3_path_parts) > 1 else ""
-            print(f"TEST: bucket_name={bucket_name}, s3_key={s3_key}")
 
             # Use boto3 to get file size (HEAD request)
-            print("TEST: Creating boto3 client")
             s3_client = boto3.client("s3", config=Config(signature_version=UNSIGNED))
-            print("TEST: boto3 client created")
             try:
-                print(f"TEST: Calling head_object for bucket={bucket_name}, key={s3_key}")
                 response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
-                print("TEST: head_object response received")
                 total_file_size = response.get("ContentLength", 0)
-                print(f"TEST: ContentLength extracted: {total_file_size}")
-            except Exception as e:
-                print(f"TEST ERROR in head_object: {type(e).__name__}: {e}")
+            except Exception:
                 # If we can't get file size, fall back to estimation
                 total_file_size = 0
 
-            print("TEST TEST: Total file size: ", total_file_size)
-
             # Read parquet directly from S3 and filter without downloading entire file
             # Use PyArrow filesystem to open file stream, then Polars can read and filter efficiently
-            # This matches the pattern in utils/build_metadata_tables.py
-            print("TEST: Using PyArrow filesystem to read from S3")
             # Extract bucket and key for PyArrow filesystem (needs format: "bucket/key")
             s3_file_path = f"{bucket_name}/{s3_key}"
-            print(f"TEST: Opening S3 file: {s3_file_path}")
 
             try:
                 # Open file as stream using PyArrow filesystem
                 # Polars will read parquet metadata and use predicate pushdown to filter efficiently
                 with s3_filesystem.open_input_file(s3_file_path) as s3_file:
-                    print("TEST: S3 file opened, reading metadata for total rows")
-
-                    # Read only metadata (footer) - very fast, doesn't download row data
+                    # Read only metadata (footer)
                     parquet_file = pq.ParquetFile(s3_file)
                     pq_metadata = parquet_file.metadata
                     total_rows = pq_metadata.num_rows
-                    print(f"TEST: Total rows from metadata: {total_rows}")
 
                     # Reset file pointer for reading actual data
                     s3_file.seek(0)
-                    print(f"TEST: Filtering parquet, requested_bldg_ids count: {len(requested_bldg_ids)}")
 
                     column_names = pq_metadata.schema.names
-                    print(f"TEST: Column names: {column_names}")
                     columns_to_keep = []
                     for col in column_names:
                         if any(
@@ -773,26 +752,16 @@ def _download_with_progress_metadata(
                         .filter(pl.col("bldg_id").is_in(requested_bldg_ids))
                         .collect()
                     )
-                    print("TEST: Filtered dataframe collected successfully. Total rows: ", total_rows)
-                    print("TEST: Filtered dataframe: ", df)
                     selected_rows = len(df)
                     progress.update(task_id, total=total_file_size * (selected_rows / total_rows))
-            except Exception as e:
-                print(f"TEST ERROR reading/filtering parquet: {type(e).__name__}: {e}")
-
+            except Exception:
                 traceback.print_exc()
                 raise
 
             selected_rows = len(df)
 
-            print("Selected rows: ", selected_rows)
-
-            print("TEST: Writing filtered dataframe to output file")
-            print("TEST: Filtered dataframe: ", df)
             # Check if output file already exists
             if output_file.exists():
-                print("TEST: Existing file exists, combining with new data")
-                print("TEST: Existing file: ", output_file)
                 # Read existing file and combine with new data
                 existing_file = pl.scan_parquet(output_file)
                 new_df = df if isinstance(df, pl.DataFrame) else pl.DataFrame(df)
@@ -803,7 +772,6 @@ def _download_with_progress_metadata(
                 deduplicated_file = combined_file.collect().unique(subset=["bldg_id"], keep="first")
                 deduplicated_file.write_parquet(output_file)
             else:
-                print("TEST: No existing file, writing filtered data directly")
                 # Write filtered data directly
                 df.write_parquet(output_file)
 
@@ -816,7 +784,6 @@ def _download_with_progress_metadata(
             )
             gc.collect()
         except Exception:
-            print("S3 filtering failed for URL: ", url)
             # Fallback to old method if S3 filtering fails
             # Note: console is not available in this scope, so we'll just fall back silently
             # The error will be caught by the caller
@@ -1521,9 +1488,6 @@ def _download_metadata_with_progress(
         output_file_to_metadata_task[output_file] = metadata_task
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    print("TEST: output_file_to_bldg_ids: ", output_file_to_bldg_ids)
-    print("TEST: output_file_to_download_url: ", output_file_to_download_url)
-
     try:
         for output_file, bldg_ids in output_file_to_bldg_ids.items():
             download_urls = output_file_to_download_url[output_file]
@@ -1919,7 +1883,6 @@ def _download_metadata(
     """Download metadata file (only one needed per release)."""
     if not bldg_ids:
         return
-    print("TEST TEST: Downloading metadata with progress")
     _download_metadata_with_progress(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
     # Only keep the requested bldg_ids in the metadata file
     _filter_metadata_requested_bldg_ids(bldg_ids, output_dir, downloaded_paths)
