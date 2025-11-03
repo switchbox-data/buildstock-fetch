@@ -16,7 +16,7 @@ A CLI tool, and python library, to simplify downloading building characteristics
 We recommend using [uv](https://docs.astral.sh/uv/getting-started/installation/) or [pipx](https://pipx.pypa.io/stable/installation/) to install the buildstock-fetch CLI:
 
 ```bash
-uv install buildstock-fetch
+uv tool install buildstock-fetch
 ```
 or
 
