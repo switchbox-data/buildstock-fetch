@@ -12,7 +12,7 @@ A CLI tool to simplify downloading building characteristics and load curve data 
 To install the buildstock-fetch CLI tool, we recommend using [uv](https://docs.astral.sh/uv/getting-started/installation/) or [pipx](https://pipx.pypa.io/stable/installation/):
 
 ```bash
-uv install buildstock-fetch
+uv tool install buildstock-fetch
 ```
 or
 
