@@ -689,7 +689,12 @@ def _convert_url_to_s3_path(url: str) -> str:
 
 
 def _download_with_progress_metadata(
-    urls: list[str], bldg_ids: list[BuildingID], output_file: Path, progress: Progress, task_id: TaskID
+    urls: list[str],
+    bldg_ids: list[BuildingID],
+    output_file: Path,
+    progress: Progress,
+    task_id: TaskID,
+    found_bldg_ids: list[int],
 ) -> int:
     """Download a metadata file with progress tracking, filtering for only requested bldg_ids from S3."""
 
@@ -752,6 +757,7 @@ def _download_with_progress_metadata(
                         .filter(pl.col("bldg_id").is_in(requested_bldg_ids))
                         .collect()
                     )
+                    found_bldg_ids.extend(df["bldg_id"].to_list())
                     selected_rows = len(df)
                     progress.update(task_id, total=total_file_size * (selected_rows / total_rows))
             except Exception:
@@ -1439,17 +1445,14 @@ def _process_download_results(
         console.print(f"[red]Download failed for bldg_id {bldg_id}: {e}[/red]")
 
 
-def _download_metadata_with_progress(
-    bldg_ids: list[BuildingID],
-    output_dir: Path,
-    progress: Progress,
-    downloaded_paths: list[Path],
-    failed_downloads: list[str],
-    console: Console,
-) -> tuple[list[Path], list[str]]:
-    """Download metadata file with progress tracking."""
-    # Group bldg_ids by the output files paths
-    # Group output file paths to the download URL's for that output file
+def _group_bldg_ids_by_output_file(
+    bldg_ids: list[BuildingID], output_dir: Path, failed_downloads: list[str]
+) -> tuple[dict[Path, list[BuildingID]], dict[Path, list[str]]]:
+    """Group bldg_ids by their output file paths and collect download URLs.
+
+    Returns:
+        Tuple of (output_file_to_bldg_ids, output_file_to_download_url) dictionaries.
+    """
     output_file_to_bldg_ids: dict[Path, list[BuildingID]] = {}
     output_file_to_download_url: dict[Path, list[str]] = {}
 
@@ -1475,6 +1478,17 @@ def _download_metadata_with_progress(
         if download_url not in output_file_to_download_url[output_file]:
             output_file_to_download_url[output_file].append(download_url)
 
+    return output_file_to_bldg_ids, output_file_to_download_url
+
+
+def _create_metadata_progress_tasks(
+    output_file_to_bldg_ids: dict[Path, list[BuildingID]], progress: Progress
+) -> dict[Path, TaskID]:
+    """Create progress tasks for metadata downloads.
+
+    Returns:
+        Dictionary mapping output files to their progress task IDs.
+    """
     output_file_to_metadata_task = {}
     for output_file, bldg_ids in output_file_to_bldg_ids.items():
         bldg_id = bldg_ids[0]
@@ -1487,13 +1501,62 @@ def _download_metadata_with_progress(
         )
         output_file_to_metadata_task[output_file] = metadata_task
         output_file.parent.mkdir(parents=True, exist_ok=True)
+    return output_file_to_metadata_task
+
+
+def _check_missing_bldg_ids(bldg_ids: list[BuildingID], found_bldg_ids: list[int], console: Console) -> bool:
+    """Check if all bldg_ids were found and print warning if any are missing.
+
+    Args:
+        bldg_ids: List of requested BuildingID objects.
+        found_bldg_ids: List of bldg_id integers that were found in the metadata file.
+        console: Rich console for printing messages.
+
+    Returns:
+        True if all bldg_ids were found, False otherwise.
+    """
+    if len(found_bldg_ids) == len(bldg_ids):
+        return True
+
+    release_name = bldg_ids[0].get_release_name()
+    state = bldg_ids[0].state
+    upgrade = bldg_ids[0].upgrade_id
+    missing_bldg_ids = {bldg_id.bldg_id for bldg_id in bldg_ids} - set(found_bldg_ids)
+    missing_bldg_ids_str = ", ".join(str(bldg_id) for bldg_id in missing_bldg_ids)
+    console.print(
+        f"[red]Missing bldg_ids in metadata file: {missing_bldg_ids_str} for {release_name} - (upgrade {upgrade}) - {state}[/red]"
+    )
+    return False
+
+
+def _download_metadata_with_progress(
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    progress: Progress,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+) -> tuple[list[Path], list[str]]:
+    """Download metadata file with progress tracking."""
+    output_file_to_bldg_ids, output_file_to_download_url = _group_bldg_ids_by_output_file(
+        bldg_ids, output_dir, failed_downloads
+    )
+    output_file_to_metadata_task = _create_metadata_progress_tasks(output_file_to_bldg_ids, progress)
 
     try:
         for output_file, bldg_ids in output_file_to_bldg_ids.items():
             download_urls = output_file_to_download_url[output_file]
+            found_bldg_ids: list[int] = []
             _download_with_progress_metadata(
-                download_urls, bldg_ids, output_file, progress, output_file_to_metadata_task[output_file]
+                download_urls,
+                bldg_ids,
+                output_file,
+                progress,
+                output_file_to_metadata_task[output_file],
+                found_bldg_ids,
             )
+            if not _check_missing_bldg_ids(bldg_ids, found_bldg_ids, console):
+                continue
             downloaded_paths.append(output_file)
     except Exception as e:
         failed_downloads.append(str(output_file))
@@ -1880,7 +1943,7 @@ def _download_metadata(
     failed_downloads: list[str],
     console: Console,
 ) -> None:
-    """Download metadata file (only one needed per release)."""
+    """Download metadata file."""
     if not bldg_ids:
         return
     _download_metadata_with_progress(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
