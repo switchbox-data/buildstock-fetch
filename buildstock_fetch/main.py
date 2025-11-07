@@ -700,9 +700,9 @@ def _download_with_progress_metadata(
 
     # Get the list of bldg_ids we need to filter for, sorted for optimization
     requested_bldg_ids_set = {bldg_id.bldg_id for bldg_id in bldg_ids}
-    requested_bldg_ids = sorted(requested_bldg_ids_set)  # Sort for efficient range checking
+    requested_bldg_ids = sorted(requested_bldg_ids_set)
 
-    # Create S3 filesystem for anonymous access (matches utils/build_metadata_tables.py pattern)
+    # Create S3 filesystem for anonymous access
     # This allows Polars to read directly from S3 without downloading the entire file
     # Polars can use PyArrow's filesystem for efficient S3 access
     s3_filesystem = fs.S3FileSystem(anonymous=True, region="us-west-2")
@@ -728,7 +728,7 @@ def _download_with_progress_metadata(
 
             # Read parquet directly from S3 and filter without downloading entire file
             # Use PyArrow filesystem to open file stream, then Polars can read and filter efficiently
-            # Extract bucket and key for PyArrow filesystem (needs format: "bucket/key")
+            # Extract bucket and key for PyArrow filesystem
             s3_file_path = f"{bucket_name}/{s3_key}"
 
             try:
@@ -782,6 +782,8 @@ def _download_with_progress_metadata(
                 df.write_parquet(output_file)
 
             # Calculate downloaded size as ratio
+            # There's no way to get file size when downloading parts of the file, so we'll
+            # estimate it by multiplying the total file size by the ratio of selected rows to total rows
             downloaded_size = int(total_file_size * (selected_rows / total_rows)) if total_rows > 0 else 0
             progress.update(
                 task_id,
@@ -790,9 +792,7 @@ def _download_with_progress_metadata(
             )
             gc.collect()
         except Exception:
-            # Fallback to old method if S3 filtering fails
-            # Note: console is not available in this scope, so we'll just fall back silently
-            # The error will be caught by the caller
+            # Fallback to old method (download entire file using requests) if S3 filtering fails
             return _download_with_progress_metadata_fallback(url, output_file, progress, task_id)
         else:
             # Return successfully if no exception occurred
@@ -1556,6 +1556,7 @@ def _download_metadata_with_progress(
                 found_bldg_ids,
             )
             if not _check_missing_bldg_ids(bldg_ids, found_bldg_ids, console):
+                failed_downloads.append(str(output_file))
                 continue
             downloaded_paths.append(output_file)
     except Exception as e:
