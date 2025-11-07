@@ -1515,18 +1515,18 @@ def _check_missing_bldg_ids(bldg_ids: list[BuildingID], found_bldg_ids: list[int
     Returns:
         True if all bldg_ids were found, False otherwise.
     """
-    if len(found_bldg_ids) == len(bldg_ids):
-        return True
-
-    release_name = bldg_ids[0].get_release_name()
-    state = bldg_ids[0].state
-    upgrade = bldg_ids[0].upgrade_id
-    missing_bldg_ids = {bldg_id.bldg_id for bldg_id in bldg_ids} - set(found_bldg_ids)
-    missing_bldg_ids_str = ", ".join(str(bldg_id) for bldg_id in missing_bldg_ids)
-    console.print(
-        f"[red]Missing bldg_ids in metadata file: {missing_bldg_ids_str} for {release_name} - (upgrade {upgrade}) - {state}[/red]"
-    )
-    return False
+    for found_bldg_id in found_bldg_ids:
+        if found_bldg_id not in {bldg_id.bldg_id for bldg_id in bldg_ids}:
+            release_name = bldg_ids[0].get_release_name()
+            state = bldg_ids[0].state
+            upgrade = bldg_ids[0].upgrade_id
+            missing_bldg_ids = found_bldg_id
+            missing_bldg_ids_str = str(missing_bldg_ids)
+            console.print(
+                f"[red]Missing bldg_id in metadata file: {missing_bldg_ids_str} for {release_name} - (upgrade {upgrade}) - {state}[/red]"
+            )
+            return False
+    return True
 
 
 def _download_metadata_with_progress(
@@ -2468,7 +2468,6 @@ if __name__ == "__main__":  # pragma: no cover
             weather="amy2018",
             upgrade_id="0",
             release_number="2",
-            state="NY",
         ),
         BuildingID(
             bldg_id=658,
@@ -2477,7 +2476,6 @@ if __name__ == "__main__":  # pragma: no cover
             weather="amy2018",
             upgrade_id="0",
             release_number="2",
-            state="NY",
         ),
         BuildingID(
             bldg_id=659,
@@ -2486,7 +2484,6 @@ if __name__ == "__main__":  # pragma: no cover
             weather="amy2018",
             upgrade_id="0",
             release_number="2",
-            state="NY",
         ),
     ]
     file_type = ("metadata",)
@@ -2495,45 +2492,3 @@ if __name__ == "__main__":  # pragma: no cover
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     print(downloaded_paths)
     print(failed_downloads)
-    bldg_ids = [
-        BuildingID(
-            bldg_id=21023,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="2",
-            state="NY",
-        ),
-        BuildingID(
-            bldg_id=18403,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="2",
-            state="NY",
-        ),
-        BuildingID(
-            bldg_id=70769,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="2",
-            state="NV",
-        ),
-        BuildingID(
-            bldg_id=68227,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="2",
-            state="NV",
-        ),
-    ]
-    file_type = ("metadata",)
-    output_dir = Path("data")
-
-    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)

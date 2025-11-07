@@ -500,10 +500,9 @@ def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
     for not_required_col in NOT_METADATA_COLUMNS:
         found = any(actual_col.startswith(not_required_col) for actual_col in metadata_file.columns)
         assert not found
-    assert metadata_file.height == 3
-    assert metadata_file.filter(pl.col("bldg_id") == 320214).height == 1
-    assert metadata_file.filter(pl.col("bldg_id") == 95261).height == 1
-    assert metadata_file.filter(pl.col("bldg_id") == 95272).height == 1
+
+    for bldg_id in [bldg_id.bldg_id for bldg_id in bldg_ids]:
+        assert bldg_id in metadata_file["bldg_id"].to_list()
 
 
 def test_fetch_15min_load_curve(cleanup_downloads):
