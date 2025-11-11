@@ -8,10 +8,10 @@
       "0"
     ],
     "available_data": [
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_daily",
       "weather",
       "metadata"
     ]
@@ -25,10 +25,10 @@
       "0"
     ],
     "available_data": [
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_daily",
       "weather",
       "metadata"
     ]
@@ -42,10 +42,10 @@
       "0"
     ],
     "available_data": [
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_daily",
       "weather",
       "metadata"
     ]
@@ -59,10 +59,10 @@
       "0"
     ],
     "available_data": [
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_daily",
       "weather",
       "metadata"
     ]
@@ -86,15 +86,15 @@
       "10"
     ],
     "available_data": [
-      "schedule",
-      "load_curve_annual",
-      "hpxml",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
-      "metadata"
+      "schedule",
+      "metadata",
+      "hpxml"
     ]
   },
   "res_2022_amy2012_1": {
@@ -116,18 +116,15 @@
       "10"
     ],
     "available_data": [
-      "schedule",
-      "load_curve_annual",
-      "hpxml",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
-      "metadata"
-    ],
-    "weather_map_available_states": [
-      "NY"
+      "schedule",
+      "metadata",
+      "hpxml"
     ]
   },
   "res_2022_amy2018_1.1": {
@@ -149,14 +146,14 @@
       "10"
     ],
     "available_data": [
-      "schedule",
-      "load_curve_annual",
-      "hpxml",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
-      "metadata"
+      "load_curve_annual",
+      "load_curve_daily",
+      "schedule",
+      "metadata",
+      "hpxml"
     ]
   },
   "res_2022_amy2018_1": {
@@ -178,15 +175,15 @@
       "10"
     ],
     "available_data": [
-      "schedule",
-      "load_curve_annual",
-      "hpxml",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
-      "metadata"
+      "schedule",
+      "metadata",
+      "hpxml"
     ]
   },
   "res_2022_tmy3_1.1": {
@@ -208,15 +205,15 @@
       "10"
     ],
     "available_data": [
-      "schedule",
-      "load_curve_annual",
-      "hpxml",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
-      "metadata"
+      "schedule",
+      "metadata",
+      "hpxml"
     ]
   },
   "res_2022_tmy3_1": {
@@ -238,15 +235,15 @@
       "10"
     ],
     "available_data": [
-      "schedule",
-      "load_curve_annual",
-      "hpxml",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
-      "metadata"
+      "schedule",
+      "metadata",
+      "hpxml"
     ]
   },
   "com_2023_amy2018_1": {
@@ -268,11 +265,11 @@
       "10"
     ],
     "available_data": [
-      "load_curve_annual",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
       "metadata"
     ]
@@ -304,11 +301,11 @@
       "18"
     ],
     "available_data": [
-      "load_curve_annual",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
       "metadata"
     ]
@@ -353,11 +350,11 @@
       "32"
     ],
     "available_data": [
-      "load_curve_annual",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
       "metadata"
     ]
@@ -410,11 +407,11 @@
       "39"
     ],
     "available_data": [
-      "load_curve_annual",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
       "metadata"
     ]
@@ -444,15 +441,15 @@
       "16"
     ],
     "available_data": [
-      "hpxml",
       "load_curve_15min",
+      "load_curve_monthly",
+      "load_curve_annual",
       "load_curve_daily",
       "load_curve_hourly",
-      "metadata",
-      "schedule",
-      "load_curve_annual",
       "weather",
-      "load_curve_monthly",
+      "schedule",
+      "metadata",
+      "hpxml",
       "trip_schedules"
     ],
     "trip_schedule_states": [
@@ -492,19 +489,34 @@
       "16"
     ],
     "available_data": [
-      "hpxml",
       "load_curve_15min",
+      "load_curve_monthly",
+      "load_curve_annual",
       "load_curve_daily",
       "load_curve_hourly",
-      "metadata",
-      "schedule",
-      "load_curve_annual",
       "weather",
-      "load_curve_monthly",
+      "schedule",
+      "metadata",
+      "hpxml",
       "trip_schedules"
     ],
     "trip_schedule_states": [
       "NY"
+    ]
+  },
+  "com_2025_amy2012_2": {
+    "release_year": "2025",
+    "res_com": "comstock",
+    "weather": "amy2012",
+    "release_number": "2",
+    "upgrade_ids": [],
+    "available_data": [
+      "load_curve_hourly",
+      "load_curve_15min",
+      "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
+      "metadata"
     ]
   },
   "com_2025_amy2018_1": {
@@ -573,11 +585,11 @@
       "57"
     ],
     "available_data": [
-      "load_curve_annual",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
       "metadata"
     ]
@@ -652,11 +664,11 @@
       "61"
     ],
     "available_data": [
-      "load_curve_annual",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
       "metadata"
     ]
@@ -698,15 +710,15 @@
       "28"
     ],
     "available_data": [
-      "schedule",
-      "load_curve_annual",
-      "hpxml",
-      "load_curve_15min",
-      "load_curve_daily",
       "load_curve_hourly",
+      "load_curve_15min",
       "load_curve_monthly",
+      "load_curve_annual",
+      "load_curve_daily",
       "weather",
-      "metadata"
+      "schedule",
+      "metadata",
+      "hpxml"
     ]
   }
 }
