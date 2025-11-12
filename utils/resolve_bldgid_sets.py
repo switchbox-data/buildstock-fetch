@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import tempfile
@@ -11,6 +12,8 @@ from typing import Any, TypedDict
 import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 output_file_path: str = os.path.join(PROJECT_ROOT, "buildstock_fetch", "data", "buildstock_releases.json")
@@ -391,6 +394,79 @@ def append_avail_trip_schedules(
         releases[key]["trip_schedule_states"] = trip_schedules[key]
 
 
+def _generate_release_key(match: re.Match[str]) -> str:
+    """
+    Generate a release key from a regex match.
+
+    Args:
+        match: Regex match object from pattern matching
+
+    Returns:
+        str: Release key in format {res/com}_{release_year}_{weather}_{release_number}
+    """
+    # Check if this is the 2024 pattern by looking at the pattern itself
+    if "2024/resstock_dataset_2024.1" in match.string:
+        release_year, res_com_type, _, release_number = match.groups()
+        weather = "tmy3"
+    else:
+        release_year, res_com_type, weather, release_number = match.groups()
+
+    return f"{res_com_type}_{release_year}_{weather}_{release_number}"
+
+
+def _process_release_path(
+    s3_client: Any,
+    bucket_name: str,
+    prefix: str,
+    release_path: str,
+    pattern: str,
+    pattern_2024_resstock_tmy3_1: str,
+    releases: dict[str, BuildStockRelease],
+    seen_combinations: set[tuple[str, str, str, str]],
+) -> None:
+    """
+    Process a single release path and add it to releases if it doesn't already exist.
+
+    Args:
+        s3_client: Boto3 S3 client
+        bucket_name: Name of the S3 bucket
+        prefix: Base prefix path
+        release_path: Full release path to process
+        pattern: Standard regex pattern string for matching releases
+        pattern_2024_resstock_tmy3_1: Special pattern string for 2024 ResStock TMY3 release 1
+        releases: Dictionary of releases to update
+        seen_combinations: Set of seen release combinations
+    """
+    # Try to match the pattern against the full path
+    relative_path = release_path.replace(prefix, "").lstrip("/")
+
+    # Check for 2024 ResStock TMY3 release 1 pattern first
+    match = re.match(pattern_2024_resstock_tmy3_1, relative_path)
+    if match:
+        # Generate key and check if release already exists
+        key = _generate_release_key(match)
+        if key in releases:
+            logger.info(f"Skipping existing release: {key}")
+            return
+
+        available_data = _find_available_data(s3_client, bucket_name, release_path)
+        _process_release(s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data)
+        return
+
+    # Then check for standard pattern
+    match = re.match(pattern, relative_path)
+
+    if match:
+        # Generate key and check if release already exists
+        key = _generate_release_key(match)
+        if key in releases:
+            logger.info(f"Skipping existing release: {key}")
+            return
+
+        available_data = _find_available_data(s3_client, bucket_name, release_path)
+        _process_release(s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data)
+
+
 def resolve_bldgid_sets(
     bucket_name: str = "oedi-data-lake",
     prefix: str = "nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock",
@@ -399,6 +475,7 @@ def resolve_bldgid_sets(
     """
     Get URLs containing 'building_energy_models' from the NREL S3 bucket.
     Parses the URL structure to extract available releases.
+    Only processes releases that don't already exist in the output file.
 
     Args:
         bucket_name (str): Name of the S3 bucket
@@ -412,11 +489,21 @@ def resolve_bldgid_sets(
             Each release includes the path to its building_energy_model directory
             and the list of upgrade IDs available for that release.
     """
+    # Load existing releases from file if it exists
+    releases: dict[str, BuildStockRelease] = {}
+    initial_count = 0
+    if RELEASE_JSON_FILE.exists():
+        try:
+            with open(RELEASE_JSON_FILE, encoding="utf-8") as f:
+                releases = json.load(f)
+            initial_count = len(releases)
+            logger.info(f"Loaded {initial_count} existing releases from {RELEASE_JSON_FILE}")
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Could not load existing releases file: {e}. Starting fresh.")
+
     # Initialize S3 client with unsigned requests (for public buckets)
     s3_client = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
-    # Dictionary to store releases
-    releases: dict[str, BuildStockRelease] = {}
     # Set to track unique combinations
     seen_combinations: set[tuple[str, str, str, str]] = set()
 
@@ -446,33 +533,33 @@ def resolve_bldgid_sets(
 
                 for release_prefix in release_page["CommonPrefixes"]:
                     release_path = release_prefix["Prefix"].rstrip("/")
-
-                    # Try to match the pattern against the full path
-                    relative_path = release_path.replace(prefix, "").lstrip("/")
-
-                    # Check for 2024 ResStock TMY3 release 1 pattern first
-                    match = re.match(pattern_2024_resstock_tmy3_1, relative_path)
-                    if match:
-                        available_data = _find_available_data(s3_client, bucket_name, release_path)
-                        _process_release(
-                            s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data
-                        )
-                        continue
-
-                    # Then check for standard pattern
-                    match = re.match(pattern, relative_path)
-
-                    if match:
-                        available_data = _find_available_data(s3_client, bucket_name, release_path)
-                        _process_release(
-                            s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data
-                        )
+                    _process_release_path(
+                        s3_client,
+                        bucket_name,
+                        prefix,
+                        release_path,
+                        pattern,
+                        pattern_2024_resstock_tmy3_1,
+                        releases,
+                        seen_combinations,
+                    )
+    # Update trip schedules for all releases (including existing ones)
     append_avail_trip_schedules(releases)
+
+    # Count new releases added
+    new_releases_count = len(releases) - initial_count
+
+    if new_releases_count > 0:
+        logger.info(f"Added {new_releases_count} new release(s)")
+    else:
+        logger.info("No new releases found")
 
     # Save to JSON file with consistent formatting
     with open(RELEASE_JSON_FILE, "w", encoding="utf-8", newline="\n") as f:
         json.dump(releases, f, indent=2, sort_keys=False, ensure_ascii=False)
         f.write("\n")  # Ensure newline at end of file
+
+    logger.info(f"Saved {len(releases)} total releases to {RELEASE_JSON_FILE}")
 
     return releases
 

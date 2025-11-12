@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Union
@@ -285,6 +286,13 @@ def process_parquet_file(
         # Add metadata columns
         df = _add_metadata_columns(df, res_com, weather, release_version, release_year)
 
+        # Keep only unique rows based on bldg_id
+        initial_rows = df.height
+        df = df.unique(subset=["bldg_id"], keep="first")
+        removed_rows = initial_rows - df.height
+        if removed_rows > 0:
+            logger.info(f"Removed {removed_rows} duplicate rows based on bldg_id in {release_name}")
+
         logger.info(f"Successfully loaded {df.height} rows with {len(df.columns)} columns in {release_name}")
 
     except Exception:
@@ -292,24 +300,6 @@ def process_parquet_file(
         return None
     else:
         return df
-
-
-def find_metadata_files(base_file_key: str, file_key_suffix: str, s3_client: Any, bucket_name: str) -> list:
-    """
-    Find all metadata files in the S3 bucket.
-    """
-    download_files = []
-    paginator = s3_client.get_paginator("list_objects_v2")
-    pages = paginator.paginate(Bucket=bucket_name, Prefix=base_file_key)
-    for page in pages:
-        if "Contents" in page:
-            for obj in page["Contents"]:
-                key = obj["Key"]
-
-                # Check if file ends with 'baseline.parquet'
-                if key.endswith(file_key_suffix):
-                    download_files.append(key)
-    return download_files
 
 
 def _extract_upgrade_number(filename: str) -> Union[str, None]:
@@ -466,14 +456,17 @@ def find_all_parquet_files(base_file_key: str, s3_client: Any, bucket_name: str)
                     continue
 
                 if key.endswith("baseline.parquet"):
-                    if "baseline" not in all_files:
-                        all_files["baseline"] = []
-                    all_files["baseline"].append(key)
+                    upgrade_num = 0
+                    upgrade_key = f"upgrade_{upgrade_num}"
+                    if upgrade_key not in all_files:
+                        all_files[upgrade_key] = []
+                    all_files[upgrade_key].append(key)
                 elif "upgrade" in key:
                     # Extract upgrade number from filename
                     parts = key.split("/")
                     filename = parts[-1]
                     upgrade_num = _extract_upgrade_number(filename)
+                    upgrade_num = int(upgrade_num)
 
                     if upgrade_num is not None:
                         upgrade_key = f"upgrade_{upgrade_num}"
@@ -482,6 +475,188 @@ def find_all_parquet_files(base_file_key: str, s3_client: Any, bucket_name: str)
                         all_files[upgrade_key].append(key)
 
     return all_files
+
+
+def _process_single_file(
+    file_key: str,
+    bucket_name: str,
+    res_com: Union[str, None],
+    weather: Union[str, None],
+    release_version: Union[str, None],
+    release_year: Union[str, None],
+    release_name: Union[str, None],
+) -> Union[pl.DataFrame, None]:
+    """
+    Process a single parquet file. This function is designed to be called in parallel.
+
+    Args:
+        file_key: S3 key of the parquet file
+        bucket_name: S3 bucket name
+        res_com: The res_com value
+        weather: The weather value
+        release_version: The release version
+        release_year: The release year
+        release_name: The release name
+
+    Returns:
+        DataFrame if successful, None otherwise
+    """
+    # Create S3 filesystem for this thread (thread-safe)
+    s3 = fs.S3FileSystem(anonymous=True, region="us-west-2")
+    try:
+        df = process_parquet_file(
+            file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
+        )
+        if df is not None and df.height > 0:
+            return df
+        else:
+            logger.error(f"Failed to process {file_key} for {release_name}")
+            return None
+    except Exception:
+        logger.exception(f"Error processing file {file_key} for {release_name}")
+        return None
+
+
+def _process_release_2021(
+    release_name: str,
+    release: dict[str, Any],
+    bucket_name: str,
+) -> Union[pl.DataFrame, None]:
+    """Process a 2021 release."""
+    release_year = release["release_year"]
+    res_com = release["res_com"]
+    weather = release["weather"]
+    release_version = release["release_number"]
+
+    file_key = (
+        f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
+        f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/metadata.parquet"
+    )
+    return _process_single_file(file_key, bucket_name, res_com, weather, release_version, release_year, release_name)
+
+
+def _process_release_2022_2024(
+    release_name: str,
+    release: dict[str, Any],
+    bucket_name: str,
+) -> Union[pl.DataFrame, None]:
+    """Process a 2022-2024 release (excluding special 2024 releases)."""
+    release_year = release["release_year"]
+    res_com = release["res_com"]
+    weather = release["weather"]
+    release_version = release["release_number"]
+    upgrade_ids = release.get("upgrade_ids", [])
+
+    if not upgrade_ids:
+        return None
+
+    upgrade_id = int(upgrade_ids[0])
+    if upgrade_id == 0:
+        file_key = (
+            f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
+            f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/baseline.parquet"
+        )
+    else:
+        file_key = (
+            f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
+            f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/"
+            f"upgrade{upgrade_id:02d}.parquet"
+        )
+
+    return _process_single_file(file_key, bucket_name, res_com, weather, release_version, release_year, release_name)
+
+
+def _process_release_2024_2025(
+    release_name: str,
+    release: dict[str, Any],
+    bucket_name: str,
+    s3_client: Any,
+) -> Union[pl.DataFrame, None]:
+    """Process a 2024/2025 release with multiple files."""
+    release_year = release["release_year"]
+    res_com = release["res_com"]
+    weather = release["weather"]
+    release_version = release["release_number"]
+    upgrade_ids = release.get("upgrade_ids", [])
+
+    if not upgrade_ids:
+        return None
+
+    if release_name == "res_2025_amy2018_1":
+        base_file_key = (
+            f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
+            f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata_and_annual_results/"
+            f"by_state/full/parquet/"
+        )
+    else:
+        base_file_key = (
+            f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
+            f"{release_year}/{res_com}_{weather}_release_{release_version}/"
+            f"metadata_and_annual_results/by_state_and_county/full/parquet/"
+        )
+
+    # Find all available parquet files
+    all_parquet_files = find_all_parquet_files(base_file_key, s3_client, bucket_name)
+    logger.info(f"Found parquet files for {release_name}: {list(all_parquet_files.keys())}")
+
+    upgrade_id = int(upgrade_ids[0])
+    if upgrade_id == 0 and release_name == "com_2024_amy2018_2":
+        file_key_suffix = "baseline.parquet"
+        available_files = all_parquet_files.get("upgrade_0", [])
+    elif (
+        release_name == "com_2025_amy2018_1"
+        or release_name == "com_2025_amy2018_2"
+        or release_name == "com_2025_amy2012_2"
+        or release_name == "res_2025_amy2018_1"
+    ):
+        file_key_suffix = f"upgrade_{upgrade_id}.parquet"
+        available_files = all_parquet_files.get(f"upgrade_{upgrade_id}", [])
+    else:
+        return None
+
+    logger.info(f"Found {len(available_files)} {file_key_suffix} files for {release_name}")
+
+    if not available_files:
+        logger.warning(f"No files found for {file_key_suffix} in {release_name}")
+        return None
+
+    # Process all files in parallel
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_file = {
+            executor.submit(
+                _process_single_file,
+                file_key,
+                bucket_name,
+                res_com,
+                weather,
+                release_version,
+                release_year,
+                release_name,
+            ): file_key
+            for file_key in available_files
+        }
+
+        combined_dfs = []
+        for i, future in enumerate(as_completed(future_to_file), 1):
+            file_key = future_to_file[future]
+            try:
+                df = future.result()
+                if df is not None and df.height > 0:
+                    combined_dfs.append(df)
+                    logger.info(f"Processed file {i}/{len(available_files)}: {file_key}")
+                else:
+                    logger.error(f"Failed to process {file_key} for {release_name}")
+            except Exception:
+                logger.exception(f"Error processing {file_key} for {release_name}")
+
+    if combined_dfs:
+        # Concatenate all DataFrames for this release
+        combined_df = pl.concat(combined_dfs)
+        logger.info(f"Combined {len(combined_dfs)} files into {combined_df.height} total rows in {release_name}")
+        return combined_df
+    else:
+        logger.warning(f"No valid data found for {file_key_suffix} in {release_name}")
+        return None
 
 
 if __name__ == "__main__":
@@ -494,126 +669,72 @@ if __name__ == "__main__":
     downloaded_paths: list[str] = []
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    # List to collect all DataFrames
-    all_dataframes = []
-
     # S3 bucket and filesystem
     bucket_name = "oedi-data-lake"
-    s3 = fs.S3FileSystem(anonymous=True, region="us-west-2")
     s3_client = boto3.client("s3", region_name="us-west-2", config=Config(signature_version=UNSIGNED))
 
-    for release_name, release in data.items():
+    # Process all releases in parallel
+    all_dataframes: list[pl.DataFrame] = []
+    failed_releases: list[str] = []
+
+    def _process_release_wrapper(release_name: str, release: dict[str, Any]) -> tuple[str, Union[pl.DataFrame, None]]:
+        """Wrapper function to process a release and return (release_name, df)."""
         release_year = release["release_year"]
-        res_com = release["res_com"]
-        weather = release["weather"]
-        release_version = release["release_number"]
-        upgrade_ids = release.get("upgrade_ids", [])
 
-        if release_year == "2021":
-            file_key = (
-                f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/metadata.parquet"
-            )
-            df = process_parquet_file(
-                file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
-            )
-            if df is not None and df.height > 0:
-                all_dataframes.append(df)
+        try:
+            if release_year == "2021":
+                df = _process_release_2021(release_name, release, bucket_name)
+            elif (
+                release_year == "2022"
+                or release_year == "2023"
+                or (release_year == "2024" and release_name != "com_2024_amy2018_2")
+            ):
+                df = _process_release_2022_2024(release_name, release, bucket_name)
+            elif (
+                release_name == "com_2024_amy2018_2"
+                or release_name == "com_2025_amy2018_1"
+                or release_name == "com_2025_amy2018_2"
+                or release_name == "com_2025_amy2012_2"
+                or release_name == "res_2025_amy2018_1"
+            ):
+                df = _process_release_2024_2025(release_name, release, bucket_name, s3_client)
             else:
-                logger.exception(
-                    f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
-                )
-                logger.exception("Exiting script...")
-                sys.exit(1)
+                logger.warning(f"Unknown release type for {release_name}")
+                return (release_name, None)
+        except Exception:
+            logger.exception(f"Error processing release {release_name}")
+            return (release_name, None)
+        else:
+            return (release_name, df)
 
-        elif (
-            release_year == "2022"
-            or release_year == "2023"
-            or (release_year == "2024" and release_name != "com_2024_amy2018_2")
-        ):
-            # Process only the first upgrade_id
-            if upgrade_ids:
-                upgrade_id = int(upgrade_ids[0])
-                if upgrade_id == 0:
-                    file_key = (
-                        f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                        f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/baseline.parquet"
-                    )
-                else:
-                    file_key = (
-                        f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                        f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata/"
-                        f"upgrade{upgrade_id:02d}.parquet"
-                    )
+    # Process releases in parallel
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_release = {
+            executor.submit(_process_release_wrapper, release_name, release): release_name
+            for release_name, release in data.items()
+        }
 
-                df = process_parquet_file(
-                    file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
-                )
+        for future in as_completed(future_to_release):
+            release_name = future_to_release[future]
+            try:
+                processed_name, df = future.result()
                 if df is not None and df.height > 0:
                     all_dataframes.append(df)
+                    logger.info(f"Successfully processed release: {processed_name}")
                 else:
-                    logger.exception(
-                        f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
+                    failed_releases.append(processed_name)
+                    logger.error(
+                        f"ERROR: Failed to process {processed_name}. bldg_id column is either missing or contains non-integer values"
                     )
-                    logger.exception("Exiting script...")
-                    sys.exit(1)
+            except Exception:
+                failed_releases.append(release_name)
+                logger.exception(f"Exception processing release {release_name}")
 
-        elif release_name == "com_2024_amy2018_2" or release_name == "com_2025_amy2018_1":
-            base_file_key = (
-                f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-                f"{release_year}/{res_com}_{weather}_release_{release_version}/"
-                f"metadata_and_annual_results/by_state_and_county/full/parquet/"
-            )
-
-            # Find all available parquet files at once
-            all_parquet_files = find_all_parquet_files(base_file_key, s3_client, bucket_name)
-            logger.info(f"Found parquet files: {list(all_parquet_files.keys())}")
-
-            # Process only the first upgrade_id
-            if upgrade_ids:
-                upgrade_id = int(upgrade_ids[0])
-                if upgrade_id == 0 and release_name == "com_2024_amy2018_2":
-                    file_key_suffix = "baseline.parquet"
-                    available_files = all_parquet_files.get("baseline", [])
-                elif release_name == "com_2025_amy2018_1":
-                    file_key_suffix = f"upgrade{upgrade_id}.parquet"
-                    available_files = all_parquet_files.get(f"upgrade_{upgrade_id}", [])
-                else:
-                    file_key_suffix = f"upgrade{upgrade_id:02d}.parquet"
-                    available_files = all_parquet_files.get(f"upgrade_{upgrade_id:02d}", [])
-
-                logger.info(f"Found {len(available_files)} {file_key_suffix} files:")
-
-                if available_files:
-                    # Combine all parquet files for this upgrade
-                    combined_dfs = []
-                    files_to_process = available_files  # Process all available files
-
-                    for i, file_key in enumerate(files_to_process, 1):
-                        logger.info(f"Processing file {i} out of {len(files_to_process)}")
-                        df = process_parquet_file(
-                            file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
-                        )
-                        if df is not None and df.height > 0:
-                            combined_dfs.append(df)
-                        else:
-                            logger.exception(
-                                f"ERROR: Failed to process {release_name}. bldg_id column is either missing or contains non-integer values"
-                            )
-                            logger.exception("Exiting script...")
-                            sys.exit(1)
-
-                    if combined_dfs:
-                        # Concatenate all DataFrames for this release
-                        combined_df = pl.concat(combined_dfs)
-                        logger.info(
-                            f"Combined {len(combined_dfs)} files into {combined_df.height} total rows in {release_name}"
-                        )
-                        all_dataframes.append(combined_df)
-                    else:
-                        logger.warning(f"No valid data found for {file_key_suffix} in {release_name}")
-                else:
-                    logger.warning(f"No files found for {file_key_suffix} in {release_name}")
+    # Check if any releases failed
+    if failed_releases:
+        logger.error(f"Failed to process {len(failed_releases)} release(s): {failed_releases}")
+        logger.error("Exiting script...")
+        sys.exit(1)
 
     # Combine all DataFrames and save as partitioned parquet
     if all_dataframes:
