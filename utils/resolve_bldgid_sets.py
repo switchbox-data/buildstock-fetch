@@ -72,6 +72,42 @@ def _find_model_directory(s3_client: Any, bucket_name: str, prefix: str) -> str:
     return ""
 
 
+def _find_metadata_directory(s3_client: Any, bucket_name: str, prefix: str) -> str:
+    """
+    Find the metadata directory path using breadth-first search.
+    """
+    paginator = s3_client.get_paginator("list_objects_v2")
+    # Queue contains tuples of (prefix, depth) where depth starts at 0
+    # Ensure prefix ends with / for proper directory listing
+    directories_to_search = [(prefix.rstrip("/") + "/", 0)]
+
+    while directories_to_search:
+        current_prefix, current_depth = directories_to_search.pop(0)  # Get next directory to search
+
+        # Stop if we've gone too deep
+        if current_depth >= 3:
+            continue
+
+        # List all directories at current level
+        pages = paginator.paginate(Bucket=bucket_name, Prefix=current_prefix, Delimiter="/")
+
+        for page in pages:
+            # First check directories at this level
+            if "CommonPrefixes" in page:
+                for prefix_obj in page["CommonPrefixes"]:
+                    dir_path = str(prefix_obj["Prefix"])  # Keep the trailing slash for next level search
+                    dir_name = dir_path.rstrip("/").split("/")[-1]
+
+                    # If we found the metadata directory, return its path
+                    if "metadata" in dir_name.lower():
+                        return dir_path.rstrip("/")  # Remove trailing slash from final result
+
+                    # Add this directory to be searched next, with increased depth
+                    directories_to_search.append((dir_path, current_depth + 1))
+
+    return ""
+
+
 def _get_upgrade_ids(s3_client: Any, bucket_name: str, model_path: str) -> list[str]:
     """
     Get the list of upgrade IDs from the building_energy_model directory.
@@ -95,6 +131,74 @@ def _get_upgrade_ids(s3_client: Any, bucket_name: str, model_path: str) -> list[
                     upgrade_ids.append(upgrade_num)
 
     return sorted(upgrade_ids, key=int)  # Sort numerically
+
+
+def _check_has_upgrade_files(paginator: Any, bucket_name: str, dir_path: str) -> bool:
+    """Check if a directory contains any files with 'upgrade' in the name."""
+    dir_pages = paginator.paginate(Bucket=bucket_name, Prefix=dir_path, Delimiter="/")
+    for page in dir_pages:
+        if "Contents" in page:
+            for obj in page["Contents"]:
+                file_name = obj["Key"].split("/")[-1]
+                if "upgrade" in file_name.lower():
+                    return True
+    return False
+
+
+def _extract_upgrade_ids_from_directory(
+    paginator: Any, bucket_name: str, dir_path: str, upgrade_pattern: re.Pattern[str], upgrade_ids: set[str]
+) -> None:
+    """Extract upgrade IDs from all files in a directory."""
+    file_pages = paginator.paginate(Bucket=bucket_name, Prefix=dir_path, Delimiter="/")
+    for file_page in file_pages:
+        if "Contents" in file_page:
+            for obj in file_page["Contents"]:
+                file_key = obj["Key"]
+                if file_key.endswith("/"):
+                    continue
+                file_name = file_key.split("/")[-1]
+                match = upgrade_pattern.search(file_name)
+                if match:
+                    upgrade_ids.add(match.group(1))
+
+
+def _get_first_subdirectory(paginator: Any, bucket_name: str, dir_path: str) -> str | None:
+    """Get the first subdirectory path from a directory, or None if no subdirectories exist."""
+    dir_pages = paginator.paginate(Bucket=bucket_name, Prefix=dir_path, Delimiter="/")
+    for page in dir_pages:
+        if page.get("CommonPrefixes"):
+            return page["CommonPrefixes"][0]["Prefix"]
+    return None
+
+
+def _get_upgrade_ids_from_metadata(s3_client: Any, bucket_name: str, metadata_path: str) -> list[str]:
+    """
+    Get the list of upgrade IDs from the metadata directory.
+    Performs depth-first search: follows the first subdirectory at each level until finding
+    a directory with upgrade files, then processes all files in that directory and returns.
+    The upgrade number is in the form "...upgrade%d..." where %d is a number directly after "upgrade".
+    """
+    if not metadata_path:
+        return []
+
+    upgrade_ids: set[str] = set()
+    paginator = s3_client.get_paginator("list_objects_v2")
+    upgrade_pattern = re.compile(r"upgrade(\d+)", re.IGNORECASE)
+
+    def search_directory(dir_path: str) -> bool:
+        """
+        Search a directory depth-first: check files first, then recurse into first subdirectory.
+        Returns True if upgrade files were found and processed, False otherwise.
+        """
+        if _check_has_upgrade_files(paginator, bucket_name, dir_path):
+            _extract_upgrade_ids_from_directory(paginator, bucket_name, dir_path, upgrade_pattern, upgrade_ids)
+            return True
+
+        first_subdir = _get_first_subdirectory(paginator, bucket_name, dir_path)
+        return first_subdir is not None and search_directory(first_subdir)
+
+    search_directory(metadata_path + "/")
+    return sorted(upgrade_ids, key=int)
 
 
 def _process_zip_file(
@@ -296,7 +400,12 @@ def _find_upgrade_ids(s3_client: Any, bucket_name: str, prefix: str) -> list[str
         return ["0"]
 
     model_path = _find_model_directory(s3_client, bucket_name, prefix)
-    upgrade_ids = _get_upgrade_ids(s3_client, bucket_name, model_path)
+    # If the model path is empty, find the metadata path
+    if model_path == "":
+        metadata_path = _find_metadata_directory(s3_client, bucket_name, prefix)
+        upgrade_ids = _get_upgrade_ids_from_metadata(s3_client, bucket_name, metadata_path)
+    else:
+        upgrade_ids = _get_upgrade_ids(s3_client, bucket_name, model_path)
     return upgrade_ids
 
 

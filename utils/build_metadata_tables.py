@@ -597,6 +597,7 @@ def _process_release_2024_2025(
 
     # Find all available parquet files
     all_parquet_files = find_all_parquet_files(base_file_key, s3_client, bucket_name)
+    print("TEST, all_parquet_files:", all_parquet_files)
     logger.info(f"Found parquet files for {release_name}: {list(all_parquet_files.keys())}")
 
     upgrade_id = int(upgrade_ids[0])
