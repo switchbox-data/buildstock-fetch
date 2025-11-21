@@ -1,6 +1,9 @@
+import contextlib
 import json
 import logging
 import sys
+import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from importlib.resources import files
 from pathlib import Path
@@ -91,33 +94,109 @@ def rename_columns(df: pl.DataFrame) -> pl.DataFrame:
     return df.rename(column_mapping)
 
 
-def _read_parquet_with_columns(file_key: str, s3: Any, bucket_name: str) -> tuple[pl.DataFrame, list]:
+def _read_parquet_with_retry(read_func, file_key: str, max_retries: int = 3, *args, **kwargs) -> pl.DataFrame:
+    """
+    Helper function to read parquet files with retry logic for transient S3 errors.
+
+    Args:
+        read_func: Function to call for reading (e.g., pl.read_parquet)
+        file_key: S3 key for logging purposes
+        max_retries: Maximum number of retry attempts (default: 3)
+        *args, **kwargs: Arguments to pass to read_func
+
+    Returns:
+        pl.DataFrame: The read DataFrame
+
+    Raises:
+        Exception: If all retry attempts fail
+    """
+    last_exception = None
+
+    for attempt in range(max_retries):
+        try:
+            return read_func(*args, **kwargs)
+        except (OSError, Exception) as e:
+            last_exception = e
+            error_msg = str(e).lower()
+            # Check if it's a checksum or validation error that might be transient
+            is_transient = (
+                "checksum" in error_msg
+                or "validation" in error_msg
+                or "timeout" in error_msg
+                or "connection" in error_msg
+            )
+
+            if is_transient and attempt < max_retries - 1:
+                wait_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
+                logger.warning(
+                    f"Transient error reading {file_key} (attempt {attempt + 1}/{max_retries}): {e}. "
+                    f"Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+            else:
+                # Not a transient error or out of retries
+                if attempt < max_retries - 1:
+                    logger.warning(f"Error reading {file_key} (attempt {attempt + 1}/{max_retries}): {e}. Retrying...")
+                    time.sleep(1)
+                else:
+                    logger.exception(f"Failed to read {file_key} after {max_retries} attempts")
+                    raise
+
+    # Should never reach here, but just in case
+    raise last_exception or Exception(f"Failed to read {file_key} after {max_retries} attempts")
+
+
+def _read_parquet_with_columns(
+    file_key: str, s3: Any, bucket_name: str, max_retries: int = 3
+) -> tuple[pl.DataFrame, list]:
     """
     Read parquet file and return Polars DataFrame with selected columns.
+    Downloads file to temp location first to avoid PyArrow S3FileSystem checksum validation issues.
 
     Args:
         file_key (str): The S3 key of the parquet file
-        s3 (fs.S3FileSystem): S3 filesystem instance
+        s3 (fs.S3FileSystem): S3 filesystem instance (not used, kept for compatibility)
         bucket_name (str): Name of the S3 bucket
+        max_retries (int): Maximum number of retry attempts (default: 3)
 
     Returns:
         tuple: (Polars DataFrame, list of available columns)
+
+    Raises:
+        Exception: If all retry attempts fail
     """
-    # Use PyArrow's S3FileSystem to read the file
-    s3_file_path = f"{bucket_name}/{file_key}"
+    # Create boto3 client for reliable file download (bypasses PyArrow checksum validation)
+    s3_client = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
-    # Read the file using PyArrow's S3FileSystem, then convert to Polars
-    with s3.open_input_file(s3_file_path) as f:
-        # Get available columns by reading the file
-        lazy_df = pl.scan_parquet(f)
-        available_columns = lazy_df.collect_schema().names()
+    def _download_and_read():
+        # Download file to temporary location
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as tmp_file:
+            tmp_path = tmp_file.name
 
-        # Select columns with priority
-        selected_columns = select_priority_columns(available_columns)
+        try:
+            # Download using boto3 (handles checksums more reliably)
+            s3_client.download_file(bucket_name, file_key, tmp_path)
+            # Read from local file (no checksum validation issues)
+            return pl.read_parquet(tmp_path)
+        finally:
+            # Clean up temp file
+            with contextlib.suppress(Exception):
+                Path(tmp_path).unlink(missing_ok=True)
 
-        # Reset file pointer and read with selected columns
-        f.seek(0)
-        df = pl.read_parquet(f, columns=selected_columns) if selected_columns else pl.read_parquet(f)
+    # Read the file with retry logic - get all columns first
+    df_full = _read_parquet_with_retry(_download_and_read, file_key, max_retries)
+
+    # Get available columns from the DataFrame
+    available_columns = df_full.columns
+
+    # Select columns with priority
+    selected_columns = select_priority_columns(available_columns)
+
+    # If we need to filter columns, do it from the already-read DataFrame
+    if selected_columns and set(selected_columns) != set(available_columns):
+        df = df_full.select(selected_columns)
+    else:
+        df = df_full
 
     return df, available_columns
 
@@ -137,21 +216,26 @@ def _handle_bldg_id_column(df: pl.DataFrame, file_key: str, s3: Any, bucket_name
     """
     # Check if bldg_id is missing from columns
     if "bldg_id" not in df.columns:
-        # Construct S3 path
-        s3_path = f"s3://{bucket_name}/{file_key}"
+        # Create boto3 client for reliable file download (bypasses PyArrow checksum validation)
+        s3_client = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
-        # Extract storage options from s3fs filesystem
-        storage_options = {
-            "aws_access_key_id": getattr(s3, "key", None),
-            "aws_secret_access_key": getattr(s3, "secret", None),
-            "aws_region": getattr(s3, "client_kwargs", {}).get("region_name", "us-west-2"),
-        }
+        def _download_and_read_full():
+            # Download file to temporary location
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as tmp_file:
+                tmp_path = tmp_file.name
 
-        # Remove None values from storage_options
-        storage_options = {k: v for k, v in storage_options.items() if v is not None}
+            try:
+                # Download using boto3 (handles checksums more reliably)
+                s3_client.download_file(bucket_name, file_key, tmp_path)
+                # Read from local file (no checksum validation issues)
+                return pl.read_parquet(tmp_path)
+            finally:
+                # Clean up temp file
+                with contextlib.suppress(Exception):
+                    Path(tmp_path).unlink(missing_ok=True)
 
-        # Try reading the full parquet file to check all columns
-        df_full = pl.read_parquet(s3_path, storage_options=storage_options)
+        # Try reading the full parquet file to check all columns with retry logic
+        df_full = _read_parquet_with_retry(_download_and_read_full, file_key, max_retries=3)
 
         if "bldg_id" in df_full.columns:
             # If bldg_id exists in the full file, use it
