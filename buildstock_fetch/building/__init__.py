@@ -7,6 +7,7 @@ from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, WEATHER_
 from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
 from .data_url import get_building_data_url
+from .metadata import get_metadata_url
 
 __all__ = [
     "BuildingID",
@@ -66,42 +67,7 @@ class BuildingID:
 
     def get_metadata_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        if not self.is_file_type_available("metadata"):
-            return ""
-        if self.release_year == "2021":
-            return f"{self.base_url}metadata/metadata.parquet"
-        elif self.release_year == "2022" or self.release_year == "2023":
-            if self.upgrade_id == "0":
-                return f"{self.base_url}metadata/baseline.parquet"
-            else:
-                return f"{self.base_url}metadata/upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
-        elif self.release_year == "2024":
-            if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "2":
-                if self.upgrade_id == "0":
-                    upgrade_filename = "baseline"
-                else:
-                    upgrade_filename = f"upgrade{str(int(self.upgrade_id)).zfill(2)}"
-                return (
-                    f"{self.base_url}metadata_and_annual_results/by_state_and_county/full/parquet/"
-                    f"state={self.state}/county={self.get_county_name()}/{self.state}_{self.get_county_name()}_{upgrade_filename}.parquet"
-                )
-            else:
-                if self.upgrade_id == "0":
-                    return f"{self.base_url}metadata/baseline.parquet"
-                else:
-                    return f"{self.base_url}metadata/upgrade{str(int(self.upgrade_id)).zfill(2)}.parquet"
-        elif (
-            self.release_year == "2025"
-            and self.res_com == "comstock"
-            and self.weather == "amy2018"
-            and (self.release_number == "1" or self.release_number == "2")
-        ):
-            return (
-                f"{self.base_url}metadata_and_annual_results/by_state_and_county/full/parquet/"
-                f"state={self.state}/county={self.get_county_name()}/{self.state}_{self.get_county_name()}_upgrade{self.upgrade_id}.parquet"
-            )
-        else:
-            return ""
+        return get_metadata_url(self)
 
     def get_15min_load_curve_url(self) -> str:
         """Generate the S3 download URL for this building."""
