@@ -16,7 +16,14 @@ import urllib3
 import xmltodict
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from buildstock_fetch.main import BuildingID, InvalidReleaseNameError, fetch_bldg_ids
 from buildstock_fetch.main_cli import (
@@ -35,7 +42,10 @@ console = Console()
 # Create a session with connection pooling and SSL settings
 session = requests.Session()
 session.verify = False  # Disable SSL verification for problematic connections
-session.mount("https://", requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=20, max_retries=3))
+session.mount(
+    "https://",
+    requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=20, max_retries=3),
+)
 
 
 class NoXMLFileError(ValueError):
@@ -116,21 +126,21 @@ class ProfilingData:
                     "avg": sum(self.download_times) / len(self.download_times),
                     "min": min(self.download_times),
                     "max": max(self.download_times),
-                    "pct_of_total": (sum(self.download_times) / sum(self.total_times)) * 100,
+                    "pct_of_total": ((sum(self.download_times) / sum(self.total_times)) * 100),
                 },
                 "extract": {
                     "total": sum(self.extract_times),
                     "avg": sum(self.extract_times) / len(self.extract_times),
                     "min": min(self.extract_times),
                     "max": max(self.extract_times),
-                    "pct_of_total": (sum(self.extract_times) / sum(self.total_times)) * 100,
+                    "pct_of_total": ((sum(self.extract_times) / sum(self.total_times)) * 100),
                 },
                 "process": {
                     "total": sum(self.process_times),
                     "avg": sum(self.process_times) / len(self.process_times),
                     "min": min(self.process_times),
                     "max": max(self.process_times),
-                    "pct_of_total": (sum(self.process_times) / sum(self.total_times)) * 100,
+                    "pct_of_total": ((sum(self.process_times) / sum(self.total_times)) * 100),
                 },
                 "total_time": sum(self.total_times),
                 "errors": dict(self.error_counts),
@@ -191,21 +201,21 @@ class ProfilingData:
                     "avg": sum(self.download_times) / len(self.download_times),
                     "min": min(self.download_times),
                     "max": max(self.download_times),
-                    "pct_of_total": (sum(self.download_times) / sum(self.total_times)) * 100,
+                    "pct_of_total": ((sum(self.download_times) / sum(self.total_times)) * 100),
                 },
                 "extract": {
                     "total": sum(self.extract_times),
                     "avg": sum(self.extract_times) / len(self.extract_times),
                     "min": min(self.extract_times),
                     "max": max(self.extract_times),
-                    "pct_of_total": (sum(self.extract_times) / sum(self.total_times)) * 100,
+                    "pct_of_total": ((sum(self.extract_times) / sum(self.total_times)) * 100),
                 },
                 "process": {
                     "total": sum(self.process_times),
                     "avg": sum(self.process_times) / len(self.process_times),
                     "min": min(self.process_times),
                     "max": max(self.process_times),
-                    "pct_of_total": (sum(self.process_times) / sum(self.total_times)) * 100,
+                    "pct_of_total": ((sum(self.process_times) / sum(self.total_times)) * 100),
                 },
                 "total_time": sum(self.total_times),
                 "errors": dict(self.error_counts),
@@ -399,7 +409,12 @@ def process_buildings_phase(
         TextColumn("[progress.description]{task.fields[weather_station]}"),
         expand=True,
     ) as progress:
-        task = progress.add_task("Processing buildings", total=total_buildings, current="", weather_station="")
+        task = progress.add_task(
+            "Processing buildings",
+            total=total_buildings,
+            current="",
+            weather_station="",
+        )
 
         start_time = time.time()
         completed_count = 0
@@ -571,7 +586,7 @@ def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
         str: Processed content from the XML file, or empty string if failed
     """
     building_data_url = bldg_id.get_building_data_url()
-    if building_data_url == "":
+    if building_data_url is None:
         raise NoBuildingDataError()
 
     # Create temporary directory for all temporary files
@@ -602,7 +617,10 @@ def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
 
                 # Extract the first (and only) XML file
                 xml_filename = xml_files[0]
-                with zip_ref.open(xml_filename) as xml_file, open(xml_temp_path, "wb") as temp_xml:
+                with (
+                    zip_ref.open(xml_filename) as xml_file,
+                    open(xml_temp_path, "wb") as temp_xml,
+                ):
                     temp_xml.write(xml_file.read())
 
             # Read and process the XML file
@@ -760,7 +778,13 @@ def _modify_buildstock_releases_json(release_name: str, state: str) -> dict:
 
 def _interactive_mode():
     start_time = time.time()
-    console.print(Panel("Weather Station Mapping Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
+    console.print(
+        Panel(
+            "Weather Station Mapping Interactive CLI",
+            title="BuildStock Fetch CLI",
+            border_style="blue",
+        )
+    )
     console.print("Please select the release information and file type you would like to fetch:")
 
     # Retrieve available releases
@@ -797,12 +821,23 @@ def _interactive_mode():
 
     # Fetch building IDs
     bldg_ids = fetch_bldg_ids(
-        product_full, release_year, weather_file, release_version, selected_states, selected_upgrade_ids
+        product_full,
+        release_year,
+        weather_file,
+        release_version,
+        selected_states,
+        selected_upgrade_ids,
     )
 
     # Resolve weather station IDs
     weather_map_df = resolve_weather_station_id(
-        bldg_ids, product_full, release_year, weather_file, release_version, selected_states, selected_upgrade_ids
+        bldg_ids,
+        product_full,
+        release_year,
+        weather_file,
+        release_version,
+        selected_states,
+        selected_upgrade_ids,
     )
     clean_weather_map_df = _remove_duplicates(weather_map_df)
 
@@ -828,7 +863,13 @@ def _interactive_mode():
         combined_df_cleaned.write_parquet(
             str(output_path),
             use_pyarrow=True,
-            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
+            partition_by=[
+                "product",
+                "release_year",
+                "weather_file",
+                "release_version",
+                "state",
+            ],
         )
 
         print(f"Successfully appended and saved combined weather station mapping to {output_path}")
@@ -838,7 +879,13 @@ def _interactive_mode():
         clean_weather_map_df.write_parquet(
             str(output_path),
             use_pyarrow=True,
-            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
+            partition_by=[
+                "product",
+                "release_year",
+                "weather_file",
+                "release_version",
+                "state",
+            ],
         )
         print(f"Successfully saved new weather station mapping to {output_path}")
         print(f"DataFrame shape: {clean_weather_map_df.shape}")
@@ -920,7 +967,13 @@ if __name__ == "__main__":
         combined_df_cleaned.write_parquet(
             str(output_path),
             use_pyarrow=True,
-            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
+            partition_by=[
+                "product",
+                "release_year",
+                "weather_file",
+                "release_version",
+                "state",
+            ],
         )
 
         print(f"Successfully appended and saved combined weather station mapping to {output_path}")
@@ -930,7 +983,13 @@ if __name__ == "__main__":
         weather_map_df_cleaned.write_parquet(
             str(output_path),
             use_pyarrow=True,
-            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
+            partition_by=[
+                "product",
+                "release_year",
+                "weather_file",
+                "release_version",
+                "state",
+            ],
         )
         print(f"Successfully saved new weather station mapping to {output_path}")
         print(f"DataFrame shape: {weather_map_df_cleaned.shape}")
