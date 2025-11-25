@@ -10,13 +10,13 @@ def main():
     data = []
     prod = list(
         product(
-            (1235, 1284518, 18),
+            (1235,),
             ("1", "2"),
             ("2021", "2022", "2023", "2024", "2025"),
             ("resstock", "comstock"),
             ("tmy3", "amy2018"),
             map(str, range(10)),
-            STATE_CODES,
+            STATE_CODES[:1],
         )
     )
     print(len(prod))
