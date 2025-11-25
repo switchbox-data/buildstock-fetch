@@ -476,7 +476,7 @@ def download_bldg_data(
     }
     if file_type.hpxml or file_type.schedule:
         download_url = bldg_id.get_building_data_url()
-        if download_url == "":
+        if download_url is None:
             message = f"Building data is not available for {bldg_id.get_release_name()}"
             raise NoBuildingDataError(message)
 

@@ -6,6 +6,8 @@ import polars as pl
 from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, WEATHER_FILE_DIR
 from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
+from .data_url import get_building_data_url
+
 __all__ = [
     "BuildingID",
 ]
@@ -58,39 +60,9 @@ class BuildingID:
         release_data = releases_data[release_name]
         return file_type in release_data["available_data"]
 
-    def get_building_data_url(self) -> str:
+    def get_building_data_url(self) -> str | None:
         """Generate the S3 download URL for this building."""
-        if not self.is_file_type_available("hpxml") or not self.is_file_type_available("schedule"):
-            return ""
-        if self.release_year == "2021":
-            return ""
-        elif self.release_year == "2022":
-            return (
-                f"{self.base_url}"
-                f"building_energy_models/upgrade={self.upgrade_id}/"
-                f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
-            )
-        elif self.release_year == "2023":
-            return ""
-        elif self.release_year == "2024":
-            if self.res_com == "comstock":
-                return ""
-            elif (self.weather == "amy2018" or self.weather == "tmy3") and self.release_number == "2":
-                return (
-                    f"{self.base_url}"
-                    f"model_and_schedule_files/building_energy_models/upgrade={self.upgrade_id}/"
-                    f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
-                )
-            else:
-                return ""
-        elif self.release_year == "2025":
-            return (
-                f"{self.base_url}"
-                f"building_energy_models/upgrade={str(int(self.upgrade_id)).zfill(2)}/"
-                f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
-            )
-        else:
-            return ""
+        return get_building_data_url(self)
 
     def get_metadata_url(self) -> str:
         """Generate the S3 download URL for this building."""
