@@ -3,6 +3,7 @@ import gc
 import json
 import os
 import tempfile
+import traceback
 import zipfile
 from dataclasses import asdict, dataclass
 from datetime import timedelta
@@ -12,6 +13,8 @@ from typing import Any, Optional, Union
 
 import boto3
 import polars as pl
+import pyarrow.fs as fs
+import pyarrow.parquet as pq
 import requests
 from botocore import UNSIGNED
 from botocore.config import Config
@@ -648,17 +651,159 @@ def _extract_metadata_columns_to_keep(metadata_file: Path) -> list[str]:
 
     columns_to_keep = []
     for col in schema:
-        if (
-            any(keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index"])
-            or col.startswith("in.")
-            or col.startswith("in.")
-        ):
+        if any(keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index"]) or col.startswith("in."):
             columns_to_keep.append(col)
     return columns_to_keep
 
 
-def _download_with_progress_metadata(url: str, output_file: Path, progress: Progress, task_id: TaskID) -> int:
-    """Download a metadata file with progress tracking and append to existing file if it exists."""
+def _convert_url_to_s3_path(url: str) -> str:
+    """Convert HTTP URL to S3 path format.
+
+    Args:
+        url: URL in HTTP or S3 format
+
+    Returns:
+        S3 path in format s3://bucket/key
+
+    Raises:
+        ValueError: If URL format is unsupported
+    """
+    # Convert HTTP URL to S3 path
+    # Example: https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/.../metadata.parquet
+    # To: s3://oedi-data-lake/nrel-pds-building-stock/.../metadata.parquet
+    if url.startswith("https://oedi-data-lake.s3.amazonaws.com/"):
+        s3_path = url.replace("https://oedi-data-lake.s3.amazonaws.com/", "s3://oedi-data-lake/")
+    elif url.startswith("https://"):
+        # Extract bucket and key from other S3 URLs if needed
+        msg = f"Unsupported URL format for S3 filtering: {url}"
+        raise ValueError(msg)
+    else:
+        # If it's already an S3 path, use it directly
+        if url.startswith("s3://"):
+            s3_path = url
+        else:
+            msg = f"Invalid URL format: {url}"
+            raise ValueError(msg)
+
+    return s3_path
+
+
+def _download_with_progress_metadata(
+    urls: list[str],
+    bldg_ids: list[BuildingID],
+    output_file: Path,
+    progress: Progress,
+    task_id: TaskID,
+    found_bldg_ids: list[int],
+) -> int:
+    """Download a metadata file with progress tracking, filtering for only requested bldg_ids from S3."""
+
+    # Get the list of bldg_ids we need to filter for, sorted for optimization
+    requested_bldg_ids_set = {bldg_id.bldg_id for bldg_id in bldg_ids}
+    requested_bldg_ids = sorted(requested_bldg_ids_set)
+
+    # Create S3 filesystem for anonymous access
+    # This allows Polars to read directly from S3 without downloading the entire file
+    # Polars can use PyArrow's filesystem for efficient S3 access
+    s3_filesystem = fs.S3FileSystem(anonymous=True, region="us-west-2")
+
+    for url in urls:
+        s3_path = _convert_url_to_s3_path(url)
+
+        try:
+            # Get total file size from S3
+            # Extract bucket and key from s3_path: s3://bucket/key
+            s3_path_parts = s3_path.replace("s3://", "").split("/", 1)
+            bucket_name = s3_path_parts[0]
+            s3_key = s3_path_parts[1] if len(s3_path_parts) > 1 else ""
+
+            # Use boto3 to get file size (HEAD request)
+            s3_client = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+            try:
+                response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+                total_file_size = response.get("ContentLength", 0)
+            except Exception:
+                # If we can't get file size, fall back to estimation
+                total_file_size = 0
+
+            # Read parquet directly from S3 and filter without downloading entire file
+            # Use PyArrow filesystem to open file stream, then Polars can read and filter efficiently
+            # Extract bucket and key for PyArrow filesystem
+            s3_file_path = f"{bucket_name}/{s3_key}"
+
+            try:
+                # Open file as stream using PyArrow filesystem
+                # Polars will read parquet metadata and use predicate pushdown to filter efficiently
+                with s3_filesystem.open_input_file(s3_file_path) as s3_file:
+                    # Read only metadata (footer)
+                    parquet_file = pq.ParquetFile(s3_file)
+                    pq_metadata = parquet_file.metadata
+                    total_rows = pq_metadata.num_rows
+
+                    # Reset file pointer for reading actual data
+                    s3_file.seek(0)
+
+                    column_names = pq_metadata.schema.names
+                    columns_to_keep = []
+                    for col in column_names:
+                        if any(
+                            keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index"]
+                        ) or col.startswith("in."):
+                            columns_to_keep.append(col)
+                    # Polars will use predicate pushdown to only read relevant row groups
+                    df = (
+                        pl.scan_parquet(s3_file)
+                        .select(columns_to_keep)
+                        .filter(pl.col("bldg_id").is_in(requested_bldg_ids))
+                        .collect()
+                    )
+                    found_bldg_ids.extend(df["bldg_id"].to_list())
+                    selected_rows = len(df)
+                    progress.update(task_id, total=total_file_size * (selected_rows / total_rows))
+            except Exception:
+                traceback.print_exc()
+                raise
+
+            selected_rows = len(df)
+
+            # Check if output file already exists
+            if output_file.exists():
+                # Read existing file and combine with new data
+                existing_file = pl.scan_parquet(output_file)
+                new_df = df if isinstance(df, pl.DataFrame) else pl.DataFrame(df)
+                new_file_lazy = pl.LazyFrame(new_df)
+
+                combined_file = pl.concat([existing_file, new_file_lazy])
+                # Remove duplicate rows based on bldg_id column
+                deduplicated_file = combined_file.collect().unique(subset=["bldg_id"], keep="first")
+                deduplicated_file.write_parquet(output_file)
+            else:
+                # Write filtered data directly
+                df.write_parquet(output_file)
+
+            # Calculate downloaded size as ratio
+            # There's no way to get file size when downloading parts of the file, so we'll
+            # estimate it by multiplying the total file size by the ratio of selected rows to total rows
+            downloaded_size = int(total_file_size * (selected_rows / total_rows)) if total_rows > 0 else 0
+            progress.update(
+                task_id,
+                completed=downloaded_size,
+                total=downloaded_size,
+            )
+            gc.collect()
+        except Exception:
+            # Fallback to old method (download entire file using requests) if S3 filtering fails
+            return _download_with_progress_metadata_fallback(url, output_file, progress, task_id)
+        else:
+            # Return successfully if no exception occurred
+            return downloaded_size
+
+    # If no URLs were processed, return 0 (shouldn't happen in practice)
+    return 0
+
+
+def _download_with_progress_metadata_fallback(url: str, output_file: Path, progress: Progress, task_id: TaskID) -> int:
+    """Fallback method to download entire metadata file (old behavior)."""
     # Get file size first
     response = requests.head(url, timeout=30, verify=True)
     response.raise_for_status()
@@ -1300,17 +1445,17 @@ def _process_download_results(
         console.print(f"[red]Download failed for bldg_id {bldg_id}: {e}[/red]")
 
 
-def _download_metadata_with_progress(
-    bldg_ids: list[BuildingID],
-    output_dir: Path,
-    progress: Progress,
-    downloaded_paths: list[Path],
-    failed_downloads: list[str],
-    console: Console,
-) -> tuple[list[Path], list[str]]:
-    """Download metadata file with progress tracking."""
-    metadata_urls = _resolve_unique_metadata_urls(bldg_ids)
-    downloaded_urls: list[str] = []
+def _group_bldg_ids_by_output_file(
+    bldg_ids: list[BuildingID], output_dir: Path, failed_downloads: list[str]
+) -> tuple[dict[Path, list[BuildingID]], dict[Path, list[str]]]:
+    """Group bldg_ids by their output file paths and collect download URLs.
+
+    Returns:
+        Tuple of (output_file_to_bldg_ids, output_file_to_download_url) dictionaries.
+    """
+    output_file_to_bldg_ids: dict[Path, list[BuildingID]] = {}
+    output_file_to_download_url: dict[Path, list[str]] = {}
+
     for bldg_id in bldg_ids:
         output_file = (
             output_dir
@@ -1324,22 +1469,99 @@ def _download_metadata_with_progress(
         if download_url == "":
             failed_downloads.append(str(output_file))
             continue
-        if download_url in downloaded_urls:
-            continue
-        downloaded_urls.append(download_url)
-        if download_url in metadata_urls:
-            metadata_urls.remove(download_url)
+        if output_file not in output_file_to_bldg_ids:
+            output_file_to_bldg_ids[output_file] = []
+        output_file_to_bldg_ids[output_file].append(bldg_id)
+
+        if output_file not in output_file_to_download_url:
+            output_file_to_download_url[output_file] = []
+        if download_url not in output_file_to_download_url[output_file]:
+            output_file_to_download_url[output_file].append(download_url)
+
+    return output_file_to_bldg_ids, output_file_to_download_url
+
+
+def _create_metadata_progress_tasks(
+    output_file_to_bldg_ids: dict[Path, list[BuildingID]], progress: Progress
+) -> dict[Path, TaskID]:
+    """Create progress tasks for metadata downloads.
+
+    Returns:
+        Dictionary mapping output files to their progress task IDs.
+    """
+    output_file_to_metadata_task = {}
+    for output_file, bldg_ids in output_file_to_bldg_ids.items():
+        bldg_id = bldg_ids[0]
+        state = bldg_id.state
+        upgrade = bldg_id.upgrade_id
+        release_name = bldg_id.get_release_name()
         metadata_task = progress.add_task(
-            f"[yellow]Downloading metadata: {bldg_id.get_release_name()} - (upgrade {bldg_id.upgrade_id}) - {bldg_id.state}",
+            f"[yellow]Downloading metadata: {release_name} - (upgrade {upgrade}) - {state}",
             total=0,  # Will be updated when we get the file size
         )
-
+        output_file_to_metadata_task[output_file] = metadata_task
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            _download_with_progress_metadata(download_url, output_file, progress, metadata_task)
+    return output_file_to_metadata_task
+
+
+def _check_missing_bldg_ids(bldg_ids: list[BuildingID], found_bldg_ids: list[int], console: Console) -> bool:
+    """Check if all bldg_ids were found and print warning if any are missing.
+
+    Args:
+        bldg_ids: List of requested BuildingID objects.
+        found_bldg_ids: List of bldg_id integers that were found in the metadata file.
+        console: Rich console for printing messages.
+
+    Returns:
+        True if all bldg_ids were found, False otherwise.
+    """
+    for found_bldg_id in found_bldg_ids:
+        if found_bldg_id not in {bldg_id.bldg_id for bldg_id in bldg_ids}:
+            release_name = bldg_ids[0].get_release_name()
+            state = bldg_ids[0].state
+            upgrade = bldg_ids[0].upgrade_id
+            missing_bldg_ids = found_bldg_id
+            missing_bldg_ids_str = str(missing_bldg_ids)
+            console.print(
+                f"[red]Missing bldg_id in metadata file: {missing_bldg_ids_str} for {release_name} - (upgrade {upgrade}) - {state}[/red]"
+            )
+            return False
+    return True
+
+
+def _download_metadata_with_progress(
+    bldg_ids: list[BuildingID],
+    output_dir: Path,
+    progress: Progress,
+    downloaded_paths: list[Path],
+    failed_downloads: list[str],
+    console: Console,
+) -> tuple[list[Path], list[str]]:
+    """Download metadata file with progress tracking."""
+    output_file_to_bldg_ids, output_file_to_download_url = _group_bldg_ids_by_output_file(
+        bldg_ids, output_dir, failed_downloads
+    )
+    output_file_to_metadata_task = _create_metadata_progress_tasks(output_file_to_bldg_ids, progress)
+
+    try:
+        for output_file, bldg_ids in output_file_to_bldg_ids.items():
+            download_urls = output_file_to_download_url[output_file]
+            found_bldg_ids: list[int] = []
+            _download_with_progress_metadata(
+                download_urls,
+                bldg_ids,
+                output_file,
+                progress,
+                output_file_to_metadata_task[output_file],
+                found_bldg_ids,
+            )
+            if not _check_missing_bldg_ids(bldg_ids, found_bldg_ids, console):
+                failed_downloads.append(str(output_file))
+                continue
             downloaded_paths.append(output_file)
-        except Exception as e:
-            failed_downloads.append(str(output_file))
+    except Exception as e:
+        failed_downloads.append(str(output_file))
+        for bldg_id in bldg_ids:
             console.print(f"[red]Download failed for metadata {bldg_id.bldg_id}: {e}[/red]")
 
     return downloaded_paths, failed_downloads
@@ -1722,7 +1944,7 @@ def _download_metadata(
     failed_downloads: list[str],
     console: Console,
 ) -> None:
-    """Download metadata file (only one needed per release)."""
+    """Download metadata file."""
     if not bldg_ids:
         return
     _download_metadata_with_progress(bldg_ids, output_dir, progress, downloaded_paths, failed_downloads, console)
@@ -2115,7 +2337,6 @@ def fetch_bldg_data(
         total_files += len(available_bldg_ids) * len(weather_states)  # Add weather map files
 
     console.print(f"\n[bold blue]Starting download of {total_files} files...[/bold blue]")
-
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -2249,7 +2470,6 @@ if __name__ == "__main__":  # pragma: no cover
             weather="amy2018",
             upgrade_id="0",
             release_number="2",
-            state="NY",
         ),
         BuildingID(
             bldg_id=658,
@@ -2258,7 +2478,6 @@ if __name__ == "__main__":  # pragma: no cover
             weather="amy2018",
             upgrade_id="0",
             release_number="2",
-            state="NY",
         ),
         BuildingID(
             bldg_id=659,
@@ -2267,7 +2486,6 @@ if __name__ == "__main__":  # pragma: no cover
             weather="amy2018",
             upgrade_id="0",
             release_number="2",
-            state="NY",
         ),
     ]
     file_type = ("metadata",)
@@ -2276,45 +2494,3 @@ if __name__ == "__main__":  # pragma: no cover
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     print(downloaded_paths)
     print(failed_downloads)
-    bldg_ids = [
-        BuildingID(
-            bldg_id=21023,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="2",
-            state="NY",
-        ),
-        BuildingID(
-            bldg_id=18403,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="2",
-            state="NY",
-        ),
-        BuildingID(
-            bldg_id=70769,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="2",
-            state="NV",
-        ),
-        BuildingID(
-            bldg_id=68227,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="2",
-            state="NV",
-        ),
-    ]
-    file_type = ("metadata",)
-    output_dir = Path("data")
-
-    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
