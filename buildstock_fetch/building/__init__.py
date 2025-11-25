@@ -1,18 +1,15 @@
 import json
 from dataclasses import asdict, dataclass
-from typing import Literal, TypeAlias
 
 import polars as pl
 
-from .constants import METADATA_DIR, RELEASE_JSON_FILE, WEATHER_FILE_DIR
+from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, WEATHER_FILE_DIR
+from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
 __all__ = [
     "BuildingID",
 ]
 
-ReleaseYear: TypeAlias = Literal["2021", "2022", "2023", "2024", "2025"]
-ResCom: TypeAlias = Literal["resstock", "comstock"]
-Weather: TypeAlias = Literal["amy2018", "tmy3"]
 weather_map_df = pl.read_parquet(WEATHER_FILE_DIR)
 
 
@@ -51,7 +48,7 @@ class BuildingID:
                 f"{self.res_com}_{self.weather}_release_{self.release_number}/"
             )
 
-    def _validate_requested_file_type_availability(self, file_type: str) -> bool:
+    def is_file_type_available(self, file_type: str) -> bool | None:
         """Validate the requested file type is available for this release."""
         with open(RELEASE_JSON_FILE) as f:
             releases_data = json.load(f)
@@ -63,9 +60,7 @@ class BuildingID:
 
     def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        if not self._validate_requested_file_type_availability(
-            "hpxml"
-        ) or not self._validate_requested_file_type_availability("schedule"):
+        if not self.is_file_type_available("hpxml") or not self.is_file_type_available("schedule"):
             return ""
         if self.release_year == "2021":
             return ""
@@ -99,7 +94,7 @@ class BuildingID:
 
     def get_metadata_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        if not self._validate_requested_file_type_availability("metadata"):
+        if not self.is_file_type_available("metadata"):
             return ""
         if self.release_year == "2021":
             return f"{self.base_url}metadata/metadata.parquet"
@@ -138,7 +133,7 @@ class BuildingID:
 
     def get_15min_load_curve_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        if not self._validate_requested_file_type_availability("load_curve_15min"):
+        if not self.is_file_type_available("load_curve_15min"):
             return ""
         if self.release_year == "2021":
             if self.upgrade_id != "0":
@@ -184,7 +179,7 @@ class BuildingID:
 
     def get_annual_load_curve_url(self) -> str:
         """Generate the S3 download URL for this building."""
-        if not self._validate_requested_file_type_availability("load_curve_annual"):
+        if not self.is_file_type_available("load_curve_annual"):
             return ""
         if self.release_year == "2021":
             return ""
