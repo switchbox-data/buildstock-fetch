@@ -83,7 +83,7 @@ class BuildingID:
                     upgrade_filename = f"upgrade{str(int(self.upgrade_id)).zfill(2)}"
                 return (
                     f"{self.base_url}metadata_and_annual_results/by_state_and_county/full/parquet/"
-                    f"state={self.state}/county={self._get_county_name()}/{self.state}_{self._get_county_name()}_{upgrade_filename}.parquet"
+                    f"state={self.state}/county={self.get_county_name()}/{self.state}_{self.get_county_name()}_{upgrade_filename}.parquet"
                 )
             else:
                 if self.upgrade_id == "0":
@@ -98,7 +98,7 @@ class BuildingID:
         ):
             return (
                 f"{self.base_url}metadata_and_annual_results/by_state_and_county/full/parquet/"
-                f"state={self.state}/county={self._get_county_name()}/{self.state}_{self._get_county_name()}_upgrade{self.upgrade_id}.parquet"
+                f"state={self.state}/county={self.get_county_name()}/{self.state}_{self.get_county_name()}_upgrade{self.upgrade_id}.parquet"
             )
         else:
             return ""
@@ -251,7 +251,7 @@ class BuildingID:
             return f"{self.state}_upgrade{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
         elif self.release_year == "2024":
             if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "2":
-                county = self._get_county_name()
+                county = self.get_county_name()
                 if county == "":
                     return ""
                 else:
@@ -262,7 +262,7 @@ class BuildingID:
                 return f"{self.state}_upgrade{str(int(self.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
         elif self.release_year == "2025":
             if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "1":
-                county = self._get_county_name()
+                county = self.get_county_name()
                 if county == "":
                     return ""
                 else:
@@ -319,7 +319,7 @@ class BuildingID:
             The constructed URL or empty string if not applicable.
         """
         if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "2":
-            county = self._get_county_name()
+            county = self.get_county_name()
             if county == "":
                 return ""
             if self.upgrade_id == "0":
@@ -348,7 +348,7 @@ class BuildingID:
             The constructed URL or empty string if not applicable.
         """
         if self.res_com == "comstock" and self.weather == "amy2018" and self.release_number == "1":
-            county = self._get_county_name()
+            county = self.get_county_name()
             if county == "":
                 return ""
             else:
@@ -361,7 +361,7 @@ class BuildingID:
         else:
             return ""
 
-    def _get_county_name(self) -> str:
+    def get_county_name(self) -> str:
         """Get the county-based URL by reading from metadata partition.
 
         Returns:
