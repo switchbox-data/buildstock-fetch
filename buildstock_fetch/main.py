@@ -342,10 +342,13 @@ def _aggregate_load_curve_aggregate(
 ) -> pl.DataFrame:
     """Aggregate the 15-minute load curve to specified time step based on aggregation rules."""
     # Read the aggregation rules from CSV
+    load_curve_map = None
     if release_year == "2024":
         load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
     elif release_year == "2022":
         load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_resstock_load_curve_columns.csv")
+    if load_curve_map is None:
+        raise ValueError("load_curve_map")  # TODO: this is bad. Need to make sure release year is always correct.
     aggregation_rules = pl.read_csv(load_curve_map)
 
     # Create a dictionary mapping column names to their aggregation functions
@@ -401,7 +404,7 @@ def _download_and_process_aggregate(
         try:
             # Create session with retry logic
             session = requests.Session()
-            retry_strategy = requests.adapters.HTTPAdapter(max_retries=15)
+            retry_strategy = requests.adapters.HTTPAdapter(max_retries=15)  # pyright: ignore[reportAttributeAccessIssue]
             session.mount("http://", retry_strategy)
             session.mount("https://", retry_strategy)
 
