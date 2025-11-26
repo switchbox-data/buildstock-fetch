@@ -19,10 +19,7 @@ def test_pypi_installation_and_tests():
 
         # Install the library from PyPI using uv
         install_result = subprocess.run(
-            ["uv", "pip", "install", "buildstock-fetch"],
-            capture_output=True,
-            text=True,
-            cwd=temp_path,
+            ["uv", "pip", "install", "buildstock-fetch"], capture_output=True, text=True, cwd=temp_path
         )
 
         # Check if installation was successful
@@ -30,11 +27,7 @@ def test_pypi_installation_and_tests():
 
         # Verify the package is installed
         import_result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import buildstock_fetch; print('Import successful')",
-            ],
+            [sys.executable, "-c", "import buildstock_fetch; print('Import successful')"],
             capture_output=True,
             text=True,
             cwd=temp_path,
@@ -44,10 +37,7 @@ def test_pypi_installation_and_tests():
 
         # Test that the CLI command works
         cli_result = subprocess.run(
-            [sys.executable, "-m", "buildstock_fetch", "--help"],
-            capture_output=True,
-            text=True,
-            cwd=temp_path,
+            [sys.executable, "-m", "buildstock_fetch", "--help"], capture_output=True, text=True, cwd=temp_path
         )
 
         assert cli_result.returncode == 0, f"CLI help failed: {cli_result.stderr}"
@@ -80,10 +70,7 @@ def test_slow_run_all_tests():
 
         # Install the library from PyPI in the temp environment
         install_result = subprocess.run(
-            ["uv", "pip", "install", "buildstock-fetch"],
-            capture_output=True,
-            text=True,
-            cwd=temp_path,
+            ["uv", "pip", "install", "buildstock-fetch"], capture_output=True, text=True, cwd=temp_path
         )
 
         # Check if installation was successful
@@ -103,10 +90,7 @@ def test_slow_run_all_tests():
 
         # Run pytest on the copied test files in the temp environment
         test_result = subprocess.run(
-            [sys.executable, "-m", "pytest", str(temp_test_dir), "-v"],
-            capture_output=True,
-            text=True,
-            cwd=temp_path,
+            [sys.executable, "-m", "pytest", str(temp_test_dir), "-v"], capture_output=True, text=True, cwd=temp_path
         )
 
         # Check if tests passed
