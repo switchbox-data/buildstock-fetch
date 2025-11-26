@@ -889,7 +889,7 @@ def download_weather_file_with_progress(
 ) -> Path:
     """Download weather file with progress tracking."""
     download_url = bldg_id.get_weather_file_url()
-    if download_url == "":
+    if download_url is None:
         raise NoWeatherFileError()
     output_file = (
         output_dir

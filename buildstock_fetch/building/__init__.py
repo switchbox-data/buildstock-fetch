@@ -3,13 +3,14 @@ from dataclasses import asdict, dataclass
 
 import polars as pl
 
-from buildstock_fetch.building._15_min_load_curve import get_15min_load_curve_url
-from buildstock_fetch.building.annual_load_curve import get_annual_load_curve_url
 from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, WEATHER_FILE_DIR
 from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
+from ._15_min_load_curve import get_15min_load_curve_url
+from .annual_load_curve import get_annual_load_curve_url
 from .data_url import get_building_data_url
 from .metadata import get_metadata_url
+from .weather import get_weather_file_url
 
 __all__ = [
     "BuildingID",
@@ -83,84 +84,8 @@ class BuildingID:
         """Generate the S3 download URL for this building."""
         return get_annual_load_curve_url(self)
 
-    def get_weather_file_url(self) -> str:
-        """Generate the S3 download URL for this building."""
-        if self.get_weather_station_name() == "":
-            return ""
-        return self._build_weather_url()
-
-    def _build_weather_url(self) -> str:
-        """Build the weather file URL based on release year and weather type."""
-        if self.release_year == "2021":
-            return self._build_2021_weather_url()
-        elif self.release_year == "2022":
-            return self._build_2022_weather_url()
-        elif self.release_year == "2023":
-            return self._build_2023_weather_url()
-        elif self.release_year == "2024":
-            return self._build_2024_weather_url()
-        elif self.release_year == "2025":
-            return self._build_2025_weather_url()
-        else:
-            return ""
-
-    def _build_2021_weather_url(self) -> str:
-        """Build weather URL for 2021 release."""
-        if self.weather == "tmy3":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_tmy3.csv"
-        elif self.weather == "amy2018":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2018.csv"
-        elif self.weather == "amy2012":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2012.csv"
-        else:
-            return ""
-
-    def _build_2022_weather_url(self) -> str:
-        """Build weather URL for 2022 release."""
-        if self.weather == "tmy3":
-            return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_TMY3.csv"
-        elif self.weather == "amy2018":
-            return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_2018.csv"
-        elif self.weather == "amy2012":
-            return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_2012.csv"
-        else:
-            return ""
-
-    def _build_2023_weather_url(self) -> str:
-        """Build weather URL for 2023 release."""
-        if self.weather == "tmy3":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_TMY3.csv"
-        elif self.weather == "amy2018":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2018.csv"
-        elif self.weather == "amy2012":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2012.csv"
-        else:
-            return ""
-
-    def _build_2024_weather_url(self) -> str:
-        """Build weather URL for 2024 release."""
-        if self.res_com == "comstock" and self.weather == "amy2018":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2018.csv"
-        else:
-            if self.weather == "tmy3":
-                return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_TMY3.csv"
-            elif self.weather == "amy2018":
-                return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_2018.csv"
-            elif self.weather == "amy2012":
-                return f"{self.base_url}weather/state={self.state}/{self.get_weather_station_name()}_2012.csv"
-            else:
-                return ""
-
-    def _build_2025_weather_url(self) -> str:
-        """Build weather URL for 2025 release."""
-        if self.weather == "tmy3":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_TMY3.csv"
-        elif self.weather == "amy2018":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2018.csv"
-        elif self.weather == "amy2012":
-            return f"{self.base_url}weather/{self.weather}/{self.get_weather_station_name()}_2012.csv"
-        else:
-            return ""
+    def get_weather_file_url(self) -> str | None:
+        return get_weather_file_url(self)
 
     def get_annual_load_curve_filename(self) -> str:
         """Generate the filename for the annual load curve."""
