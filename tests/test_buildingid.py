@@ -10,7 +10,7 @@ def _load_parameters_from_file():
     return json.loads(Path(__file__).parent.joinpath("data", "buildings_example_data.json").read_text())
 
 
-def _get_parameters(method_name: str) -> tuple[tuple[str, ...], tuple]:
+def _get_parameters() -> tuple[tuple[str, ...], tuple]:
     return (
         (
             "bldg_id",
@@ -36,11 +36,12 @@ def _get_parameters(method_name: str) -> tuple[tuple[str, ...], tuple]:
                 method_name,
             )
             for _ in _load_parameters_from_file()
+            for method_name in _["results"]
         ),
     )
 
 
-@pytest.mark.parametrize(*_get_parameters("get_building_data_url"))
+@pytest.mark.parametrize(*_get_parameters())
 def test_building_function(
     bldg_id,
     release_number,

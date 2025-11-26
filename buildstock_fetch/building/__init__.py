@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass
 
 import polars as pl
 
+from buildstock_fetch.building._15_min_load_curve import get_15min_load_curve_url
 from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, WEATHER_FILE_DIR
 from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
@@ -69,49 +70,11 @@ class BuildingID:
         """Generate the S3 download URL for this building."""
         return get_metadata_url(self)
 
-    def get_15min_load_curve_url(self) -> str:
+    def get_15min_load_curve_url(self) -> str | None:
         """Generate the S3 download URL for this building."""
-        if not self.is_file_type_available("load_curve_15min"):
-            return ""
-        if self.release_year == "2021":
-            if self.upgrade_id != "0":
-                return ""  # This release only has baseline timeseries
-            else:
-                return (
-                    f"{self.base_url}timeseries_individual_buildings/"
-                    f"by_state/upgrade={self.upgrade_id}/"
-                    f"state={self.state}/"
-                    f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
-                )
+        return get_15min_load_curve_url(self)
 
-        elif self.release_year == "2022" or self.release_year == "2023":
-            return (
-                f"{self.base_url}timeseries_individual_buildings/"
-                f"by_state/upgrade={self.upgrade_id}/"
-                f"state={self.state}/"
-                f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
-            )
-        elif self.release_year == "2024":
-            if self.res_com == "resstock" and self.weather == "tmy3" and self.release_number == "1":
-                return ""
-            else:
-                return (
-                    f"{self.base_url}timeseries_individual_buildings/"
-                    f"by_state/upgrade={self.upgrade_id}/"
-                    f"state={self.state}/"
-                    f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
-                )
-        elif self.release_year == "2025":
-            return (
-                f"{self.base_url}timeseries_individual_buildings/"
-                f"by_state/upgrade={self.upgrade_id}/"
-                f"state={self.state}/"
-                f"{self.bldg_id!s}-{int(self.upgrade_id)!s}.parquet"
-            )
-        else:
-            return ""
-
-    def get_aggregate_load_curve_url(self) -> str:
+    def get_aggregate_load_curve_url(self) -> str | None:
         """Generate the S3 download URL for this building. The url is the same as the 15-minute load curve url."""
         return self.get_15min_load_curve_url()
 

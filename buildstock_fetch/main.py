@@ -547,7 +547,7 @@ def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
     """
 
     download_url = bldg_id.get_15min_load_curve_url()
-    if download_url == "":
+    if download_url is None:
         message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}"
         raise No15minLoadCurveError(message)
     response = requests.get(download_url, timeout=30, verify=True)
@@ -580,7 +580,7 @@ def download_15min_load_curve_with_progress(
         Path to the downloaded file.
     """
     download_url = bldg_id.get_15min_load_curve_url()
-    if download_url == "":
+    if download_url is None:
         message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}"
         raise No15minLoadCurveError(message)
 
@@ -648,7 +648,7 @@ def download_aggregate_time_step_load_curve_with_progress(
     """Download the aggregate time step load profile timeseries for a given building with progress tracking."""
 
     download_url = bldg_id.get_aggregate_load_curve_url()
-    if download_url == "":
+    if download_url is None:
         message = f"Aggregate load profile timeseries is not available for {bldg_id.get_release_name()}"
         raise NoAggregateLoadCurveError(message)
 
