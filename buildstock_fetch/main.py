@@ -1284,7 +1284,7 @@ def download_annual_load_curve_with_progress(
         Path to the downloaded file.
     """
     download_url = bldg_id.get_annual_load_curve_url()
-    if download_url == "":
+    if download_url is None:
         message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
         raise NoAnnualLoadCurveError(message)
 
