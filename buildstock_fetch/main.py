@@ -79,7 +79,7 @@ def _validate_release_name(release_name: str) -> bool:
     return release_name in valid_release_names
 
 
-def _resolve_unique_metadata_urls(bldg_ids: list[BuildingID]) -> list[str]:
+def _resolve_unique_metadata_urls(bldg_ids: list[BuildingID]) -> list[str | None]:
     """Resolve the unique metadata URLs for a list of building IDs."""
     return list({bldg_id.get_metadata_url() for bldg_id in bldg_ids})
 
@@ -855,7 +855,7 @@ def _download_metadata_with_progress(
             / "metadata.parquet"
         )
         download_url = bldg_id.get_metadata_url()
-        if download_url == "":
+        if download_url is None:
             failed_downloads.append(str(output_file))
             continue
         if download_url in downloaded_urls:

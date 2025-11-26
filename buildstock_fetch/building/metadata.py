@@ -4,9 +4,9 @@ if TYPE_CHECKING:
     from . import BuildingID
 
 
-def get_metadata_url(building: "BuildingID"):
+def get_metadata_url(building: "BuildingID") -> str | None:
     if not building.is_file_type_available("metadata"):
-        return ""
+        return None
     if building.release_year == "2021":
         return f"{building.base_url}metadata/metadata.parquet"
     elif building.release_year == "2022" or building.release_year == "2023":
@@ -40,4 +40,4 @@ def get_metadata_url(building: "BuildingID"):
             f"state={building.state}/county={building.get_county_name()}/{building.state}_{building.get_county_name()}_upgrade{building.upgrade_id}.parquet"
         )
     else:
-        return ""
+        return None
