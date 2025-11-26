@@ -61,7 +61,7 @@ def test_package_functionality():
     assert app is not None, "CLI app should be available"
 
 
-def test_run_all_tests():
+def test_slow_run_all_tests():
     """Run all tests in the test directory using pytest with the PyPI-installed package."""
 
     # Create a temporary directory for the test environment

@@ -571,7 +571,7 @@ def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
         str: Processed content from the XML file, or empty string if failed
     """
     building_data_url = bldg_id.get_building_data_url()
-    if building_data_url == "":
+    if building_data_url is None:
         raise NoBuildingDataError()
 
     # Create temporary directory for all temporary files
