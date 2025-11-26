@@ -65,7 +65,7 @@ class BuildingID:
         """Generate the S3 download URL for this building."""
         return get_building_data_url(self)
 
-    def get_metadata_url(self) -> str:
+    def get_metadata_url(self) -> str | None:
         """Generate the S3 download URL for this building."""
         return get_metadata_url(self)
 
