@@ -599,6 +599,12 @@ class EVDemandCalculator:
             )
 
             # Vectorized operations for all trips in this day
+            if departures is None:
+                raise ValueError("departures")
+            if arrivals is None:
+                raise ValueError("arrivals")
+            if base_miles_array is None:
+                raise ValueError("base_miles_array")
             selected_departures = departures[trip_indices]
             selected_arrivals = arrivals[trip_indices]
             selected_base_miles = base_miles_array[trip_indices]
