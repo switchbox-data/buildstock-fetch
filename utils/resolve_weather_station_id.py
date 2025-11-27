@@ -555,7 +555,7 @@ def download_with_retry(url: str, max_retries: int = 3, base_delay: float = 1.0)
             _handle_retry_delay(attempt, "Connection", e)
         except requests.Timeout as e:
             _handle_retry_delay(attempt, "Timeout", e)
-        except (requests.RequestException, requests.SSLError) as e:
+        except (requests.RequestException, requests.exceptions.SSLError) as e:
             _handle_retry_delay(attempt, "Request/SSL", e)
         except Exception as e:
             _handle_retry_delay(attempt, "Error", e)
