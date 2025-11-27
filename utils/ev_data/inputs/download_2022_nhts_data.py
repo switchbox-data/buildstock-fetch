@@ -10,6 +10,7 @@ Cleans up temporary files after extraction. For more information on the dataset,
 import argparse
 import logging
 import zipfile
+from os import PathLike
 from pathlib import Path
 from typing import Optional
 
@@ -50,7 +51,7 @@ def _handle_extraction_failure() -> None:
     raise NHTSFileExtractionError()
 
 
-def download_nhts_data(output_dir: Optional[str] = None) -> str:
+def download_nhts_data(output_dir: Optional[PathLike] = None) -> str:
     """
     Download NHTS data from the official website and extract the trip survey file.
 
