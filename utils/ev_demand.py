@@ -883,6 +883,8 @@ def main():
             ]).sort(["bldg_id", "vehicle_id", "date"])
 
             # Save locally (default behavior)
+            if config.output_dir is None:
+                raise ValueError("config.output_dir")
             os.makedirs(config.output_dir, exist_ok=True)
             local_file_path = f"{config.output_dir}/{file_name}"
             final_trip_schedules.write_parquet(local_file_path, partition_by=["release", "state"])
