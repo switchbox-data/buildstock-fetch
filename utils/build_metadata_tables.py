@@ -3,7 +3,7 @@ import logging
 import sys
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Union, cast
 
 import boto3
 import polars as pl
@@ -490,7 +490,7 @@ if __name__ == "__main__":
     data = json.loads(Path(str(releases_file)).read_text(encoding="utf-8"))
 
     # Directory to save the data
-    data_dir = files("buildstock_fetch").joinpath("data")
+    data_dir = cast(Path, files("buildstock_fetch").joinpath("data"))
     downloaded_paths: list[str] = []
     data_dir.mkdir(parents=True, exist_ok=True)
 
