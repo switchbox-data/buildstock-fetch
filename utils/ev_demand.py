@@ -521,7 +521,7 @@ class EVDemandCalculator:
     ) -> pl.DataFrame:
         """Generate trip schedules for all days in the date range as a DataFrame."""
         if rng is None:
-            rng = np.random  # Use global numpy random if no rng provided
+            rng = np.random.random.__self__  # Use global numpy random if no rng provided
 
         # Pre-compute constants (move outside loops)
         time_offsets = np.array([-2, -1, 0, 1, 2])
