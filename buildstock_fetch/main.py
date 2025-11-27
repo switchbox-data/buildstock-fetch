@@ -16,6 +16,7 @@ import polars as pl
 import pyarrow.fs as fs
 import pyarrow.parquet as pq
 import requests
+import requests.adapters
 from botocore import UNSIGNED
 from botocore.config import Config
 from rich.console import Console
