@@ -91,7 +91,7 @@ class EVDemandConfig:
 class VehicleProfile:
     """Represents a vehicle's driving profile parameters."""
 
-    bldg_id: int
+    bldg_id: str
     vehicle_id: int
     weekday_departure_hour: list[int] = field(default_factory=list)  # List of departure hours for each weekday trip
     weekday_arrival_hour: list[int] = field(default_factory=list)  # List of arrival hours for each weekday trip
