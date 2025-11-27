@@ -681,7 +681,7 @@ def extract_weather_station_name(xml_content: str) -> str:
         return ""
 
     else:
-        return weather_station_name
+        return weather_station_name or ""
 
 
 def _extract_name_from_weather_station(weather_station):
@@ -854,7 +854,7 @@ def _interactive_mode():
     _modify_buildstock_releases_json(selected_release_name, selected_states)
 
 
-def find_weather_station_name(data, path=""):
+def find_weather_station_name(data, path="") -> str | None:
     """
     Recursively search for WeatherStation tag and extract the Name value.
 
