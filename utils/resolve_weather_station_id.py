@@ -440,6 +440,8 @@ def process_buildings_phase(
                     # Mark this building ID as processed globally
                     processed_bldg_ids_global.add(bldg_id.bldg_id)
 
+                    result = {}
+
                     try:
                         result = future.result(timeout=30)  # 30 second timeout per result
                         data.append(result)
@@ -459,7 +461,7 @@ def process_buildings_phase(
                         task,
                         advance=1,
                         current=f"Current: {bldg_id.bldg_id}",
-                        weather_station=f"Weather: {result.get('weather_station_name', 'ERROR') if 'result' in locals() else 'ERROR'}",
+                        weather_station=f"Weather: {result.get('weather_station_name', 'ERROR')}",
                     )
 
                     # Show progress count and average time in description
