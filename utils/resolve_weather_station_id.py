@@ -12,6 +12,7 @@ from pathlib import Path
 import polars as pl
 import questionary
 import requests
+import requests.adapters
 import urllib3
 import xmltodict
 from rich.console import Console
