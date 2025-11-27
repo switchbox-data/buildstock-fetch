@@ -84,7 +84,7 @@ class EVDemandConfig:
         if self.pums_path is None:
             self.pums_path = f"{BASEPATH}/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
         if self.output_dir is None:
-            self.output_dir = f"{BASEPATH}/ev_data/outputs/{self.state}_{self.release}"
+            self.output_dir = Path(f"{BASEPATH}/ev_data/outputs/{self.state}_{self.release}")
 
 
 @dataclass
