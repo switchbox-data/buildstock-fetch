@@ -16,6 +16,7 @@ import polars as pl
 import pyarrow.fs as fs
 import pyarrow.parquet as pq
 import requests
+import requests.adapters
 from botocore import UNSIGNED
 from botocore.config import Config
 from rich.console import Console
@@ -955,6 +956,8 @@ def _aggregate_load_curve_aggregate(
         load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
     elif release_year == "2022":
         load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_resstock_load_curve_columns.csv")
+    else:
+        raise ValueError("load_curve_map")
     aggregation_rules = pl.read_csv(load_curve_map)
 
     # Create a dictionary mapping column names to their aggregation functions
@@ -1543,8 +1546,8 @@ def _download_metadata_with_progress(
     )
     output_file_to_metadata_task = _create_metadata_progress_tasks(output_file_to_bldg_ids, progress)
 
-    try:
-        for output_file, bldg_ids in output_file_to_bldg_ids.items():
+    for output_file, bldg_ids in output_file_to_bldg_ids.items():
+        try:
             download_urls = output_file_to_download_url[output_file]
             found_bldg_ids: list[int] = []
             _download_with_progress_metadata(
@@ -1559,10 +1562,10 @@ def _download_metadata_with_progress(
                 failed_downloads.append(str(output_file))
                 continue
             downloaded_paths.append(output_file)
-    except Exception as e:
-        failed_downloads.append(str(output_file))
-        for bldg_id in bldg_ids:
-            console.print(f"[red]Download failed for metadata {bldg_id.bldg_id}: {e}[/red]")
+        except Exception as e:
+            failed_downloads.append(str(output_file))
+            for bldg_id in bldg_ids:
+                console.print(f"[red]Download failed for metadata {bldg_id.bldg_id}: {e}[/red]")
 
     return downloaded_paths, failed_downloads
 

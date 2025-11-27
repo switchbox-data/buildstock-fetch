@@ -108,7 +108,7 @@ def get_census_division_for_state(state: str) -> int:
         raise ValueError(msg) from e
 
 
-def assign_income_midpoints(income_str: str) -> int:
+def assign_income_midpoints(income_str: str | None) -> int | None:
     """
     Convert income range strings to numeric midpoints using string parsing.
 
