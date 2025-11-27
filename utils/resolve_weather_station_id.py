@@ -561,6 +561,7 @@ def download_with_retry(url: str, max_retries: int = 3, base_delay: float = 1.0)
             _handle_retry_delay(attempt, "Error", e)
         else:
             return response
+    raise requests.RequestException()
 
 
 def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
