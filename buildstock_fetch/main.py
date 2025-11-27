@@ -1546,8 +1546,8 @@ def _download_metadata_with_progress(
     )
     output_file_to_metadata_task = _create_metadata_progress_tasks(output_file_to_bldg_ids, progress)
 
-    try:
-        for output_file, bldg_ids in output_file_to_bldg_ids.items():
+    for output_file, bldg_ids in output_file_to_bldg_ids.items():
+        try:
             download_urls = output_file_to_download_url[output_file]
             found_bldg_ids: list[int] = []
             _download_with_progress_metadata(
@@ -1562,10 +1562,10 @@ def _download_metadata_with_progress(
                 failed_downloads.append(str(output_file))
                 continue
             downloaded_paths.append(output_file)
-    except Exception as e:
-        failed_downloads.append(str(output_file))
-        for bldg_id in bldg_ids:
-            console.print(f"[red]Download failed for metadata {bldg_id.bldg_id}: {e}[/red]")
+        except Exception as e:
+            failed_downloads.append(str(output_file))
+            for bldg_id in bldg_ids:
+                console.print(f"[red]Download failed for metadata {bldg_id.bldg_id}: {e}[/red]")
 
     return downloaded_paths, failed_downloads
 
