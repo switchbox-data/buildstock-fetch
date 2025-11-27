@@ -354,6 +354,9 @@ class EVDemandCalculator:
         # Step 3: Scale features
         features_scaled = self.scaler.transform(features_encoded.to_numpy())
 
+        if self.vehicle_ownership_model is None:
+            raise ValueError("vehicle_ownership_model")
+
         # Step 4: Make predictions
         predictions_encoded = self.vehicle_ownership_model.predict(features_scaled)
 
