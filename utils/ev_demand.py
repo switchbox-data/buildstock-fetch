@@ -256,13 +256,13 @@ class EVDemandCalculator:
 
         return self.vehicle_ownership_model
 
-    def _prepare_nhts_cache(self) -> None:
+    def _prepare_nhts_cache(self) -> dict:
         """
         Pre-group NHTS data by key attributes to avoid repeated filtering.
         This eliminates the need for collect() calls in find_best_matches().
         """
         if self._nhts_cache is not None:
-            return  # Already cached
+            return self._nhts_cache  # Already cached
 
         logging.info("Preparing NHTS data cache to optimize matching...")
 
@@ -277,6 +277,8 @@ class EVDemandCalculator:
         self._nhts_cache = self._build_matching_cache(nhts_df)
 
         logging.info("NHTS cache prepared successfully")
+
+        return self._nhts_cache
 
     def _build_matching_cache(self, df: pl.DataFrame) -> dict:
         """Build cache dictionary for fast matching lookups."""
@@ -389,11 +391,7 @@ class EVDemandCalculator:
             Tuple of (match_type, list of matched_vehicle_ids)
         """
         # Ensure cache is prepared
-        if self._nhts_cache is None:
-            self._prepare_nhts_cache()
-
-        # Use the single cache (no weekday/weekend separation for matching)
-        cache = self._nhts_cache
+        cache = self._prepare_nhts_cache()
 
         # Try exact match first: (income, occupants, vehicles)
         exact_key = (target_income, target_occupants, target_vehicles)
