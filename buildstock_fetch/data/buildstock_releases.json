@@ -125,6 +125,9 @@
       "load_curve_annual",
       "metadata",
       "hpxml"
+    ],
+    "weather_map_available_states": [
+      "NY"
     ]
   },
   "res_2022_amy2018_1.1": {
