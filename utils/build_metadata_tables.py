@@ -1,16 +1,18 @@
 import contextlib
+import gc
 import json
 import logging
+import shutil
 import sys
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from importlib.resources import files
 from pathlib import Path
 from typing import Any, Union
 
 import boto3
 import polars as pl
+import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.fs as fs  # type: ignore[import-untyped]
 from botocore import UNSIGNED
 from botocore.config import Config
@@ -151,6 +153,7 @@ def _read_parquet_with_columns(
 ) -> tuple[pl.DataFrame, list]:
     """
     Read parquet file and return Polars DataFrame with selected columns.
+    Uses lazy evaluation for memory efficiency on large files.
     Downloads file to temp location first to avoid PyArrow S3FileSystem checksum validation issues.
 
     Args:
@@ -168,35 +171,45 @@ def _read_parquet_with_columns(
     # Create boto3 client for reliable file download (bypasses PyArrow checksum validation)
     s3_client = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
-    def _download_and_read():
-        # Download file to temporary location
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as tmp_file:
-            tmp_path = tmp_file.name
+    # Download file to temporary location
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as tmp_file:
+        tmp_path = tmp_file.name
 
-        try:
+    try:
+
+        def _download_file():
             # Download using boto3 (handles checksums more reliably)
             s3_client.download_file(bucket_name, file_key, tmp_path)
-            # Read from local file (no checksum validation issues)
-            return pl.read_parquet(tmp_path)
-        finally:
-            # Clean up temp file
-            with contextlib.suppress(Exception):
-                Path(tmp_path).unlink(missing_ok=True)
 
-    # Read the file with retry logic - get all columns first
-    df_full = _read_parquet_with_retry(_download_and_read, file_key, max_retries)
+        # Download with retry logic
+        logger.info(f"Downloading {file_key} to temporary location...")
+        _read_parquet_with_retry(_download_file, file_key, max_retries)
 
-    # Get available columns from the DataFrame
-    available_columns = df_full.columns
+        # Get file size for logging
+        file_size_mb = Path(tmp_path).stat().st_size / (1024 * 1024)
+        logger.info(f"Downloaded {file_key} ({file_size_mb:.2f} MB), reading with lazy evaluation...")
 
-    # Select columns with priority
-    selected_columns = select_priority_columns(available_columns)
+        # Use lazy evaluation to get schema without loading all data (memory efficient)
+        lazy_df = pl.scan_parquet(tmp_path)
 
-    # If we need to filter columns, do it from the already-read DataFrame
-    if selected_columns and set(selected_columns) != set(available_columns):
-        df = df_full.select(selected_columns)
-    else:
-        df = df_full
+        # Get available columns from schema (doesn't load data)
+        available_columns = lazy_df.collect_schema().names()
+
+        # Select columns with priority
+        selected_columns = select_priority_columns(available_columns)
+
+        # Read only selected columns using lazy evaluation (memory efficient)
+        # Use streaming for large files to reduce memory footprint
+        if selected_columns and set(selected_columns) != set(available_columns):
+            df = lazy_df.select(selected_columns).collect(streaming=True)
+        else:
+            df = lazy_df.collect(streaming=True)
+    finally:
+        # Clean up temp file immediately
+        with contextlib.suppress(Exception):
+            Path(tmp_path).unlink(missing_ok=True)
+        # Force garbage collection after file operations
+        gc.collect()
 
     return df, available_columns
 
@@ -241,27 +254,32 @@ def _handle_bldg_id_column(df: pl.DataFrame, file_key: str, s3: Any, bucket_name
             # If bldg_id exists in the full file, use it
             df = df_full
             logger.info("Found bldg_id in full parquet file")
+            # Free the full dataframe reference if we're using it
+            del df_full
+            gc.collect()
         else:
             logger.warning("Warning: bldg_id column not found in parquet file")
+            del df_full
+            gc.collect()
 
     return df
 
 
-def _validate_bldg_id(df: pl.DataFrame, release_name: Union[str, None]) -> bool:
+def _validate_bldg_id(df: pl.DataFrame, release_name: Union[str, None]) -> tuple[pl.DataFrame, bool]:
     """
-    Validate bldg_id column and return True if valid.
+    Validate bldg_id column and return the modified DataFrame and validation status.
 
     Args:
         df (pl.DataFrame): DataFrame to validate
         release_name (str | None): Name of the release for error reporting
 
     Returns:
-        bool: True if bldg_id is valid, False otherwise
+        tuple: (modified DataFrame, True if valid, False otherwise)
     """
     if "bldg_id" not in df.columns:
         logger.exception(f"ERROR: bldg_id column not found in DataFrame after processing in {release_name}")
         logger.exception("This indicates the column was not properly extracted from the parquet file")
-        return False
+        return df, False
 
     # Ensure bldg_id is integer if it exists
     df = df.with_columns(pl.col("bldg_id").cast(pl.Int64))
@@ -274,19 +292,19 @@ def _validate_bldg_id(df: pl.DataFrame, release_name: Union[str, None]) -> bool:
     if nan_count == total_rows:
         logger.exception(f"ERROR: bldg_id column contains only null values after conversion in {release_name}")
         logger.exception("This indicates the column was not properly extracted from the parquet file")
-        return False
+        return df, False
     elif nan_count > total_rows * 0.5:  # More than 50% null
         logger.exception(
             f"ERROR: bldg_id column has {nan_count} null values out of {total_rows} total rows in {release_name}"
         )
         logger.exception("This indicates the column was not properly extracted from the parquet file")
-        return False
+        return df, False
     else:
         # Remove rows where bldg_id is null
         df = df.filter(pl.col("bldg_id").is_not_null())
         logger.info(f"Removed {nan_count} rows with null bldg_id values in {release_name}")
         logger.info(f"bldg_id column verified: {total_rows - nan_count} valid integer values in {release_name}")
-        return True
+        return df, True
 
 
 def _add_metadata_columns(
@@ -363,8 +381,11 @@ def process_parquet_file(
         df = rename_columns(df)
         logger.info(f"Columns after renaming: {df.columns}")
 
-        # Validate bldg_id column
-        if not _validate_bldg_id(df, release_name):
+        # Validate bldg_id column and get the modified dataframe
+        df, is_valid = _validate_bldg_id(df, release_name)
+        if not is_valid:
+            del df  # Free memory if validation failed
+            gc.collect()
             return None
 
         # Add metadata columns
@@ -378,6 +399,9 @@ def process_parquet_file(
             logger.info(f"Removed {removed_rows} duplicate rows based on bldg_id in {release_name}")
 
         logger.info(f"Successfully loaded {df.height} rows with {len(df.columns)} columns in {release_name}")
+
+        # Force garbage collection after processing
+        gc.collect()
 
     except Exception:
         logger.exception("Error processing file")
@@ -631,6 +655,7 @@ def _process_release_2022_2024(
     release_version = release["release_number"]
     upgrade_ids = release.get("upgrade_ids", [])
 
+    print("TEST RELEASE NAME: ", release_name)
     if not upgrade_ids:
         return None
 
@@ -650,6 +675,134 @@ def _process_release_2022_2024(
     return _process_single_file(file_key, bucket_name, res_com, weather, release_version, release_year, release_name)
 
 
+def _build_base_file_key_2024_2025(
+    release_name: str, release_year: str, res_com: str, weather: str, release_version: str
+) -> str:
+    """Build the base file key for 2024/2025 releases."""
+    if release_name in ("res_2025_amy2018_1", "res_2025_amy2012_1"):
+        return (
+            f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
+            f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata_and_annual_results/"
+            f"by_state/full/parquet/"
+        )
+    return (
+        f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
+        f"{release_year}/{res_com}_{weather}_release_{release_version}/"
+        f"metadata_and_annual_results/by_state_and_county/full/parquet/"
+    )
+
+
+def _get_file_key_and_available_files(
+    release_name: str, upgrade_id: int, all_parquet_files: dict[str, list[str]]
+) -> tuple[str, list[str]] | None:
+    """Get file key suffix and available files for a release."""
+    if upgrade_id == 0 and release_name == "com_2024_amy2018_2":
+        file_key_suffix = "baseline.parquet"
+        available_files = all_parquet_files.get("upgrade_0", [])
+    elif release_name in (
+        "com_2025_amy2018_1",
+        "com_2025_amy2018_2",
+        "com_2025_amy2012_2",
+        "com_2025_amy2018_3",
+        "res_2025_amy2018_1",
+        "res_2025_amy2012_1",
+    ):
+        file_key_suffix = f"upgrade_{upgrade_id}.parquet"
+        available_files = all_parquet_files.get(f"upgrade_{upgrade_id}", [])
+        print("TEST AVAILABLE FILES: ", available_files)
+    else:
+        return None
+    return file_key_suffix, available_files
+
+
+def _process_files_sequentially(
+    available_files: list[str],
+    release_name: str,
+    bucket_name: str,
+    res_com: str,
+    weather: str,
+    release_version: str,
+    release_year: str,
+    temp_dir: Path,
+) -> list[Path]:
+    """Process files sequentially and write to disk."""
+    temp_files = []
+    for i, file_key in enumerate(available_files, 1):
+        try:
+            df = _process_single_file(
+                file_key,
+                bucket_name,
+                res_com,
+                weather,
+                release_version,
+                release_year,
+                release_name,
+            )
+            if df is not None and df.height > 0:
+                temp_file = temp_dir / f"file_{i:06d}.parquet"
+                df.write_parquet(temp_file)
+                temp_files.append(temp_file)
+                del df
+                gc.collect()
+                logger.info(f"Processed file {i}/{len(available_files)}: {file_key}")
+            else:
+                logger.error(f"Failed to process {file_key} for {release_name}")
+        except Exception:
+            logger.exception(f"Error processing {file_key} for {release_name}")
+        finally:
+            gc.collect()
+            if i % 10 == 0:
+                gc.collect()
+    return temp_files
+
+
+def _combine_files_chunked(temp_files: list[Path], temp_dir: Path, chunk_size: int = 100) -> pl.DataFrame:
+    """Combine files in chunks for large releases."""
+    chunk_files = []
+    for chunk_start in range(0, len(temp_files), chunk_size):
+        try:
+            chunk_file_list = temp_files[chunk_start : chunk_start + chunk_size]
+            lazy_frames = [pl.scan_parquet(str(f)) for f in chunk_file_list]
+            try:
+                chunk_df = pl.concat(lazy_frames).collect(engine="streaming")
+            except TypeError:
+                chunk_df = pl.concat(lazy_frames).collect(streaming=True)
+            chunk_file = temp_dir / f"chunk_{chunk_start // chunk_size:04d}.parquet"
+            chunk_df.write_parquet(chunk_file)
+            chunk_files.append(chunk_file)
+            del lazy_frames
+            del chunk_df
+            gc.collect()
+            logger.info(
+                f"Processed chunk {chunk_start // chunk_size + 1}/{(len(temp_files) + chunk_size - 1) // chunk_size}"
+            )
+        except Exception:
+            logger.exception(f"Error processing chunk starting at {chunk_start}")
+            raise
+
+    # Final concatenation from chunk files
+    lazy_frames = [pl.scan_parquet(str(f)) for f in chunk_files]
+    try:
+        combined_df = pl.concat(lazy_frames).collect(engine="streaming")
+    except TypeError:
+        combined_df = pl.concat(lazy_frames).collect(streaming=True)
+    del lazy_frames
+    gc.collect()
+    return combined_df
+
+
+def _combine_files_direct(temp_files: list[Path]) -> pl.DataFrame:
+    """Combine files directly for smaller releases."""
+    lazy_frames = [pl.scan_parquet(str(f)) for f in temp_files]
+    try:
+        combined_df = pl.concat(lazy_frames).collect(engine="streaming")
+    except TypeError:
+        combined_df = pl.concat(lazy_frames).collect(streaming=True)
+    del lazy_frames
+    gc.collect()
+    return combined_df
+
+
 def _process_release_2024_2025(
     release_name: str,
     release: dict[str, Any],
@@ -666,37 +819,15 @@ def _process_release_2024_2025(
     if not upgrade_ids:
         return None
 
-    if release_name == "res_2025_amy2018_1":
-        base_file_key = (
-            f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-            f"{release_year}/{res_com}_{weather}_release_{release_version}/metadata_and_annual_results/"
-            f"by_state/full/parquet/"
-        )
-    else:
-        base_file_key = (
-            f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
-            f"{release_year}/{res_com}_{weather}_release_{release_version}/"
-            f"metadata_and_annual_results/by_state_and_county/full/parquet/"
-        )
-
-    # Find all available parquet files
+    base_file_key = _build_base_file_key_2024_2025(release_name, release_year, res_com, weather, release_version)
     all_parquet_files = find_all_parquet_files(base_file_key, s3_client, bucket_name)
     logger.info(f"Found parquet files for {release_name}: {list(all_parquet_files.keys())}")
 
     upgrade_id = int(upgrade_ids[0])
-    if upgrade_id == 0 and release_name == "com_2024_amy2018_2":
-        file_key_suffix = "baseline.parquet"
-        available_files = all_parquet_files.get("upgrade_0", [])
-    elif (
-        release_name == "com_2025_amy2018_1"
-        or release_name == "com_2025_amy2018_2"
-        or release_name == "com_2025_amy2012_2"
-        or release_name == "res_2025_amy2018_1"
-    ):
-        file_key_suffix = f"upgrade_{upgrade_id}.parquet"
-        available_files = all_parquet_files.get(f"upgrade_{upgrade_id}", [])
-    else:
+    result = _get_file_key_and_available_files(release_name, upgrade_id, all_parquet_files)
+    if result is None:
         return None
+    file_key_suffix, available_files = result
 
     logger.info(f"Found {len(available_files)} {file_key_suffix} files for {release_name}")
 
@@ -704,62 +835,97 @@ def _process_release_2024_2025(
         logger.warning(f"No files found for {file_key_suffix} in {release_name}")
         return None
 
-    # Process all files in parallel
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        future_to_file = {
-            executor.submit(
-                _process_single_file,
-                file_key,
-                bucket_name,
-                res_com,
-                weather,
-                release_version,
-                release_year,
-                release_name,
-            ): file_key
-            for file_key in available_files
-        }
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"release_{release_name}_"))
+    try:
+        temp_files = _process_files_sequentially(
+            available_files,
+            release_name,
+            bucket_name,
+            res_com,
+            weather,
+            release_version,
+            release_year,
+            temp_dir,
+        )
 
-        combined_dfs = []
-        for i, future in enumerate(as_completed(future_to_file), 1):
-            file_key = future_to_file[future]
-            try:
-                df = future.result()
-                if df is not None and df.height > 0:
-                    combined_dfs.append(df)
-                    logger.info(f"Processed file {i}/{len(available_files)}: {file_key}")
-                else:
-                    logger.error(f"Failed to process {file_key} for {release_name}")
-            except Exception:
-                logger.exception(f"Error processing {file_key} for {release_name}")
+        if not temp_files:
+            logger.warning(f"No valid data found for {file_key_suffix} in {release_name}")
+            return None
 
-    if combined_dfs:
-        # Concatenate all DataFrames for this release
-        combined_df = pl.concat(combined_dfs)
-        logger.info(f"Combined {len(combined_dfs)} files into {combined_df.height} total rows in {release_name}")
-        return combined_df
-    else:
-        logger.warning(f"No valid data found for {file_key_suffix} in {release_name}")
+        logger.info(f"Combining {len(temp_files)} files from disk for {release_name}...")
+        try:
+            if len(temp_files) > 200:
+                combined_df = _combine_files_chunked(temp_files, temp_dir)
+            else:
+                combined_df = _combine_files_direct(temp_files)
+
+            logger.info(f"Combined {len(temp_files)} files into {combined_df.height} total rows in {release_name}")
+        except Exception:
+            logger.exception(f"Error combining files for {release_name}")
+            raise
+        else:
+            return combined_df
+    finally:
+        with contextlib.suppress(Exception):
+            shutil.rmtree(temp_dir)
+        gc.collect()
+
+
+def _process_release_2024_res_tmy3_1(
+    release_name: str,
+    release: dict[str, Any],
+    bucket_name: str,
+    s3_client: Any,
+) -> Union[pl.DataFrame, None]:
+    """Process a 2024 ResStock TMY3 release 1."""
+    release_year = "2024"
+    res_com = "resstock"
+    weather = "tmy3"
+    release_version = "1"
+    upgrade_ids = release.get("upgrade_ids", [])
+    if not upgrade_ids:
         return None
+    upgrade_id = int(upgrade_ids[0])
+    if upgrade_id == 0:
+        file_key = (
+            f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
+            f"{release_year}/resstock_dataset_2024.1/resstock_tmy3/metadata/"
+            f"baseline.parquet"
+        )
+    else:
+        file_key = (
+            f"nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/"
+            f"{release_year}/resstock_dataset_2024.1/resstock_tmy3/metadata/"
+            f"upgrade{upgrade_id:02d}.parquet"
+        )
+    return _process_single_file(file_key, bucket_name, res_com, weather, release_version, release_year, release_name)
 
 
 if __name__ == "__main__":
-    # Load the release data
-    releases_file = files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json")
-    data = json.loads(Path(str(releases_file)).read_text(encoding="utf-8"))
-
-    # Directory to save the data
-    data_dir = files("buildstock_fetch").joinpath("data")
-    downloaded_paths: list[str] = []
+    # Get the project root (parent of utils directory where this script is located)
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent
+    data_dir = project_root / "buildstock_fetch" / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load the release data from source directory, not installed package
+    releases_file = data_dir / "buildstock_releases.json"
+    if not releases_file.exists():
+        logger.error(f"Releases file not found at {releases_file}")
+        sys.exit(1)
+
+    data = json.loads(releases_file.read_text(encoding="utf-8"))
+    logger.info(f"Loaded {len(data)} releases from {releases_file}")
+    logger.info(f"Using data directory: {data_dir}")
 
     # S3 bucket and filesystem
     bucket_name = "oedi-data-lake"
     s3_client = boto3.client("s3", region_name="us-west-2", config=Config(signature_version=UNSIGNED))
 
-    # Process all releases in parallel
-    all_dataframes: list[pl.DataFrame] = []
+    # Process releases sequentially and write to disk
     failed_releases: list[str] = []
+
+    logger.info(f"Releases to process: {list(data.keys())}")
 
     def _process_release_wrapper(release_name: str, release: dict[str, Any]) -> tuple[str, Union[pl.DataFrame, None]]:
         """Wrapper function to process a release and return (release_name, df)."""
@@ -771,15 +937,23 @@ if __name__ == "__main__":
             elif (
                 release_year == "2022"
                 or release_year == "2023"
-                or (release_year == "2024" and release_name != "com_2024_amy2018_2")
+                or (
+                    release_year == "2024"
+                    and (release_name != "com_2024_amy2018_2" and release_name != "res_2024_tmy3_1")
+                )
             ):
                 df = _process_release_2022_2024(release_name, release, bucket_name)
+            elif release_name == "res_2024_tmy3_1":
+                df = _process_release_2024_res_tmy3_1(release_name, release, bucket_name, s3_client)
+
             elif (
                 release_name == "com_2024_amy2018_2"
                 or release_name == "com_2025_amy2018_1"
                 or release_name == "com_2025_amy2018_2"
+                or release_name == "com_2025_amy2018_3"
                 or release_name == "com_2025_amy2012_2"
                 or release_name == "res_2025_amy2018_1"
+                or release_name == "res_2025_amy2012_1"
             ):
                 df = _process_release_2024_2025(release_name, release, bucket_name, s3_client)
             else:
@@ -791,20 +965,65 @@ if __name__ == "__main__":
         else:
             return (release_name, df)
 
-    # Process releases in parallel
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_release = {
-            executor.submit(_process_release_wrapper, release_name, release): release_name
-            for release_name, release in data.items()
-        }
+    # Process releases SEQUENTIALLY to prevent memory overload
+    # Write each release to disk immediately after processing
+    # Use utils directory for temp_releases instead of data/building_data
+    temp_releases_dir = script_dir / "temp_releases"
+    temp_releases_dir.mkdir(parents=True, exist_ok=True)
 
-        for future in as_completed(future_to_release):
-            release_name = future_to_release[future]
+    # Migrate existing temp files from old location (data/building_data/temp_releases) if they exist
+    old_temp_releases_dir = data_dir / "building_data" / "temp_releases"
+    if old_temp_releases_dir.exists() and old_temp_releases_dir.is_dir():
+        old_temp_files = list(old_temp_releases_dir.glob("release_*.parquet"))
+        if old_temp_files:
+            logger.info(f"Found {len(old_temp_files)} temp files in old location, migrating to new location...")
+            for old_file in old_temp_files:
+                new_file = temp_releases_dir / old_file.name
+                if not new_file.exists():
+                    try:
+                        shutil.move(str(old_file), str(new_file))
+                        logger.info(f"Migrated {old_file.name} to new location")
+                    except Exception as e:
+                        logger.warning(f"Could not migrate {old_file.name}: {e}")
+                else:
+                    logger.info(f"Skipping {old_file.name} (already exists in new location)")
+                    with contextlib.suppress(Exception):
+                        old_file.unlink()
+            # Try to remove old directory if empty
+            with contextlib.suppress(Exception):
+                if not any(old_temp_releases_dir.iterdir()):
+                    old_temp_releases_dir.rmdir()
+                    logger.info("Removed empty old temp_releases directory")
+
+    # Check which temp_releases files already exist
+    existing_temp_files = {f.stem.replace("release_", "") for f in temp_releases_dir.glob("release_*.parquet")}
+    logger.info(f"Found {len(existing_temp_files)} existing temp release files in {temp_releases_dir}")
+
+    # Only process releases that don't have existing temp files
+    releases_to_process = {name: release for name, release in data.items() if name not in existing_temp_files}
+    skipped_releases = {name: release for name, release in data.items() if name in existing_temp_files}
+
+    if skipped_releases:
+        logger.info(
+            f"Skipping {len(skipped_releases)} releases that already have temp files: {list(skipped_releases.keys())}"
+        )
+
+    if releases_to_process:
+        logger.info(f"Processing {len(releases_to_process)} new releases: {list(releases_to_process.keys())}")
+
+        # Process releases one at a time
+        for release_name, release in releases_to_process.items():
             try:
-                processed_name, df = future.result()
+                logger.info(f"Processing release: {release_name}")
+                processed_name, df = _process_release_wrapper(release_name, release)
+
                 if df is not None and df.height > 0:
-                    all_dataframes.append(df)
-                    logger.info(f"Successfully processed release: {processed_name}")
+                    # Write release to disk immediately to free memory
+                    temp_file = temp_releases_dir / f"release_{processed_name}.parquet"
+                    df.write_parquet(temp_file)
+                    logger.info(f"Successfully processed and saved release: {processed_name} ({df.height} rows)")
+                    del df  # Free memory immediately
+                    gc.collect()
                 else:
                     failed_releases.append(processed_name)
                     logger.error(
@@ -813,6 +1032,15 @@ if __name__ == "__main__":
             except Exception:
                 failed_releases.append(release_name)
                 logger.exception(f"Exception processing release {release_name}")
+            finally:
+                # Force garbage collection after each release
+                gc.collect()
+    else:
+        logger.info("All releases already have temp files, skipping download phase")
+
+    # Collect all temp release files (including existing ones)
+    temp_release_files = sorted(temp_releases_dir.glob("release_*.parquet"))
+    logger.info(f"Found {len(temp_release_files)} total temp release files (including existing ones)")
 
     # Check if any releases failed
     if failed_releases:
@@ -820,39 +1048,206 @@ if __name__ == "__main__":
         logger.error("Exiting script...")
         sys.exit(1)
 
-    # Combine all DataFrames and save as partitioned parquet
-    if all_dataframes:
-        logger.info(f"Combining {len(all_dataframes)} DataFrames...")
-
-        # Ensure consistent schema across all DataFrames
-        logger.info("Ensuring consistent schema across DataFrames...")
-        normalized_dataframes = []
-        for i, df in enumerate(all_dataframes):
-            # Convert categorical columns to string to ensure compatibility
-            df_normalized = df.with_columns([
-                pl.col(col).cast(pl.Utf8) for col in df.columns if df.schema[col] == pl.Categorical
-            ])
-            normalized_dataframes.append(df_normalized)
-            logger.info(f"Normalized DataFrame {i + 1} schema: {df_normalized.schema}")
-
-        final_df = pl.concat(normalized_dataframes)
-        logger.info(f"Final DataFrame has {final_df.height} rows and {len(final_df.columns)} columns")
-
-        # Sort by county
-        if "county" in final_df.columns:
-            final_df = final_df.sort("county")
+    # Combine all releases from disk using memory-efficient chunked approach
+    # This prevents OOM by never loading all data into memory at once
+    if temp_release_files:
+        logger.info(
+            f"Combining {len(temp_release_files)} releases from disk using memory-efficient chunked approach..."
+        )
 
         # Save as partitioned parquet file
-        output_file = data_dir / "building_data" / "combined_metadata.parquet"
-        final_df.write_parquet(
-            str(output_file),  # Convert Path to string for Polars
-            use_pyarrow=True,
-            partition_by=["product", "release_year", "weather_file", "release_version", "state"],
-        )
-        logger.info(f"Successfully saved combined DataFrame to {output_file}")
+        # When using partition_by, the output is a directory, not a file
+        output_dir = data_dir / "building_data" / "combined_metadata.parquet"
+
+        # Ensure parent directory exists
+        output_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        # Remove existing output directory if it exists (from previous runs)
+        if output_dir.exists():
+            if output_dir.is_dir():
+                logger.info(f"Removing existing output directory: {output_dir}")
+                shutil.rmtree(output_dir)
+            else:
+                # If it's a file, remove it (shouldn't happen with partition_by, but handle it)
+                logger.warning(f"Removing existing file at output location: {output_dir}")
+                output_dir.unlink()
+
+        partition_cols = ["product", "release_year", "weather_file", "release_version", "state"]
+        logger.info(f"Partitioning by: {partition_cols}")
+
+        # Process files in chunks to avoid memory issues
+        # Use PyArrow dataset writing directly from lazy frames
+        chunk_size = 5  # Process 5 files at a time
+        total_chunks = (len(temp_release_files) + chunk_size - 1) // chunk_size
+
+        try:
+            # Process files in chunks and write directly to partitioned output
+            for chunk_idx in range(total_chunks):
+                chunk_start = chunk_idx * chunk_size
+                chunk_end = min(chunk_start + chunk_size, len(temp_release_files))
+                chunk_files = temp_release_files[chunk_start:chunk_end]
+
+                logger.info(f"Processing chunk {chunk_idx + 1}/{total_chunks} ({len(chunk_files)} files)...")
+
+                # Read chunk files using lazy evaluation
+                chunk_lazy_frames = []
+                for temp_file in chunk_files:
+                    try:
+                        lazy_df = pl.scan_parquet(str(temp_file))
+                        # Normalize schema: convert categorical to string for each file individually
+                        # This ensures all files have consistent schemas when concatenated
+                        file_schema = lazy_df.collect_schema()
+                        categorical_cols = [col for col in file_schema.names() if file_schema[col] == pl.Categorical]
+                        if categorical_cols:
+                            casts = {col: pl.col(col).cast(pl.Utf8) for col in categorical_cols}
+                            lazy_df = lazy_df.with_columns([casts[col] for col in casts])
+                        chunk_lazy_frames.append(lazy_df)
+                    except Exception:
+                        logger.exception(f"Error loading lazy frame from {temp_file.name}")
+                        raise
+
+                # Concatenate chunk using lazy evaluation
+                chunk_combined = pl.concat(chunk_lazy_frames) if len(chunk_lazy_frames) > 1 else chunk_lazy_frames[0]
+
+                # Sort in lazy evaluation (memory efficient)
+                try:
+                    schema = chunk_combined.collect_schema()
+                    sort_cols = [col for col in partition_cols if col in schema.names()]
+                    if "county" in schema.names():
+                        sort_cols.append("county")
+
+                    if sort_cols:
+                        chunk_combined = chunk_combined.sort(sort_cols)
+                except Exception as e:
+                    logger.warning(f"Could not sort chunk in lazy evaluation: {e}. Continuing without sort...")
+
+                # Convert to PyArrow table and write directly to partitioned dataset
+                # This writes incrementally without loading all data into memory
+                try:
+                    # Collect chunk with streaming
+                    try:
+                        chunk_df = chunk_combined.collect(engine="streaming")
+                    except TypeError:
+                        chunk_df = chunk_combined.collect(streaming=True)
+
+                    # Convert to PyArrow table
+                    chunk_table = chunk_df.to_arrow()
+                    del chunk_df
+                    gc.collect()
+
+                    # Write chunk to partitioned dataset
+                    # Use append mode for chunks after the first
+                    if chunk_idx == 0:
+                        # First chunk: create the dataset
+                        partition_schema = pa.schema([
+                            chunk_table.schema.field(col) for col in partition_cols if col in chunk_table.column_names
+                        ])
+                        ds.write_dataset(
+                            chunk_table,
+                            base_dir=str(output_dir),
+                            format="parquet",
+                            partitioning=ds.partitioning(schema=partition_schema, flavor="hive"),
+                            basename_template=f"chunk-{chunk_idx:04d}-{{i}}.parquet",
+                            existing_data_behavior="delete_matching",
+                        )
+                    else:
+                        # Subsequent chunks: append to existing dataset
+                        partition_schema = pa.schema([
+                            chunk_table.schema.field(col) for col in partition_cols if col in chunk_table.column_names
+                        ])
+                        ds.write_dataset(
+                            chunk_table,
+                            base_dir=str(output_dir),
+                            format="parquet",
+                            partitioning=ds.partitioning(schema=partition_schema, flavor="hive"),
+                            basename_template=f"chunk-{chunk_idx:04d}-{{i}}.parquet",
+                            existing_data_behavior="overwrite_or_ignore",
+                        )
+
+                    del chunk_table
+                    del chunk_lazy_frames
+                    del chunk_combined
+                    gc.collect()
+
+                    logger.info(f"Completed chunk {chunk_idx + 1}/{total_chunks}")
+
+                except Exception:
+                    logger.exception(f"Error processing chunk {chunk_idx + 1}")
+                    raise
+
+            logger.info("Successfully combined all releases using chunked approach")
+
+        except Exception:
+            logger.exception("Error combining releases")
+            gc.collect()
+            raise
+
+        # Verify output directory was created and log partition information
+        # Ensure parent directory exists (in case it wasn't created)
+        output_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        # Verify files were actually written
+        if not output_dir.exists():
+            msg = f"Output directory {output_dir} was not created"
+            logger.error(f"ERROR: {msg}")
+            raise FileNotFoundError(msg)
+
+        if not output_dir.is_dir():
+            msg = f"Output path {output_dir} is not a directory"
+            logger.error(f"ERROR: {msg}")
+            raise NotADirectoryError(msg)
+
+        # Log partition values for debugging (read from output directory)
+        logger.info("Reading partition information from output directory...")
+        try:
+            # Read a sample of the output to get partition info
+            output_dataset = ds.dataset(str(output_dir), format="parquet")
+            for col in partition_cols:
+                try:
+                    # Get unique values from the partition
+                    # This is memory-efficient as it only reads metadata
+                    unique_vals = set()
+                    for fragment in output_dataset.get_fragments():
+                        partition_values = fragment.partition_expression
+                        if partition_values:
+                            # Extract partition values from expression
+                            for part in partition_values:
+                                if col in str(part):
+                                    # Extract value from partition expression
+                                    val_str = str(part)
+                                    if "=" in val_str:
+                                        val = val_str.split("=")[-1].strip("'\"")
+                                        unique_vals.add(val)
+                    unique_vals_list = sorted(unique_vals)
+                    logger.info(
+                        f"  {col}: {unique_vals_list[:10]}{'...' if len(unique_vals_list) > 10 else ''} ({len(unique_vals_list)} unique values)"
+                    )
+                except Exception as e:
+                    logger.warning(f"  Could not get unique values for {col}: {e}")
+        except Exception as e:
+            logger.warning(f"Could not read partition information: {e}")
+
+        # Note: We do NOT clean up temporary release files anymore
+        # They are kept in utils/temp_releases for future runs to skip already-downloaded releases
+        logger.info(f"Keeping temp release files in {temp_releases_dir} for future runs")
+
+        # Verify parquet files exist
+        parquet_files = list(output_dir.rglob("*.parquet"))
+        logger.info(f"Successfully saved combined DataFrame to {output_dir}")
+        logger.info(f"Created {len(parquet_files)} parquet files in partition structure")
+        if parquet_files:
+            # Show the directory structure
+            sample_dirs = sorted({f.parent.relative_to(output_dir) for f in parquet_files[:10]})
+            logger.info(f"Sample partition directories: {[str(d) for d in sample_dirs[:5]]}")
+            logger.info(f"Sample file locations: {[str(f.relative_to(output_dir)) for f in parquet_files[:5]]}")
+        else:
+            logger.warning(f"WARNING: No parquet files found in output directory {output_dir}")
 
         # Convert state names to abbreviations
         logger.info("Starting state name abbreviation conversion...")
         convert_state_names_to_abbreviations(data_dir, skip_sorting=True)
+
+        # Final garbage collection
+        gc.collect()
     else:
         logger.warning("No data to save")

@@ -5,7 +5,6 @@ import re
 import tempfile
 import time
 import zipfile
-from importlib.resources import files
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -13,6 +12,11 @@ import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -32,8 +36,10 @@ class CommonPrefix(TypedDict):
     Prefix: str
 
 
-DATA_DIR = Path(str(files("buildstock_fetch").joinpath("data")))
-RELEASE_JSON_FILE = Path(str(DATA_DIR.joinpath("buildstock_releases.json")))
+# Use source directory, not installed package location
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_DIR = PROJECT_ROOT / "buildstock_fetch" / "data"
+RELEASE_JSON_FILE = DATA_DIR / "buildstock_releases.json"
 
 
 def _find_model_directory(s3_client: Any, bucket_name: str, prefix: str) -> str:
@@ -134,13 +140,13 @@ def _get_upgrade_ids(s3_client: Any, bucket_name: str, model_path: str) -> list[
 
 
 def _check_has_upgrade_files(paginator: Any, bucket_name: str, dir_path: str) -> bool:
-    """Check if a directory contains any files with 'upgrade' in the name."""
+    """Check if a directory contains any files with 'upgrade' or 'baseline' in the name."""
     dir_pages = paginator.paginate(Bucket=bucket_name, Prefix=dir_path, Delimiter="/")
     for page in dir_pages:
         if "Contents" in page:
             for obj in page["Contents"]:
                 file_name = obj["Key"].split("/")[-1]
-                if "upgrade" in file_name.lower():
+                if "upgrade" in file_name.lower() or "baseline" in file_name.lower():
                     return True
     return False
 
@@ -148,7 +154,7 @@ def _check_has_upgrade_files(paginator: Any, bucket_name: str, dir_path: str) ->
 def _extract_upgrade_ids_from_directory(
     paginator: Any, bucket_name: str, dir_path: str, upgrade_pattern: re.Pattern[str], upgrade_ids: set[str]
 ) -> None:
-    """Extract upgrade IDs from all files in a directory."""
+    """Extract upgrade IDs from all files in a directory. Handles both upgrade and baseline files."""
     file_pages = paginator.paginate(Bucket=bucket_name, Prefix=dir_path, Delimiter="/")
     for file_page in file_pages:
         if "Contents" in file_page:
@@ -157,6 +163,11 @@ def _extract_upgrade_ids_from_directory(
                 if file_key.endswith("/"):
                     continue
                 file_name = file_key.split("/")[-1]
+                # Check for baseline files - add upgrade_id "0"
+                if "baseline" in file_name.lower():
+                    upgrade_ids.add("0")
+                    continue
+                # Check for upgrade files - extract the number
                 match = upgrade_pattern.search(file_name)
                 if match:
                     upgrade_ids.add(match.group(1))
@@ -353,9 +364,12 @@ def _find_available_data(s3_client: Any, bucket_name: str, prefix: str) -> list[
     queue = [(prefix, 0)]
     visited = set()
 
+    print("Current prefix: ", prefix)
+
     while queue and len(expected_dirs) > 0:
         current_prefix, depth = queue.pop(0)
-        if depth > 1 or current_prefix in visited:
+        file_depth = 2 if "2024/resstock_dataset_2024.1" in current_prefix else 1
+        if depth > file_depth or current_prefix in visited:
             continue
 
         visited.add(current_prefix)
@@ -598,6 +612,11 @@ def resolve_bldgid_sets(
             Each release includes the path to its building_energy_model directory
             and the list of upgrade IDs available for that release.
     """
+    # Ensure data directory exists
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Using data directory: {DATA_DIR}")
+    logger.info(f"Output file will be: {RELEASE_JSON_FILE}")
+
     # Load existing releases from file if it exists
     releases: dict[str, BuildStockRelease] = {}
     initial_count = 0
@@ -609,6 +628,8 @@ def resolve_bldgid_sets(
             logger.info(f"Loaded {initial_count} existing releases from {RELEASE_JSON_FILE}")
         except (OSError, json.JSONDecodeError) as e:
             logger.warning(f"Could not load existing releases file: {e}. Starting fresh.")
+    else:
+        logger.info("No existing releases file found, starting fresh.")
 
     # Initialize S3 client with unsigned requests (for public buckets)
     s3_client = boto3.client("s3", config=Config(signature_version=UNSIGNED))
@@ -674,7 +695,13 @@ def resolve_bldgid_sets(
 
 
 if __name__ == "__main__":
+    logger.info("Starting resolve_bldgid_sets script...")
     start_time = time.time()
-    releases = resolve_bldgid_sets()
-    elapsed_time = time.time() - start_time
-    print(f"\nFound {len(releases)} unique releases in {elapsed_time:.2f} seconds")
+    try:
+        releases = resolve_bldgid_sets()
+        elapsed_time = time.time() - start_time
+        logger.info(f"Script completed successfully in {elapsed_time:.2f} seconds")
+        print(f"\nFound {len(releases)} unique releases in {elapsed_time:.2f} seconds")
+    except Exception:
+        logger.exception("Error running resolve_bldgid_sets script")
+        raise
