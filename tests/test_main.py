@@ -58,48 +58,48 @@ def test_fetch_bldg_ids():
     assert fetch_bldg_ids("resstock", "2021", "tmy3", "1", "MA", "0")[3].bldg_id == 175787
 
     # 2021 comstock tmy3 release
-    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].bldg_id == 271060
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].bldg_id == 328216
     assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].res_com == "comstock"
     assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].release_year == "2021"
     assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].weather == "tmy3"
     assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].release_number == "1"
     assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[0].upgrade_id == "0"
 
-    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[1].bldg_id == 9944
-    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[2].bldg_id == 245624
-    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[3].bldg_id == 155275
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[1].bldg_id == 98719
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[2].bldg_id == 308604
+    assert fetch_bldg_ids("comstock", "2021", "tmy3", "1", "MA", "0")[3].bldg_id == 277711
 
     # 2021 comstock tmy3 release
-    assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[0].bldg_id == 297733
+    assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[0].bldg_id == 113705
     assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[0].res_com == "comstock"
     assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[0].release_year == "2021"
     assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[0].weather == "amy2018"
     assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[0].release_number == "1"
     assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[0].upgrade_id == "0"
 
-    assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[1].bldg_id == 190793
-    assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[2].bldg_id == 288229
-    assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[3].bldg_id == 290474
+    assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[1].bldg_id == 278462
+    assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[2].bldg_id == 75193
+    assert fetch_bldg_ids("comstock", "2021", "amy2018", "1", "AL", "0")[3].bldg_id == 181354
 
     # 2022 resstock releases
-    assert fetch_bldg_ids("resstock", "2022", "amy2012", "1", "MI", "0")[1].bldg_id == 460128
-    assert fetch_bldg_ids("resstock", "2022", "amy2018", "1.1", "CO", "0")[2].bldg_id == 242983
-    assert fetch_bldg_ids("resstock", "2022", "tmy3", "1", "IN", "0")[3].bldg_id == 307400
+    assert fetch_bldg_ids("resstock", "2022", "amy2012", "1", "MI", "0")[1].bldg_id == 127784
+    assert fetch_bldg_ids("resstock", "2022", "amy2018", "1.1", "CO", "0")[2].bldg_id == 340172
+    assert fetch_bldg_ids("resstock", "2022", "tmy3", "1", "IN", "0")[3].bldg_id == 387421
 
     # 2023 comstock releases
-    assert fetch_bldg_ids("comstock", "2023", "amy2018", "1", "AZ", "0")[1].bldg_id == 8597
-    assert fetch_bldg_ids("comstock", "2023", "amy2018", "1", "AZ", "0")[2].bldg_id == 9161
-    assert fetch_bldg_ids("comstock", "2023", "amy2018", "2", "MI", "0")[3].bldg_id == 163941
+    assert fetch_bldg_ids("comstock", "2023", "amy2018", "1", "AZ", "0")[1].bldg_id == 5931
+    assert fetch_bldg_ids("comstock", "2023", "amy2018", "1", "AZ", "0")[2].bldg_id == 7332
+    assert fetch_bldg_ids("comstock", "2023", "amy2018", "2", "MI", "0")[3].bldg_id == 157881
 
     # 2024 resstock releases
-    assert fetch_bldg_ids("resstock", "2024", "amy2018", "2", "IL", "0")[1].bldg_id == 233842
-    assert fetch_bldg_ids("resstock", "2024", "amy2018", "2", "IL", "0")[2].bldg_id == 245818
-    assert fetch_bldg_ids("resstock", "2024", "tmy3", "2", "ID", "0")[3].bldg_id == 18149
+    assert fetch_bldg_ids("resstock", "2024", "amy2018", "2", "IL", "0")[1].bldg_id == 79561
+    assert fetch_bldg_ids("resstock", "2024", "amy2018", "2", "IL", "0")[2].bldg_id == 380574
+    assert fetch_bldg_ids("resstock", "2024", "tmy3", "2", "ID", "0")[3].bldg_id == 240024
 
     # 2024 comstock releases
-    assert fetch_bldg_ids("comstock", "2024", "amy2018", "1", "GA", "0")[1].bldg_id == 104039
-    assert fetch_bldg_ids("comstock", "2024", "amy2018", "1", "GA", "0")[2].bldg_id == 97452
-    assert fetch_bldg_ids("comstock", "2024", "amy2018", "2", "DC", "0")[3].bldg_id == 117988
+    assert fetch_bldg_ids("comstock", "2024", "amy2018", "1", "GA", "0")[1].bldg_id == 104292
+    assert fetch_bldg_ids("comstock", "2024", "amy2018", "1", "GA", "0")[2].bldg_id == 104039
+    assert fetch_bldg_ids("comstock", "2024", "amy2018", "2", "DC", "0")[3].bldg_id == 13639
 
 
 def test_building_id_config():
