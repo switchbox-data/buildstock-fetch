@@ -150,3 +150,6 @@ cython_debug/
 utils/ev_data/inputs/*.csv
 utils/ev_data/inputs/**/*.parquet
 utils/ev_data/outputs/
+
+# Temporary release files
+utils/temp_releases/
