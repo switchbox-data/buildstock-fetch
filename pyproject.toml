@@ -1,31 +1,31 @@
 [project]
 name = "buildstock-fetch"
-version = "1.4.6"
+version = "1.4.7"
 description = "This library simplifies downloading building characteristics and load curve data from NREL's ResStock and ComStock projects."
 authors = [{ name = "Switchbox", email = "hello@switch.box" }]
 readme = "README.md"
 keywords = ['python']
-requires-python = ">=3.9,<4.0"
+requires-python = ">=3.10,<4.0"
 classifiers = [
-    "Intended Audience :: Developers",
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Software Development :: Libraries :: Python Modules",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "requests>=2.32.3",
-    "typer>=0.9.0",
-    "rich>=13.9.5",
-    "questionary>=1.11.0",
-    "polars>=0.20.0",
-    "tomli>=2.0.0",
-    "boto3>=1.33.0",
-    "botocore>=1.33.0",
+  "requests>=2.32.3",
+  "typer>=0.9.0",
+  "rich>=13.9.5",
+  "questionary>=1.11.0",
+  "polars>=0.20.0",
+  "tomli>=2.0.0",
+  "boto3>=1.33.0",
+  "botocore>=1.33.0",
+  "pyarrow>=14.0.1",
 ]
 
 [project.urls]
@@ -38,44 +38,38 @@ bsf = "buildstock_fetch.main_cli:app"
 
 [project.optional-dependencies]
 # Core testing dependencies
-test = [
-    "pytest>=7.2.0",
-]
+test = ["pytest>=7.2.0"]
 
 # Documentation dependencies
 docs = [
-    "mkdocs>=1.4.2",
-    "mkdocs-material>=8.5.10",
-    "mkdocstrings[python]>=0.26.1",
+  "mkdocs>=1.4.2",
+  "mkdocs-material>=8.5.10",
+  "mkdocstrings[python]>=0.26.1",
 ]
 
 # Code quality and linting dependencies
 lint = [
-    "pre-commit>=2.20.0",
-    "mypy>=0.991",
-    "ruff>=0.11.5",
-    "deptry>=0.23.0",
-    "types-requests>=2.31.0",
-    "types-boto3>=1.33.0",
-    "pandas-stubs>=2.2.0",
+  "pre-commit>=2.20.0",
+  "mypy>=0.991",
+  "ruff>=0.11.5",
+  "deptry>=0.23.0",
+  "types-requests>=2.31.0",
+  "types-boto3>=1.33.0",
+  "pandas-stubs>=2.2.0",
 ]
 
 # Development utilities dependencies (only for utils/ directory)
 dev-utils = [
-    "boto3>=1.33.0",
-    "botocore>=1.33.0",
-    "pyarrow>=14.0.1",
-    "numpy>=1.26.4",
-    "scikit-learn>=1.6.1",
-    "awscli>=1.32.0",
-    "xmltodict>=0.14.2",
+  "boto3>=1.33.0",
+  "botocore>=1.33.0",
+  "numpy>=1.26.4",
+  "scikit-learn>=1.6.1",
+  "awscli>=1.32.0",
+  "xmltodict>=0.14.2",
 ]
 
 # All development dependencies (convenience group)
-dev = [
-    "buildstock-fetch[test,docs,lint,dev-utils]",
-    "tox-uv>=1.11.3",
-]
+dev = ["buildstock-fetch[test,docs,lint,dev-utils]", "tox-uv>=1.11.3"]
 
 [build-system]
 requires = ["setuptools>=45", "wheel"]
@@ -88,13 +82,12 @@ packages = ["buildstock_fetch"]
 
 [tool.setuptools.package-data]
 "buildstock_fetch" = [
-    "data/buildstock_releases.json",
-    "data/building_data/**/*",
-    "data/**/*.parquet",
-    "data/load_curve_column_map/*.csv",
-    "data/buildstock_upgrades_lookup.json"
+  "data/buildstock_releases.json",
+  "data/building_data/**/*",
+  "data/**/*.parquet",
+  "data/load_curve_column_map/*.csv",
+  "data/buildstock_upgrades_lookup.json",
 ]
-
 
 
 [tool.mypy]
@@ -107,6 +100,10 @@ warn_return_any = true
 warn_unused_ignores = true
 show_error_codes = true
 
+[[tool.mypy.overrides]]
+module = ["pyarrow.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
@@ -118,52 +115,53 @@ fix = true
 
 [tool.ruff.lint]
 select = [
-    # flake8-2020
-    "YTT",
-    # flake8-bandit
-    "S",
-    # flake8-bugbear
-    "B",
-    # flake8-builtins
-    "A",
-    # flake8-comprehensions
-    "C4",
-    # flake8-debugger
-    "T10",
-    # flake8-simplify
-    "SIM",
-    # isort
-    "I",
-    # mccabe
-    "C90",
-    # pycodestyle
-    "E", "W",
-    # pyflakes
-    "F",
-    # pygrep-hooks
-    "PGH",
-    # pyupgrade
-    "UP",
-    # ruff
-    "RUF",
-    # tryceratops
-    "TRY",
+  # flake8-2020
+  "YTT",
+  # flake8-bandit
+  "S",
+  # flake8-bugbear
+  "B",
+  # flake8-builtins
+  "A",
+  # flake8-comprehensions
+  "C4",
+  # flake8-debugger
+  "T10",
+  # flake8-simplify
+  "SIM",
+  # isort
+  "I",
+  # mccabe
+  "C90",
+  # pycodestyle
+  "E",
+  "W",
+  # pyflakes
+  "F",
+  # pygrep-hooks
+  "PGH",
+  # pyupgrade
+  "UP",
+  # ruff
+  "RUF",
+  # tryceratops
+  "TRY",
 ]
 ignore = [
-    # LineTooLong
-    "E501",
-    # DoNotAssignLambda
-    "E731",
+  # LineTooLong
+  "E501",
+  # DoNotAssignLambda
+  "E731",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]
 "tests/test_release.py" = [
-    "S603",  # subprocess call: check for execution of untrusted input
-    "S607",  # Starting a process with a partial executable path
-    "F401",  # imported but unused
-    "B904",  # Within an `except` clause, raise exceptions with `raise ... from err`
-    "TRY003",  # Avoid specifying long messages outside the exception class
+  "S603",   # subprocess call: check for execution of untrusted input
+  "S607",   # Starting a process with a partial executable path
+  "F401",   # imported but unused
+  "B904",   # Within an `except` clause, raise exceptions with `raise ... from err`
+  "TRY003", # Avoid specifying long messages outside the exception class
 ]
 
 [tool.ruff.format]
@@ -171,35 +169,32 @@ preview = true
 
 [tool.deptry]
 # Exclude directories that shouldn't be analyzed
-exclude = [
-    "utils",
-    "\\.venv"
-]
+exclude = ["utils", "\\.venv"]
 
 # Ignore dev-only dependencies that are not used in main package code
 per_rule_ignores.DEP002 = [
-    # Testing framework
-    "pytest",
-    # Documentation tools
-    "mkdocs",
-    "mkdocs-material",
-    "mkdocstrings",
-    # Code quality tools
-    "pre-commit",
-    "tox-uv",
-    "deptry",
-    "mypy",
-    "ruff",
-    # Type stubs
-    "types-requests",
-    "types-boto3",
-    "pandas-stubs",
-    # Development utilities (only used in utils/)
-    "boto3",
-    "botocore",
-    "pyarrow",
-    "numpy",
-    "scikit-learn",
-    "awscli",
-    "xmltodict",
+  # Testing framework
+  "pytest",
+  # Documentation tools
+  "mkdocs",
+  "mkdocs-material",
+  "mkdocstrings",
+  # Code quality tools
+  "pre-commit",
+  "tox-uv",
+  "deptry",
+  "mypy",
+  "ruff",
+  # Type stubs
+  "types-requests",
+  "types-boto3",
+  "pandas-stubs",
+  # Development utilities (only used in utils/)
+  "boto3",
+  "botocore",
+  "pyarrow",
+  "numpy",
+  "scikit-learn",
+  "awscli",
+  "xmltodict",
 ]
