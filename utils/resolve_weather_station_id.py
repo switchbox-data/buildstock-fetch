@@ -12,6 +12,7 @@ from pathlib import Path
 import polars as pl
 import questionary
 import requests
+import requests.adapters
 import urllib3
 import xmltodict
 from rich.console import Console
@@ -439,6 +440,8 @@ def process_buildings_phase(
                     # Mark this building ID as processed globally
                     processed_bldg_ids_global.add(bldg_id.bldg_id)
 
+                    result = {}
+
                     try:
                         result = future.result(timeout=30)  # 30 second timeout per result
                         data.append(result)
@@ -458,7 +461,7 @@ def process_buildings_phase(
                         task,
                         advance=1,
                         current=f"Current: {bldg_id.bldg_id}",
-                        weather_station=f"Weather: {result.get('weather_station_name', 'ERROR') if 'result' in locals() else 'ERROR'}",
+                        weather_station=f"Weather: {result.get('weather_station_name', 'ERROR')}",
                     )
 
                     # Show progress count and average time in description
@@ -552,12 +555,13 @@ def download_with_retry(url: str, max_retries: int = 3, base_delay: float = 1.0)
             _handle_retry_delay(attempt, "Connection", e)
         except requests.Timeout as e:
             _handle_retry_delay(attempt, "Timeout", e)
-        except (requests.RequestException, requests.SSLError) as e:
+        except (requests.RequestException, requests.exceptions.SSLError) as e:
             _handle_retry_delay(attempt, "Request/SSL", e)
         except Exception as e:
             _handle_retry_delay(attempt, "Error", e)
         else:
             return response
+    raise requests.RequestException()
 
 
 def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
@@ -677,7 +681,7 @@ def extract_weather_station_name(xml_content: str) -> str:
         return ""
 
     else:
-        return weather_station_name
+        return weather_station_name or ""
 
 
 def _extract_name_from_weather_station(weather_station):
@@ -850,7 +854,7 @@ def _interactive_mode():
     _modify_buildstock_releases_json(selected_release_name, selected_states)
 
 
-def find_weather_station_name(data, path=""):
+def find_weather_station_name(data, path="") -> str | None:
     """
     Recursively search for WeatherStation tag and extract the Name value.
 
