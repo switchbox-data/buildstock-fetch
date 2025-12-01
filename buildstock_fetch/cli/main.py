@@ -1,7 +1,5 @@
-import json
 import pprint
 from collections.abc import Mapping
-from importlib.resources import files
 from pathlib import Path
 from typing import Union, cast
 
@@ -13,8 +11,19 @@ from rich.panel import Panel
 from rich.table import Table
 
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
+from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
-from .availability import get_all_available_releases, get_available_releases_names, get_state_options
+from .availability import (
+    get_all_available_releases,
+    get_available_releases_names,
+    get_product_type_options,
+    get_release_versions_options,
+    get_release_years_options,
+    get_state_options,
+    get_upgrade_ids_options,
+    get_weather_options,
+    parse_buildstock_releases,
+)
 from .questionary import checkbox, handle_cancellation, select
 from .validate import (
     validate_file_types,
@@ -35,12 +44,34 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 
+# Module-level option definitions
+PRODUCT_OPTION = typer.Option(None, "--product", "-p", help='"resstock" or "comstock"')
+RELEASE_YEAR_OPTION = typer.Option(None, "--release_year", "-y", help="Release year (typically 2021 or later)")
+WEATHER_FILE_OPTION = typer.Option(None, "--weather_file", "-w", help='"tmy3", "amy2012", "amy2018"')
+RELEASE_VERSION_OPTION = typer.Option(None, "--release_version", "-r", help="1, 1.1, or 2")
+STATES_OPTION = typer.Option(
+    None, "--states", "-st", help="List of states (multiple can be provided, inside quotes and separated by spaces)"
+)
+FILE_TYPE_OPTION = typer.Option(
+    None,
+    "--file_type",
+    "-f",
+    help="List of file types (multiple can be provided, inside quotes and separated by spaces)",
+)
+UPGRADE_ID_OPTION = typer.Option(
+    None, "--upgrade_id", "-u", help="Upgrade IDs (multiple can be provided, inside quotes and separated by spaces)"
+)
+OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='e.g., "data" or "../output"')
+SAMPLE_OPTION = typer.Option(
+    None,
+    "--sample",
+    "-sm",
+    help="Number of building IDs to download across all upgrades (only applies to direct inputs)",
+)
+VERSION_OPTION = typer.Option(False, "--version", "-v", help="Show version information and exit")
 
 # File types that haven't been implemented yet
 UNAVAILABLE_FILE_TYPES: list[str] = []
-
-# Upgrade scenario description lookup file
-UPGRADES_LOOKUP_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_upgrades_lookup.json"))
 
 
 class InvalidProductError(Exception):
@@ -49,244 +80,105 @@ class InvalidProductError(Exception):
     pass
 
 
-def _filter_available_releases(
-    available_releases: list[str],
-    product_type: Union[str, None] = None,
-    release_year: Union[str, None] = None,
-    weather_file: Union[str, None] = None,
-    release_version: Union[str, None] = None,
-) -> list[str]:
-    parsed_releases = _parse_buildstock_releases(available_releases)
-    filtered_releases = []
-    if product_type is not None:
-        filtered_releases = [
-            release for release in parsed_releases if parsed_releases[release]["product"] == product_type
-        ]
-    if release_year is not None:
-        filtered_releases = [
-            release for release in filtered_releases if parsed_releases[release]["release_year"] == release_year
-        ]
-    if weather_file is not None:
-        filtered_releases = [
-            release for release in filtered_releases if parsed_releases[release]["weather_file"] == weather_file
-        ]
-    if release_version is not None:
-        filtered_releases = [
-            release for release in filtered_releases if parsed_releases[release]["release_version"] == release_version
-        ]
-    return filtered_releases
-
-
-def _get_product_type_options() -> list[str]:
-    return ["resstock", "comstock"]
-
-
-def _get_release_years_options(available_releases: list[str], product_type: str) -> tuple[list[str], list[str]]:
-    # Find available release years
-    parsed_releases = _parse_buildstock_releases(available_releases)
-    available_releases = _filter_available_releases(list(parsed_releases.keys()), product_type=product_type)
-    available_release_years = list({parsed_releases[release]["release_year"] for release in available_releases})
-    available_release_years.sort(reverse=True)  # Sort in descending order (latest first)
-
-    return available_releases, available_release_years
-
-
-def _get_weather_options(
-    available_releases: list[str], product_type: str, release_year: str
-) -> tuple[list[str], list[str]]:
-    parsed_releases = _parse_buildstock_releases(available_releases)
-    available_releases = _filter_available_releases(
-        list(parsed_releases.keys()), product_type=product_type, release_year=release_year
-    )
-    available_weather_files = list({parsed_releases[release]["weather_file"] for release in available_releases})
-
-    # Sort weather files in specific order: tmy3, amy2018, amy2012
-    weather_order = ["tmy3", "amy2018", "amy2012"]
-    available_weather_files.sort(key=lambda x: weather_order.index(x) if x in weather_order else len(weather_order))
-
-    return available_releases, available_weather_files
-
-
-def _normalize_release_version(release_version: Union[str, float, int]) -> str:
+def main_callback(
+    product: ResCom = PRODUCT_OPTION,
+    release_year: ReleaseYear = RELEASE_YEAR_OPTION,
+    weather_file: Weather = WEATHER_FILE_OPTION,
+    release_version: float = RELEASE_VERSION_OPTION,
+    states: str = STATES_OPTION,
+    file_type: str = FILE_TYPE_OPTION,
+    upgrade_id: str = UPGRADE_ID_OPTION,
+    output_directory: str = OUTPUT_DIRECTORY_OPTION,
+    sample: str = SAMPLE_OPTION,
+    version: bool = VERSION_OPTION,
+) -> None:
     """
-    Convert release_version to integer if it's a whole number, then to string.
-
-    Args:
-        release_version: The release version to normalize
-
-    Returns:
-        str: Normalized release version string
+    Buildstock Fetch CLI tool. Run without arguments for interactive mode.
     """
-    # TODO: they use semantic versioning, we can try using symver
+
+    # Handle version option first
+    if version:
+        _show_version()
+
+    # If no arguments provided, run interactive mode
+    if not any([product, release_year, weather_file, release_version, states, file_type]):
+        inputs = _run_interactive_mode_wrapper()
+        sample_value = None
+    else:
+        inputs, sample_value = _process_direct_inputs(
+            product,
+            release_year,
+            weather_file,
+            release_version,
+            states,
+            file_type,
+            upgrade_id,
+            output_directory,
+            sample,
+        )
+
+    # Process the data
+    _print_data_processing_info(inputs)
+    _process_data_download(inputs, sample_value)
+
+
+def _show_version() -> None:
+    """Display version information and exit."""
+    version = _get_version()
+    console.print(f"buildstock-fetch version {version}")
+    raise typer.Exit(0) from None
+
+
+def _run_interactive_mode_wrapper() -> dict[str, Union[str, list[str]]]:
+    """Run interactive mode with error handling."""
     try:
-        release_version_float = float(release_version)
-        if release_version_float.is_integer():
-            return str(int(release_version_float))
-        else:
-            return str(release_version)
-    except (ValueError, TypeError):
-        return str(release_version)
+        while True:
+            inputs = _run_interactive_mode()
+            if _verify_interactive_inputs(inputs):
+                return inputs
+            console.print("[yellow]Let's try again...[/yellow]")
+    except KeyboardInterrupt:
+        console.print("\n[red]Operation cancelled by user.[/red]")
+        raise typer.Exit(0) from None
 
 
-def _get_release_versions_options(
-    available_releases: list[str], product_type: str, release_year: str, weather_file: str
-) -> tuple[list[str], list[str]]:
-    parsed_releases = _parse_buildstock_releases(available_releases)
-    available_releases = _filter_available_releases(
-        list(parsed_releases.keys()), product_type=product_type, release_year=release_year, weather_file=weather_file
-    )
-    available_release_versions = list({parsed_releases[release]["release_version"] for release in available_releases})
+def _process_direct_inputs(
+    product: str,
+    release_year: str,
+    weather_file: str,
+    release_version: float,
+    states: str,
+    file_type: str,
+    upgrade_id: str,
+    output_directory: str,
+    sample: Union[str, None] = None,
+) -> tuple[dict[str, Union[str, list[str]]], Union[str, None]]:
+    """Process direct command line inputs."""
+    states_list = states.split() if states else []
+    upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
+    file_type_list = file_type.split() if file_type else []
 
-    if (
-        product_type == "resstock"
-        and weather_file == "tmy3"
-        and release_year == "2024"
-        and "1" in available_release_versions
-    ):
-        available_release_versions.remove("1")
-
-    # Define the desired order: "2", "1.1", "1"
-    display_order = ["2", "1.1", "1"]
-
-    # Filter available release versions to only include those in the desired order
-    ordered_release_versions = []
-    for version in display_order:
-        if version in available_release_versions:
-            ordered_release_versions.append(version)
-
-    return available_releases, ordered_release_versions
-
-
-def _get_upgrade_ids_options(release_name: str) -> list[str]:
-    available_releases = get_all_available_releases()
-    available_upgrade_ids = available_releases[release_name]["upgrade_ids"]
-    available_upgrade_ids = [int(upgrade_id) for upgrade_id in available_upgrade_ids]
-    available_upgrade_ids.sort()
-    available_upgrade_ids = [str(upgrade_id) for upgrade_id in available_upgrade_ids]
-
-    if release_name in json.loads(Path(UPGRADES_LOOKUP_FILE).read_text(encoding="utf-8")):
-        upgrade_descriptions = json.loads(Path(UPGRADES_LOOKUP_FILE).read_text(encoding="utf-8"))[release_name][
-            "upgrade_descriptions"
-        ]
-        available_upgrade_ids = [
-            f"{upgrade_id}: {upgrade_descriptions[upgrade_id]}"
-            for upgrade_id in available_upgrade_ids
-            if upgrade_id in upgrade_descriptions
-        ]
-
-    return cast(list[str], available_upgrade_ids)
-
-
-def _get_file_type_options(release_name: str) -> list[str]:
-    """Get the file type options for a given release name."""
-
-    # Each release has a different set of available data. For example, some releases don't have building data,
-    # some don't have 15 min end use load profiles, etc. This function returns the available data for a given release.
-    available_releases = get_all_available_releases()
-    return cast(list[str], available_releases[release_name]["available_data"])
-
-
-def _get_file_type_options_grouped(release_name: str, selected_states: list[str]) -> list[dict]:
-    """Get file type options grouped by category for questionary checkbox."""
-    file_types = _get_file_type_options(release_name)
-
-    # TODO: If a trip_schedule table was built for any of the states in this release, "trip_schedules" will be included
-    # in the file_types list above. However, the state that the user wants to download files for may not have the trip_schedule tables built for it yet.
-    # So, we need to check if the release_name + state combo is in the available trip_schedules_states list.
-    # If not, we need to remove "trip_schedules" from the file_types list, so it doesn't show up in the questionary checkbox.
-    # Remember that users can select multiple states, so as long as one release_name + state combo is in the available trip_schedules_states list,
-    # we should include "trip_schedules" in the file_types list. and then later on, we need to handle different states differently.
-
-    trip_schedule_availabile = False
-    available_releases = get_all_available_releases()
-    for state in selected_states:
-        if (
-            "trip_schedules" in available_releases[release_name]["available_data"]
-            and state in available_releases[release_name]["trip_schedule_states"]
-        ):
-            trip_schedule_availabile = True
-
-    # Define categories
-    categories = {
-        "Simulation Files": ["hpxml", "schedule"],
-        "End Use Load Curves": [
-            "load_curve_15min",
-            "load_curve_hourly",
-            "load_curve_daily",
-            "load_curve_monthly",
-            "load_curve_annual",
-        ],
-        "Metadata": ["metadata"],
-        "EV": ["trip_schedules"],
-        "Weather": ["weather"],
+    direct_inputs: dict[str, Union[str, list[str]]] = {
+        "product": product,
+        "release_year": release_year,
+        "weather_file": weather_file,
+        "release_version": _normalize_release_version(release_version),
+        "states": states_list,
+        "file_type": file_type_list,
+        "upgrade_ids": upgrade_ids_list,
+        "output_directory": output_directory,
     }
 
-    choices: list[dict] = []
-    for category, types in categories.items():
-        if category == "EV":
-            _add_ev_category_choices(choices, category, types, trip_schedule_availabile)
-        else:
-            _add_standard_category_choices(choices, category, types, file_types)
+    try:
+        validation_result = _validate_direct_inputs(direct_inputs)
+        if validation_result is not True:
+            console.print(f"\n[red]{validation_result}[/red]")
+            raise typer.Exit(1) from None
+    except InvalidProductError:
+        console.print(f"\n[red]Invalid product: {direct_inputs['product']}[/red]")
+        raise typer.Exit(1) from None
 
-    return choices
-
-
-def _add_ev_category_choices(
-    choices: list[dict], category: str, types: list[str], trip_schedule_available: bool
-) -> None:
-    """Add EV category choices to the choices list."""
-    for file_type in types:
-        if file_type == "trip_schedules" and trip_schedule_available:
-            choices.append({"name": f"--- {category} ---", "value": None, "disabled": True})
-            choices.append({"name": f"  {file_type}", "value": file_type, "style": "bold"})
-
-
-def _add_standard_category_choices(choices: list[dict], category: str, types: list[str], file_types: list[str]) -> None:
-    """Add standard category choices to the choices list."""
-    available_in_category = [ft for ft in types if ft in file_types]
-    if available_in_category:
-        choices.append({"name": f"--- {category} ---", "value": None, "disabled": True})
-        for file_type in available_in_category:
-            choices.append({"name": f"  {file_type}", "value": file_type, "style": "bold"})
-
-
-def _parse_buildstock_releases(buildstock_releases: list[str]) -> dict[str, dict]:
-    """Parse buildstock releases and extract components from keys in format: {product}_{release_year}_{weather_file}_{release_version}"""
-    parsed_releases = {}
-
-    for release_name in buildstock_releases:
-        # Split the release name by underscore
-        parts = release_name.split("_")
-
-        product = parts[0]  # e.g., "res" or "com"
-        if product == "res":
-            product = "resstock"
-        elif product == "com":
-            product = "comstock"
-        else:
-            message = f"Invalid product type: {product}"
-            console.print(Panel(message, title="Error", border_style="red"))
-            raise ValueError(message)
-
-        release_year = parts[1]  # e.g., "2021"
-        weather_file = parts[2]  # e.g., "tmy3" or "amy2018"
-        release_version = parts[3]  # e.g., "1" or "1.1"
-
-        parsed_releases[release_name] = {
-            "product": product,
-            "release_year": release_year,
-            "weather_file": weather_file,
-            "release_version": release_version,
-        }
-    return parsed_releases
-
-
-def _handle_cancellation(result: Union[str, None], message: str = "Operation cancelled by user.") -> str:
-    """Handle user cancellation and exit cleanly"""
-    if result is None:
-        console.print(f"\n[red]{message}[/red]")
-        raise typer.Exit(0) from None
-    return result
+    return direct_inputs, sample
 
 
 def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
@@ -300,16 +192,16 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     available_releases = get_available_releases_names()
 
     # Retrieve product type and filter available release years by product type
-    product_type = handle_cancellation(select("Select product type", choices=_get_product_type_options()))
-    available_releases, release_years = _get_release_years_options(available_releases, product_type)
+    product_type = handle_cancellation(select("Select product type", choices=get_product_type_options()))
+    available_releases, release_years = get_release_years_options(available_releases, product_type)
 
     # Retrieve release year and filter available weather files by release year
     selected_release_year = handle_cancellation(select("Select release year:", choices=release_years))
-    available_releases, weather_files = _get_weather_options(available_releases, product_type, selected_release_year)
+    available_releases, weather_files = get_weather_options(available_releases, product_type, selected_release_year)
 
     # Retrieve weather file and filter available release versions by weather file
     selected_weather_file = handle_cancellation(select("Select weather file:", choices=weather_files))
-    available_releases, release_versions = _get_release_versions_options(
+    available_releases, release_versions = get_release_versions_options(
         available_releases, product_type, selected_release_year, selected_weather_file
     )
 
@@ -322,7 +214,7 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     )
 
     # Retrieve upgrade ids
-    upgrade_options = _get_upgrade_ids_options(selected_release_name)
+    upgrade_options = get_upgrade_ids_options(selected_release_name)
     selected_upgrade_ids_raw = handle_cancellation(
         checkbox(
             "Select upgrade ids:",
@@ -411,6 +303,108 @@ def _verify_interactive_inputs(inputs: dict) -> bool:
         raise typer.Exit(0) from None
 
     return bool(result)
+
+
+def _normalize_release_version(release_version: Union[str, float, int]) -> str:
+    """
+    Convert release_version to integer if it's a whole number, then to string.
+
+    Args:
+        release_version: The release version to normalize
+
+    Returns:
+        str: Normalized release version string
+    """
+    # TODO: they use semantic versioning, we can try using symver
+    try:
+        release_version_float = float(release_version)
+        if release_version_float.is_integer():
+            return str(int(release_version_float))
+        else:
+            return str(release_version)
+    except (ValueError, TypeError):
+        return str(release_version)
+
+
+def _get_file_type_options(release_name: str) -> list[str]:
+    """Get the file type options for a given release name."""
+
+    # Each release has a different set of available data. For example, some releases don't have building data,
+    # some don't have 15 min end use load profiles, etc. This function returns the available data for a given release.
+    available_releases = get_all_available_releases()
+    return cast(list[str], available_releases[release_name]["available_data"])
+
+
+def _get_file_type_options_grouped(release_name: str, selected_states: list[str]) -> list[dict]:
+    """Get file type options grouped by category for questionary checkbox."""
+    file_types = _get_file_type_options(release_name)
+
+    # TODO: If a trip_schedule table was built for any of the states in this release, "trip_schedules" will be included
+    # in the file_types list above. However, the state that the user wants to download files for may not have the trip_schedule tables built for it yet.
+    # So, we need to check if the release_name + state combo is in the available trip_schedules_states list.
+    # If not, we need to remove "trip_schedules" from the file_types list, so it doesn't show up in the questionary checkbox.
+    # Remember that users can select multiple states, so as long as one release_name + state combo is in the available trip_schedules_states list,
+    # we should include "trip_schedules" in the file_types list. and then later on, we need to handle different states differently.
+
+    trip_schedule_availabile = False
+    available_releases = get_all_available_releases()
+    for state in selected_states:
+        if (
+            "trip_schedules" in available_releases[release_name]["available_data"]
+            and state in available_releases[release_name]["trip_schedule_states"]
+        ):
+            trip_schedule_availabile = True
+
+    # Define categories
+    categories = {
+        "Simulation Files": ["hpxml", "schedule"],
+        "End Use Load Curves": [
+            "load_curve_15min",
+            "load_curve_hourly",
+            "load_curve_daily",
+            "load_curve_monthly",
+            "load_curve_annual",
+        ],
+        "Metadata": ["metadata"],
+        "EV": ["trip_schedules"],
+        "Weather": ["weather"],
+    }
+
+    choices: list[dict] = []
+    for category, types in categories.items():
+        if category == "EV":
+            _add_ev_category_choices(choices, category, types, trip_schedule_availabile)
+        else:
+            _add_standard_category_choices(choices, category, types, file_types)
+
+    return choices
+
+
+def _add_ev_category_choices(
+    choices: list[dict], category: str, types: list[str], trip_schedule_available: bool
+) -> None:
+    """Add EV category choices to the choices list."""
+    for file_type in types:
+        if file_type == "trip_schedules" and trip_schedule_available:
+            choices.append({"name": f"--- {category} ---", "value": None, "disabled": True})
+            choices.append({"name": f"  {file_type}", "value": file_type, "style": "bold"})
+
+
+def _add_standard_category_choices(choices: list[dict], category: str, types: list[str], file_types: list[str]) -> None:
+    """Add standard category choices to the choices list."""
+    available_in_category = [ft for ft in types if ft in file_types]
+    if available_in_category:
+        choices.append({"name": f"--- {category} ---", "value": None, "disabled": True})
+        for file_type in available_in_category:
+            choices.append({"name": f"  {file_type}", "value": file_type, "style": "bold"})
+
+
+def _handle_cancellation(result: Union[str, None], message: str = "Operation cancelled by user.") -> str:
+    """Handle user cancellation and exit cleanly"""
+    if result is None:
+        console.print(f"\n[red]{message}[/red]")
+        raise typer.Exit(0) from None
+    return result
 
 
 def _print_data_processing_info(inputs: Mapping[str, Union[str, list[str]]]) -> None:
@@ -699,33 +693,6 @@ def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[s
     return True
 
 
-# Module-level option definitions
-PRODUCT_OPTION = typer.Option(None, "--product", "-p", help='"resstock" or "comstock"')
-RELEASE_YEAR_OPTION = typer.Option(None, "--release_year", "-y", help="Release year (typically 2021 or later)")
-WEATHER_FILE_OPTION = typer.Option(None, "--weather_file", "-w", help='"tmy3", "amy2012", "amy2018"')
-RELEASE_VERSION_OPTION = typer.Option(None, "--release_version", "-r", help="1, 1.1, or 2")
-STATES_OPTION = typer.Option(
-    None, "--states", "-st", help="List of states (multiple can be provided, inside quotes and separated by spaces)"
-)
-FILE_TYPE_OPTION = typer.Option(
-    None,
-    "--file_type",
-    "-f",
-    help="List of file types (multiple can be provided, inside quotes and separated by spaces)",
-)
-UPGRADE_ID_OPTION = typer.Option(
-    None, "--upgrade_id", "-u", help="Upgrade IDs (multiple can be provided, inside quotes and separated by spaces)"
-)
-OUTPUT_DIRECTORY_OPTION = typer.Option(None, "--output_directory", "-o", help='e.g., "data" or "../output"')
-SAMPLE_OPTION = typer.Option(
-    None,
-    "--sample",
-    "-sm",
-    help="Number of building IDs to download across all upgrades (only applies to direct inputs)",
-)
-VERSION_OPTION = typer.Option(False, "--version", "-v", help="Show version information and exit")
-
-
 def _get_version() -> str:
     """Get the version from pyproject.toml."""
     try:
@@ -739,65 +706,6 @@ def _get_version() -> str:
             return str(version)
     except (FileNotFoundError, KeyError, Exception):
         return "unknown"
-
-
-def _show_version() -> None:
-    """Display version information and exit."""
-    version = _get_version()
-    console.print(f"buildstock-fetch version {version}")
-    raise typer.Exit(0) from None
-
-
-def _run_interactive_mode_wrapper() -> dict[str, Union[str, list[str]]]:
-    """Run interactive mode with error handling."""
-    try:
-        while True:
-            inputs = _run_interactive_mode()
-            if _verify_interactive_inputs(inputs):
-                return inputs
-            console.print("[yellow]Let's try again...[/yellow]")
-    except KeyboardInterrupt:
-        console.print("\n[red]Operation cancelled by user.[/red]")
-        raise typer.Exit(0) from None
-
-
-def _process_direct_inputs(
-    product: str,
-    release_year: str,
-    weather_file: str,
-    release_version: float,
-    states: str,
-    file_type: str,
-    upgrade_id: str,
-    output_directory: str,
-    sample: Union[str, None] = None,
-) -> tuple[dict[str, Union[str, list[str]]], Union[str, None]]:
-    """Process direct command line inputs."""
-    states_list = states.split() if states else []
-    upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
-    file_type_list = file_type.split() if file_type else []
-
-    direct_inputs: dict[str, Union[str, list[str]]] = {
-        "product": product,
-        "release_year": release_year,
-        "weather_file": weather_file,
-        "release_version": _normalize_release_version(release_version),
-        "states": states_list,
-        "file_type": file_type_list,
-        "upgrade_ids": upgrade_ids_list,
-        "output_directory": output_directory,
-    }
-
-    try:
-        validation_result = _validate_direct_inputs(direct_inputs)
-        if validation_result is not True:
-            console.print(f"\n[red]{validation_result}[/red]")
-            raise typer.Exit(1) from None
-    except InvalidProductError:
-        console.print(f"\n[red]Invalid product: {direct_inputs['product']}[/red]")
-        raise typer.Exit(1) from None
-
-    return direct_inputs, sample
 
 
 def _process_data_download(inputs: dict[str, Union[str, list[str]]], sample: Union[str, None] = None) -> None:
@@ -837,48 +745,6 @@ def _process_data_download(inputs: dict[str, Union[str, list[str]]], sample: Uni
         console.print("[yellow]None of the selected file types are available for download.[/yellow]")
 
 
-def main_callback(
-    product: str = PRODUCT_OPTION,
-    release_year: str = RELEASE_YEAR_OPTION,
-    weather_file: str = WEATHER_FILE_OPTION,
-    release_version: float = RELEASE_VERSION_OPTION,
-    states: str = STATES_OPTION,
-    file_type: str = FILE_TYPE_OPTION,
-    upgrade_id: str = UPGRADE_ID_OPTION,
-    output_directory: str = OUTPUT_DIRECTORY_OPTION,
-    sample: str = SAMPLE_OPTION,
-    version: bool = VERSION_OPTION,
-) -> None:
-    """
-    Buildstock Fetch CLI tool. Run without arguments for interactive mode.
-    """
-
-    # Handle version option first
-    if version:
-        _show_version()
-
-    # If no arguments provided, run interactive mode
-    if not any([product, release_year, weather_file, release_version, states, file_type]):
-        inputs = _run_interactive_mode_wrapper()
-        sample_value = None
-    else:
-        inputs, sample_value = _process_direct_inputs(
-            product,
-            release_year,
-            weather_file,
-            release_version,
-            states,
-            file_type,
-            upgrade_id,
-            output_directory,
-            sample,
-        )
-
-    # Process the data
-    _print_data_processing_info(inputs)
-    _process_data_download(inputs, sample_value)
-
-
 app.command()(main_callback)
 
 
@@ -887,13 +753,13 @@ if __name__ == "__main__":
     print(get_available_releases_names())
 
     # Print the parsed release options
-    print(_parse_buildstock_releases(get_available_releases_names()))
+    print(parse_buildstock_releases(get_available_releases_names()))
 
     # Print the release years
-    available_releases, available_release_years = _get_release_years_options(get_available_releases_names(), "resstock")
+    available_releases, available_release_years = get_release_years_options(get_available_releases_names(), "resstock")
     print(available_releases)
     print(available_release_years)
-    available_releases, available_release_years = _get_release_years_options(get_available_releases_names(), "comstock")
+    available_releases, available_release_years = get_release_years_options(get_available_releases_names(), "comstock")
     print(available_releases)
     print(available_release_years)
 
