@@ -34,7 +34,7 @@ Repository = "https://github.com/switchbox-data/buildstock-fetch"
 Documentation = "https://switchbox-data.github.io/buildstock-fetch/"
 
 [project.scripts]
-bsf = "buildstock_fetch.main_cli:app"
+bsf = "buildstock_fetch.cli.main:app"
 
 [project.optional-dependencies]
 # Core testing dependencies
@@ -198,3 +198,6 @@ per_rule_ignores.DEP002 = [
   "awscli",
   "xmltodict",
 ]
+
+[dependency-groups]
+dev = []
