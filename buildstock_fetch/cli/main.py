@@ -15,6 +15,7 @@ from rich.table import Table
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
 
 from .availability import get_all_available_releases, get_available_releases_names, get_state_options
+from .questionary import checkbox, handle_cancellation, select
 from .validate import (
     validate_file_types,
     validate_output_directory,
@@ -299,29 +300,21 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     available_releases = get_available_releases_names()
 
     # Retrieve product type and filter available release years by product type
-    product_type = _handle_cancellation(
-        questionary.select("Select product type:", choices=_get_product_type_options()).ask()
-    )
+    product_type = handle_cancellation(select("Select product type", choices=_get_product_type_options()))
     available_releases, release_years = _get_release_years_options(available_releases, product_type)
 
     # Retrieve release year and filter available weather files by release year
-    selected_release_year = _handle_cancellation(
-        questionary.select("Select release year:", choices=release_years).ask()
-    )
+    selected_release_year = handle_cancellation(select("Select release year:", choices=release_years))
     available_releases, weather_files = _get_weather_options(available_releases, product_type, selected_release_year)
 
     # Retrieve weather file and filter available release versions by weather file
-    selected_weather_file = _handle_cancellation(
-        questionary.select("Select weather file:", choices=weather_files).ask()
-    )
+    selected_weather_file = handle_cancellation(select("Select weather file:", choices=weather_files))
     available_releases, release_versions = _get_release_versions_options(
         available_releases, product_type, selected_release_year, selected_weather_file
     )
 
     # Retrieve release version
-    selected_release_version = _handle_cancellation(
-        questionary.select("Select release version:", choices=release_versions).ask()
-    )
+    selected_release_version = handle_cancellation(select("Select release version:", choices=release_versions))
 
     product_short_name = "res" if product_type == "resstock" else "com"
     selected_release_name = (
@@ -330,13 +323,13 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
 
     # Retrieve upgrade ids
     upgrade_options = _get_upgrade_ids_options(selected_release_name)
-    selected_upgrade_ids_raw = _handle_cancellation(
-        questionary.checkbox(
+    selected_upgrade_ids_raw = handle_cancellation(
+        checkbox(
             "Select upgrade ids:",
             choices=upgrade_options,
             instruction="Use spacebar to select/deselect options, 'a' to select all, 'i' to invert selection, enter to confirm",
             validate=lambda answer: "You must select at least one upgrade id" if len(answer) == 0 else True,
-        ).ask()
+        )
     )
 
     # Extract upgrade ID integers from the selected options
@@ -352,24 +345,24 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     # Retrieve state
     selected_states: list[str] = cast(
         list[str],
-        _handle_cancellation(
-            questionary.checkbox(
+        handle_cancellation(
+            checkbox(
                 "Select states:",
                 choices=get_state_options(),
                 instruction="Use spacebar to select/deselect options, enter to confirm",
                 validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
-            ).ask()
+            )
         ),
     )
 
     # Retrieve requested file type
-    requested_file_types = _handle_cancellation(
-        questionary.checkbox(
+    requested_file_types = handle_cancellation(
+        checkbox(
             "Select file type:",
             choices=_get_file_type_options_grouped(selected_release_name, selected_states),
             instruction="Use spacebar to select/deselect options, enter to confirm",
             validate=lambda answer: "You must select at least one file type" if len(answer) == 0 else True,
-        ).ask()
+        )
     )
 
     # Retrieve output directory
