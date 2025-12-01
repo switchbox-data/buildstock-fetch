@@ -184,6 +184,9 @@ requires-dist = [
 ]
 provides-extras = ["test", "docs", "lint", "dev-utils", "dev"]
 
+[package.metadata.requires-dev]
+dev = []
+
 [[package]]
 name = "cachetools"
 version = "6.2.2"

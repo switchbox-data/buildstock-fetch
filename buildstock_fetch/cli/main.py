@@ -14,6 +14,15 @@ from rich.table import Table
 
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
 
+from .availability import get_all_available_releases, get_available_releases_names, get_state_options
+from .validate import (
+    validate_file_types,
+    validate_output_directory,
+    validate_release_name,
+    validate_states,
+    validate_upgrade_ids,
+)
+
 # Initialize Rich console
 console = Console()
 
@@ -25,9 +34,6 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 
-
-# File configuration
-BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json"))
 
 # File types that haven't been implemented yet
 UNAVAILABLE_FILE_TYPES: list[str] = []
@@ -110,6 +116,7 @@ def _normalize_release_version(release_version: Union[str, float, int]) -> str:
     Returns:
         str: Normalized release version string
     """
+    # TODO: they use semantic versioning, we can try using symver
     try:
         release_version_float = float(release_version)
         if release_version_float.is_integer():
@@ -150,7 +157,7 @@ def _get_release_versions_options(
 
 
 def _get_upgrade_ids_options(release_name: str) -> list[str]:
-    available_releases = _get_all_available_releases()
+    available_releases = get_all_available_releases()
     available_upgrade_ids = available_releases[release_name]["upgrade_ids"]
     available_upgrade_ids = [int(upgrade_id) for upgrade_id in available_upgrade_ids]
     available_upgrade_ids.sort()
@@ -169,66 +176,12 @@ def _get_upgrade_ids_options(release_name: str) -> list[str]:
     return cast(list[str], available_upgrade_ids)
 
 
-def _get_state_options() -> list[str]:
-    return [
-        "AL",
-        "AZ",
-        "AR",
-        "CA",
-        "CO",
-        "CT",
-        "DE",
-        "FL",
-        "GA",
-        "HI",
-        "ID",
-        "IL",
-        "IN",
-        "IA",
-        "KS",
-        "KY",
-        "LA",
-        "ME",
-        "MD",
-        "MA",
-        "MI",
-        "MN",
-        "MS",
-        "MO",
-        "MT",
-        "NE",
-        "NV",
-        "NH",
-        "NJ",
-        "NM",
-        "NY",
-        "NC",
-        "ND",
-        "OH",
-        "OK",
-        "OR",
-        "PA",
-        "RI",
-        "SC",
-        "SD",
-        "TN",
-        "TX",
-        "UT",
-        "VT",
-        "VA",
-        "WA",
-        "WV",
-        "WI",
-        "WY",
-    ]
-
-
 def _get_file_type_options(release_name: str) -> list[str]:
     """Get the file type options for a given release name."""
 
     # Each release has a different set of available data. For example, some releases don't have building data,
     # some don't have 15 min end use load profiles, etc. This function returns the available data for a given release.
-    available_releases = _get_all_available_releases()
+    available_releases = get_all_available_releases()
     return cast(list[str], available_releases[release_name]["available_data"])
 
 
@@ -244,7 +197,7 @@ def _get_file_type_options_grouped(release_name: str, selected_states: list[str]
     # we should include "trip_schedules" in the file_types list. and then later on, we need to handle different states differently.
 
     trip_schedule_availabile = False
-    available_releases = _get_all_available_releases()
+    available_releases = get_all_available_releases()
     for state in selected_states:
         if (
             "trip_schedules" in available_releases[release_name]["available_data"]
@@ -296,19 +249,6 @@ def _add_standard_category_choices(choices: list[dict], category: str, types: li
             choices.append({"name": f"  {file_type}", "value": file_type, "style": "bold"})
 
 
-def _get_available_releases_names() -> list[str]:
-    # Read the buildstock releases JSON file
-    buildstock_releases = json.loads(Path(BUILDSTOCK_RELEASES_FILE).read_text(encoding="utf-8"))
-
-    # Return the top-level keys as release options
-    return list(buildstock_releases.keys())
-
-
-def _get_all_available_releases() -> dict[str, dict]:
-    buildstock_releases = json.loads(Path(BUILDSTOCK_RELEASES_FILE).read_text(encoding="utf-8"))
-    return cast(dict[str, dict], buildstock_releases)
-
-
 def _parse_buildstock_releases(buildstock_releases: list[str]) -> dict[str, dict]:
     """Parse buildstock releases and extract components from keys in format: {product}_{release_year}_{weather_file}_{release_version}"""
     parsed_releases = {}
@@ -340,18 +280,6 @@ def _parse_buildstock_releases(buildstock_releases: list[str]) -> dict[str, dict
     return parsed_releases
 
 
-def _validate_output_directory(output_directory: str) -> Union[bool, str]:
-    """Validate that the path format is correct for a directory"""
-    try:
-        path = Path(output_directory)
-        # Check if it's a valid path format
-        path.resolve()
-    except (OSError, ValueError):
-        return "Please enter a valid directory path"
-    else:
-        return True
-
-
 def _handle_cancellation(result: Union[str, None], message: str = "Operation cancelled by user.") -> str:
     """Handle user cancellation and exit cleanly"""
     if result is None:
@@ -368,7 +296,7 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     console.print("Please select the release information and file type you would like to fetch:")
 
     # Retrieve available releases
-    available_releases = _get_available_releases_names()
+    available_releases = get_available_releases_names()
 
     # Retrieve product type and filter available release years by product type
     product_type = _handle_cancellation(
@@ -427,7 +355,7 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
         _handle_cancellation(
             questionary.checkbox(
                 "Select states:",
-                choices=_get_state_options(),
+                choices=get_state_options(),
                 instruction="Use spacebar to select/deselect options, enter to confirm",
                 validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
             ).ask()
@@ -450,7 +378,7 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
             "Select output directory:",
             default=str(Path.cwd() / "data"),
             only_directories=True,
-            validate=_validate_output_directory,
+            validate=validate_output_directory,
         ).ask()
     )
 
@@ -511,7 +439,7 @@ def _check_weather_map_available_states(inputs: Mapping[str, Union[str, list[str
     unavailable_states: list[str] = []
     product_short_name = "res" if inputs["product"] == "resstock" else "com"
     release_name = f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
-    selected_release = _get_all_available_releases()[release_name]
+    selected_release = get_all_available_releases()[release_name]
     if "weather_map_available_states" not in selected_release:
         unavailable_states = inputs["states"] if isinstance(inputs["states"], list) else [inputs["states"]]
     else:
@@ -579,7 +507,7 @@ def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -
         input_release_name = (
             f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
         )
-        available_releases = _get_all_available_releases()
+        available_releases = get_all_available_releases()
         availble_trip_schedule_states = available_releases[input_release_name]["trip_schedule_states"]
         for state in inputs["states"]:
             if state not in availble_trip_schedule_states:
@@ -739,52 +667,6 @@ def _validate_required_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union
     return True
 
 
-def _validate_release_name(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
-    """Validate the release name."""
-    available_releases = _get_all_available_releases()
-
-    if inputs["product"] == "resstock":
-        product_short_name = "res"
-    elif inputs["product"] == "comstock":
-        product_short_name = "com"
-    else:
-        raise InvalidProductError
-
-    release_name = f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
-    if release_name not in available_releases:
-        return f"Invalid release name: {release_name}"
-    return True
-
-
-def _validate_upgrade_ids(inputs: dict[str, Union[str, list[str]]], release_name: str) -> Union[str, bool]:
-    """Validate upgrade IDs."""
-    available_releases = _get_all_available_releases()
-    for upgrade_id in inputs["upgrade_ids"]:
-        if int(upgrade_id) not in [
-            int(upgrade_id_val) for upgrade_id_val in available_releases[release_name]["upgrade_ids"]
-        ]:
-            return f"Invalid upgrade id: {upgrade_id}"
-    return True
-
-
-def _validate_file_types(inputs: dict[str, Union[str, list[str]]], release_name: str) -> Union[str, bool]:
-    """Validate file types."""
-    available_releases = _get_all_available_releases()
-    for file_type in inputs["file_type"]:
-        # TODO: Validate EV related files
-        if file_type not in available_releases[release_name]["available_data"]:
-            return f"Invalid file type: {file_type}"
-    return True
-
-
-def _validate_states(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
-    """Validate states."""
-    for state in inputs["states"]:
-        if state not in _get_state_options():
-            return f"Invalid state: {state}"
-    return True
-
-
 def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
     """Validate the direct inputs"""
     # Check required inputs
@@ -793,7 +675,7 @@ def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[s
         return required_check
 
     # Check release name
-    release_check = _validate_release_name(inputs)
+    release_check = validate_release_name(inputs)
     if release_check is not True:
         return release_check
 
@@ -802,22 +684,22 @@ def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[s
     release_name = f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
 
     # Check upgrade IDs
-    upgrade_check = _validate_upgrade_ids(inputs, release_name)
+    upgrade_check = validate_upgrade_ids(inputs, release_name)
     if upgrade_check is not True:
         return upgrade_check
 
     # Check file types
-    file_type_check = _validate_file_types(inputs, release_name)
+    file_type_check = validate_file_types(inputs, release_name)
     if file_type_check is not True:
         return file_type_check
 
     # Check states
-    state_check = _validate_states(inputs)
+    state_check = validate_states(inputs)
     if state_check is not True:
         return state_check
 
     # Check output directory
-    output_directory_validation = _validate_output_directory(str(inputs["output_directory"]))
+    output_directory_validation = validate_output_directory(str(inputs["output_directory"]))
     if output_directory_validation is not True:
         return f"Invalid output directory: {inputs['output_directory']}"
 
@@ -1009,20 +891,16 @@ app.command()(main_callback)
 
 if __name__ == "__main__":
     # Print the available release options
-    print(_get_available_releases_names())
+    print(get_available_releases_names())
 
     # Print the parsed release options
-    print(_parse_buildstock_releases(_get_available_releases_names()))
+    print(_parse_buildstock_releases(get_available_releases_names()))
 
     # Print the release years
-    available_releases, available_release_years = _get_release_years_options(
-        _get_available_releases_names(), "resstock"
-    )
+    available_releases, available_release_years = _get_release_years_options(get_available_releases_names(), "resstock")
     print(available_releases)
     print(available_release_years)
-    available_releases, available_release_years = _get_release_years_options(
-        _get_available_releases_names(), "comstock"
-    )
+    available_releases, available_release_years = _get_release_years_options(get_available_releases_names(), "comstock")
     print(available_releases)
     print(available_release_years)
 
