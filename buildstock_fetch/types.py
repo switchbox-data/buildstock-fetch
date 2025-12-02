@@ -9,4 +9,4 @@ __all__ = [
 
 ReleaseYear: TypeAlias = Literal["2021", "2022", "2023", "2024", "2025"]
 ResCom: TypeAlias = Literal["resstock", "comstock"]
-Weather: TypeAlias = Literal["amy2018", "tmy3"]
+Weather: TypeAlias = Literal["amy2012", "amy2018", "tmy3"]

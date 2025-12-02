@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from .availability import get_all_available_releases, get_state_options
+from .inputs import Inputs
 
 
 class InvalidProductError(Exception):
@@ -9,11 +10,10 @@ class InvalidProductError(Exception):
     pass
 
 
-def validate_output_directory(output_directory: str) -> bool | str:
+def validate_output_directory(output_directory: Path | str) -> bool | str:
     """Validate that the path format is correct for a directory"""
     try:
         path = Path(output_directory)
-        # Check if it's a valid path format
         path.resolve()
     except (OSError, ValueError):
         return "Please enter a valid directory path"
@@ -21,7 +21,7 @@ def validate_output_directory(output_directory: str) -> bool | str:
         return True
 
 
-def validate_release_name(inputs: dict[str, str | list[str]]) -> str | bool:
+def validate_release_name(inputs: Inputs) -> str | bool:
     """Validate the release name."""
     available_releases = get_all_available_releases()
 
@@ -38,7 +38,7 @@ def validate_release_name(inputs: dict[str, str | list[str]]) -> str | bool:
     return True
 
 
-def validate_upgrade_ids(inputs: dict[str, str | list[str]], release_name: str) -> str | bool:
+def validate_upgrade_ids(inputs: Inputs, release_name: str) -> str | bool:
     """Validate upgrade IDs."""
     available_releases = get_all_available_releases()
     for upgrade_id in inputs["upgrade_ids"]:
@@ -49,7 +49,7 @@ def validate_upgrade_ids(inputs: dict[str, str | list[str]], release_name: str) 
     return True
 
 
-def validate_file_types(inputs: dict[str, str | list[str]], release_name: str) -> str | bool:
+def validate_file_types(inputs: Inputs, release_name: str) -> str | bool:
     """Validate file types."""
     available_releases = get_all_available_releases()
     for file_type in inputs["file_type"]:
@@ -59,7 +59,7 @@ def validate_file_types(inputs: dict[str, str | list[str]], release_name: str) -
     return True
 
 
-def validate_states(inputs: dict[str, str | list[str]]) -> str | bool:
+def validate_states(inputs: Inputs) -> str | bool:
     """Validate states."""
     for state in inputs["states"]:
         if state not in get_state_options():

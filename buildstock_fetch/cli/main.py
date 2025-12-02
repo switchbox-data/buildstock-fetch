@@ -1,5 +1,4 @@
 import pprint
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Union, cast
 
@@ -14,6 +13,8 @@ from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
 from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
 from .availability import (
+    check_weather_file_availability,
+    check_weather_map_available_states,
     get_all_available_releases,
     get_available_releases_names,
     get_product_type_options,
@@ -24,7 +25,8 @@ from .availability import (
     get_weather_options,
     parse_buildstock_releases,
 )
-from .questionary import checkbox, handle_cancellation, select
+from .inputs import Inputs
+from .questionary import checkbox_str, handle_cancellation, select
 from .validate import (
     validate_file_types,
     validate_output_directory,
@@ -88,7 +90,7 @@ def main_callback(
     states: str = STATES_OPTION,
     file_type: str = FILE_TYPE_OPTION,
     upgrade_id: str = UPGRADE_ID_OPTION,
-    output_directory: str = OUTPUT_DIRECTORY_OPTION,
+    output_directory: Path = OUTPUT_DIRECTORY_OPTION,
     sample: str = SAMPLE_OPTION,
     version: bool = VERSION_OPTION,
 ) -> None:
@@ -129,7 +131,7 @@ def _show_version() -> None:
     raise typer.Exit(0) from None
 
 
-def _run_interactive_mode_wrapper() -> dict[str, Union[str, list[str]]]:
+def _run_interactive_mode_wrapper() -> Inputs:
     """Run interactive mode with error handling."""
     try:
         while True:
@@ -143,22 +145,22 @@ def _run_interactive_mode_wrapper() -> dict[str, Union[str, list[str]]]:
 
 
 def _process_direct_inputs(
-    product: str,
-    release_year: str,
-    weather_file: str,
+    product: ResCom,
+    release_year: ReleaseYear,
+    weather_file: Weather,
     release_version: float,
     states: str,
     file_type: str,
     upgrade_id: str,
-    output_directory: str,
+    output_directory: Path,
     sample: Union[str, None] = None,
-) -> tuple[dict[str, Union[str, list[str]]], Union[str, None]]:
+) -> tuple[Inputs, Union[str, None]]:
     """Process direct command line inputs."""
     states_list = states.split() if states else []
     upgrade_ids_list = upgrade_id.split() if upgrade_id else ["0"]
     file_type_list = file_type.split() if file_type else []
 
-    direct_inputs: dict[str, Union[str, list[str]]] = {
+    direct_inputs: Inputs = {
         "product": product,
         "release_year": release_year,
         "weather_file": weather_file,
@@ -181,7 +183,7 @@ def _process_direct_inputs(
     return direct_inputs, sample
 
 
-def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
+def _run_interactive_mode() -> Inputs:
     """Run the interactive CLI mode"""
     console.print(Panel("BuildStock Fetch Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
     console.print("Welcome to the BuildStock Fetch CLI!")
@@ -192,15 +194,15 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     available_releases = get_available_releases_names()
 
     # Retrieve product type and filter available release years by product type
-    product_type = handle_cancellation(select("Select product type", choices=get_product_type_options()))
+    product_type: ResCom = handle_cancellation(select("Select product type", choices=get_product_type_options()))
     available_releases, release_years = get_release_years_options(available_releases, product_type)
 
     # Retrieve release year and filter available weather files by release year
-    selected_release_year = handle_cancellation(select("Select release year:", choices=release_years))
+    selected_release_year: ReleaseYear = handle_cancellation(select("Select release year:", choices=release_years))
     available_releases, weather_files = get_weather_options(available_releases, product_type, selected_release_year)
 
     # Retrieve weather file and filter available release versions by weather file
-    selected_weather_file = handle_cancellation(select("Select weather file:", choices=weather_files))
+    selected_weather_file: Weather = handle_cancellation(select("Select weather file:", choices=weather_files))
     available_releases, release_versions = get_release_versions_options(
         available_releases, product_type, selected_release_year, selected_weather_file
     )
@@ -216,7 +218,7 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     # Retrieve upgrade ids
     upgrade_options = get_upgrade_ids_options(selected_release_name)
     selected_upgrade_ids_raw = handle_cancellation(
-        checkbox(
+        checkbox_str(
             "Select upgrade ids:",
             choices=upgrade_options,
             instruction="Use spacebar to select/deselect options, 'a' to select all, 'i' to invert selection, enter to confirm",
@@ -238,7 +240,7 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     selected_states: list[str] = cast(
         list[str],
         handle_cancellation(
-            checkbox(
+            checkbox_str(
                 "Select states:",
                 choices=get_state_options(),
                 instruction="Use spacebar to select/deselect options, enter to confirm",
@@ -248,13 +250,13 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
     )
 
     # Retrieve requested file type
-    requested_file_types = handle_cancellation(
-        checkbox(
+    requested_file_types: list[str] = handle_cancellation(
+        questionary.checkbox(
             "Select file type:",
             choices=_get_file_type_options_grouped(selected_release_name, selected_states),
             instruction="Use spacebar to select/deselect options, enter to confirm",
             validate=lambda answer: "You must select at least one file type" if len(answer) == 0 else True,
-        )
+        ).ask()
     )
 
     # Retrieve output directory
@@ -277,11 +279,11 @@ def _run_interactive_mode() -> dict[str, Union[str, list[str]]]:
         "upgrade_ids": selected_upgrade_ids,
         "states": selected_states,
         "file_type": requested_file_types,
-        "output_directory": str(output_directory_path),
+        "output_directory": output_directory_path,
     }
 
 
-def _verify_interactive_inputs(inputs: dict) -> bool:
+def _verify_interactive_inputs(inputs: Inputs) -> bool:
     """Display the inputs and ask the user to verify them."""
     console = Console()
 
@@ -407,7 +409,7 @@ def _handle_cancellation(result: Union[str, None], message: str = "Operation can
     return result
 
 
-def _print_data_processing_info(inputs: Mapping[str, Union[str, list[str]]]) -> None:
+def _print_data_processing_info(inputs: Inputs) -> None:
     """Print the data processing information."""
     print("Downloading data for:")
     print(f"Product: {inputs['product']}")
@@ -420,49 +422,6 @@ def _print_data_processing_info(inputs: Mapping[str, Union[str, list[str]]]) -> 
     print(f"Output directory: {inputs['output_directory']}")
 
 
-def _check_weather_map_available_states(inputs: Mapping[str, Union[str, list[str]]]) -> tuple[list[str], list[str]]:
-    """Check if the weather map is available for the given release and state."""
-    available_states: list[str] = []
-    unavailable_states: list[str] = []
-    product_short_name = "res" if inputs["product"] == "resstock" else "com"
-    release_name = f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
-    selected_release = get_all_available_releases()[release_name]
-    if "weather_map_available_states" not in selected_release:
-        unavailable_states = inputs["states"] if isinstance(inputs["states"], list) else [inputs["states"]]
-    else:
-        unavailable_states = [
-            state for state in inputs["states"] if state not in selected_release["weather_map_available_states"]
-        ]
-        available_states = [
-            state for state in inputs["states"] if state in selected_release["weather_map_available_states"]
-        ]
-    return available_states, unavailable_states
-
-
-def _check_weather_file_availability(
-    inputs: Mapping[str, Union[str, list[str]]],
-    available_file_types: list[str],
-    selected_unavailable_file_types: list[str],
-) -> None:
-    """Check weather file availability and update file type lists."""
-    available_states, unavailable_states = _check_weather_map_available_states(inputs)
-
-    if len(unavailable_states) > 0:
-        selected_unavailable_file_types.append("weather")
-        if len(unavailable_states) == len(inputs["states"]) and "weather" in available_file_types:
-            available_file_types.remove("weather")
-
-    if len(unavailable_states) > 0:
-        console.print(
-            f"\n[yellow]The weather map is not available for the following states: {unavailable_states}[/yellow]"
-        )
-        console.print(
-            "\n[yellow]Please first build the weather station mapping for this state using the weather station mapping CLI tool (just build-weather-station-map)[/yellow]"
-        )
-    for state in unavailable_states:
-        selected_unavailable_file_types.append(f"weather: {state}")
-
-
 def _print_unavailable_file_types_warning(selected_unavailable_file_types: list[str]) -> None:
     """Print warning for unavailable file types."""
     if selected_unavailable_file_types:
@@ -472,7 +431,7 @@ def _print_unavailable_file_types_warning(selected_unavailable_file_types: list[
         console.print("")
 
 
-def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -> tuple[list[str], list[str]]:
+def _check_unavailable_file_types(inputs: Inputs) -> tuple[list[str], list[str]]:
     """Check and print warning for unavailable file types."""
     selected_file_types = inputs["file_type"].split() if isinstance(inputs["file_type"], str) else inputs["file_type"]
     # Create a copy to avoid modifying the original list
@@ -487,7 +446,7 @@ def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -
                 available_file_types.remove(ft)
 
     if "weather" in selected_file_types:
-        _check_weather_file_availability(inputs, available_file_types, selected_unavailable_file_types)
+        check_weather_file_availability(inputs, available_file_types, selected_unavailable_file_types)
 
     if "trip_schedules" in selected_file_types:
         product_short_name = "res" if inputs["product"] == "resstock" else "com"
@@ -506,7 +465,7 @@ def _check_unavailable_file_types(inputs: Mapping[str, Union[str, list[str]]]) -
     return available_file_types, selected_unavailable_file_types
 
 
-def _fetch_all_building_ids(inputs: Mapping[str, Union[str, list[str]]]) -> list:
+def _fetch_all_building_ids(inputs: Inputs) -> list:
     """Fetch building IDs for all states and upgrade IDs."""
     bldg_ids = []
     for state in inputs["states"]:
@@ -516,8 +475,8 @@ def _fetch_all_building_ids(inputs: Mapping[str, Union[str, list[str]]]) -> list
         for upgrade_id in inputs["upgrade_ids"]:
             bldg_id = fetch_bldg_ids(
                 str(inputs["product"]),
-                str(inputs["release_year"]),
-                str(inputs["weather_file"]),
+                inputs["release_year"],
+                inputs["weather_file"],
                 str(inputs["release_version"]),
                 str(state),
                 str(upgrade_id),
@@ -638,7 +597,7 @@ def _select_bldg_ids_for_sample(bldg_ids: list, sample: Union[str, None]) -> lis
     return selected_per_group
 
 
-def _validate_required_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
+def _validate_required_inputs(inputs: Inputs) -> Union[str, bool]:
     """Validate that all required inputs are provided."""
     if not all([
         inputs["product"],
@@ -654,7 +613,7 @@ def _validate_required_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union
     return True
 
 
-def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[str, bool]:
+def _validate_direct_inputs(inputs: Inputs):
     """Validate the direct inputs"""
     # Check required inputs
     required_check = _validate_required_inputs(inputs)
@@ -686,7 +645,7 @@ def _validate_direct_inputs(inputs: dict[str, Union[str, list[str]]]) -> Union[s
         return state_check
 
     # Check output directory
-    output_directory_validation = validate_output_directory(str(inputs["output_directory"]))
+    output_directory_validation = validate_output_directory(inputs["output_directory"])
     if output_directory_validation is not True:
         return f"Invalid output directory: {inputs['output_directory']}"
 
@@ -708,11 +667,11 @@ def _get_version() -> str:
         return "unknown"
 
 
-def _process_data_download(inputs: dict[str, Union[str, list[str]]], sample: Union[str, None] = None) -> None:
+def _process_data_download(inputs: Inputs, sample: Union[str, None] = None) -> None:
     """Process data download based on available file types."""
     available_file_types, unavailable_file_types = _check_unavailable_file_types(inputs)
     if "weather" in inputs["file_type"]:
-        available_weather_states, unavailable_weather_states = _check_weather_map_available_states(inputs)
+        available_weather_states, unavailable_weather_states = check_weather_map_available_states(inputs)
     else:
         available_weather_states = None
 
