@@ -103,9 +103,7 @@ def test_fetch_bldg_ids():
 
 
 def test_building_id_config():
-    res_2022_tmy3_1 = {"release_number": "1", "release_year": "2022", "res_com": "resstock", "weather": "tmy3"}
-
-    bldg = BuildingID(bldg_id=7, **res_2022_tmy3_1)
+    bldg = BuildingID(bldg_id=7, release_number="1", release_year="2022", res_com="resstock", weather="tmy3")
     assert bldg.bldg_id == 7
     assert bldg.upgrade_id == "0"
     assert bldg.release_number == "1"

@@ -5,6 +5,9 @@ from typing import Union, cast
 
 from rich.panel import Panel
 
+from buildstock_fetch.types import ReleaseYear, ResCom, Weather
+
+from .inputs import Inputs
 from .questionary import console
 
 BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json"))
@@ -99,11 +102,13 @@ def get_upgrade_ids_options(release_name: str) -> list[str]:
     return cast(list[str], available_upgrade_ids)
 
 
-def get_product_type_options() -> list[str]:
+def get_product_type_options() -> list[ResCom]:
     return ["resstock", "comstock"]
 
 
-def get_release_years_options(available_releases: list[str], product_type: str) -> tuple[list[str], list[str]]:
+def get_release_years_options(
+    available_releases: list[str], product_type: ResCom
+) -> tuple[list[str], list[ReleaseYear]]:
     # Find available release years
     parsed_releases = parse_buildstock_releases(available_releases)
     available_releases = filter_available_releases(list(parsed_releases.keys()), product_type=product_type)
@@ -114,8 +119,8 @@ def get_release_years_options(available_releases: list[str], product_type: str) 
 
 
 def get_weather_options(
-    available_releases: list[str], product_type: str, release_year: str
-) -> tuple[list[str], list[str]]:
+    available_releases: list[str], product_type: ResCom, release_year: ReleaseYear
+) -> tuple[list[str], list[Weather]]:
     parsed_releases = parse_buildstock_releases(available_releases)
     available_releases = filter_available_releases(
         list(parsed_releases.keys()), product_type=product_type, release_year=release_year
@@ -130,7 +135,7 @@ def get_weather_options(
 
 
 def get_release_versions_options(
-    available_releases: list[str], product_type: str, release_year: str, weather_file: str
+    available_releases: list[str], product_type: ResCom, release_year: ReleaseYear, weather_file: Weather
 ) -> tuple[list[str], list[str]]:
     parsed_releases = parse_buildstock_releases(available_releases)
     available_releases = filter_available_releases(
@@ -158,11 +163,54 @@ def get_release_versions_options(
     return available_releases, ordered_release_versions
 
 
+def check_weather_file_availability(
+    inputs: Inputs,
+    available_file_types: list[str],
+    selected_unavailable_file_types: list[str],
+) -> None:
+    """Check weather file availability and update file type lists."""
+    available_states, unavailable_states = check_weather_map_available_states(inputs)
+
+    if len(unavailable_states) > 0:
+        selected_unavailable_file_types.append("weather")
+        if len(unavailable_states) == len(inputs["states"]) and "weather" in available_file_types:
+            available_file_types.remove("weather")
+
+    if len(unavailable_states) > 0:
+        console.print(
+            f"\n[yellow]The weather map is not available for the following states: {unavailable_states}[/yellow]"
+        )
+        console.print(
+            "\n[yellow]Please first build the weather station mapping for this state using the weather station mapping CLI tool (just build-weather-station-map)[/yellow]"
+        )
+    for state in unavailable_states:
+        selected_unavailable_file_types.append(f"weather: {state}")
+
+
+def check_weather_map_available_states(inputs: Inputs) -> tuple[list[str], list[str]]:
+    """Check if the weather map is available for the given release and state."""
+    available_states: list[str] = []
+    unavailable_states: list[str] = []
+    product_short_name = "res" if inputs["product"] == "resstock" else "com"
+    release_name = f"{product_short_name}_{inputs['release_year']}_{inputs['weather_file']}_{inputs['release_version']}"
+    selected_release = get_all_available_releases()[release_name]
+    if "weather_map_available_states" not in selected_release:
+        unavailable_states = inputs["states"] if isinstance(inputs["states"], list) else [inputs["states"]]
+    else:
+        unavailable_states = [
+            state for state in inputs["states"] if state not in selected_release["weather_map_available_states"]
+        ]
+        available_states = [
+            state for state in inputs["states"] if state in selected_release["weather_map_available_states"]
+        ]
+    return available_states, unavailable_states
+
+
 def filter_available_releases(
     available_releases: list[str],
-    product_type: Union[str, None] = None,
-    release_year: Union[str, None] = None,
-    weather_file: Union[str, None] = None,
+    product_type: ResCom | None = None,
+    release_year: ReleaseYear | None = None,
+    weather_file: Weather | None = None,
     release_version: Union[str, None] = None,
 ) -> list[str]:
     parsed_releases = parse_buildstock_releases(available_releases)

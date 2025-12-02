@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from enum import EnumType
-from typing import Any, Callable, TypeVar, cast, overload
+from typing import Callable, TypeVar, cast
 
 import questionary
 import typer
@@ -15,33 +15,11 @@ E = TypeVar("E", bound=EnumType)
 T = TypeVar("T")
 
 
-def select_str(message: str, choices: Sequence[S]) -> S | None:
+def select(message: str, choices: Sequence[S]) -> S | None:
     return cast(S | None, questionary.select(message, choices).ask())
 
 
-def select_enum(message: str, choices: type[E]) -> E | None:
-    return questionary.select(
-        message, choices=[questionary.Choice(title=str(_.value()), value=_) for _ in choices]
-    ).ask()
-
-
-@overload
-def select(message: str, choices: Sequence[S]) -> S | None: ...
-
-
-@overload
-def select(message: str, choices: type[E]) -> E | None: ...
-
-
-def select(message: str, choices: Any) -> Any:
-    if type(choices) is EnumType:
-        return select_enum(message, choices)
-    if hasattr(choices, "__iter__") and all(isinstance(_, str) for _ in choices):
-        return select_str(message, choices)
-    raise ValueError("choices")
-
-
-def checkbox(
+def checkbox_str(
     message: str,
     choices: Sequence[S],
     instruction="Use spacebar to select/deselect options, 'a' to select all, 'i' to invert selection, enter to confirm",
