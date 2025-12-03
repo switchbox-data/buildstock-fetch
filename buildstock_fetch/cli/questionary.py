@@ -1,5 +1,4 @@
 from collections.abc import Sequence
-from enum import EnumType
 from typing import Callable, TypeVar, cast
 
 import questionary
@@ -11,7 +10,6 @@ console = Console()
 
 
 S = TypeVar("S", bound=str)
-E = TypeVar("E", bound=EnumType)
 T = TypeVar("T")
 
 
