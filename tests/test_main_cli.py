@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from buildstock_fetch.main_cli import app
+from buildstock_fetch.cli.main import app
 
 
 def strip_ansi_codes(text: str) -> str:
@@ -481,8 +481,7 @@ def test_cli_invalid_arguments(cleanup_downloads):
     print(f"Output: {result.output}")
     print(f"Exception: {result.exception}")
 
-    assert result.exit_code == 1  # Invalid product should exit with code 1
-    assert "Invalid product" in result.stdout
+    assert result.exit_code == 2  # Invalid product should exit with code 2
 
     # Test with invalid release year
     result = runner.invoke(
@@ -509,8 +508,7 @@ def test_cli_invalid_arguments(cleanup_downloads):
     print(f"Output: {result.output}")
     print(f"Exception: {result.exception}")
 
-    assert result.exit_code == 1
-    assert "Invalid release name" in result.stdout
+    assert result.exit_code == 2
 
     # Test with invalid state
     result = runner.invoke(

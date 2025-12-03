@@ -49,8 +49,8 @@ def test_package_functionality():
     # Test that we can import the main modules
     try:
         import buildstock_fetch
+        from buildstock_fetch.cli.main import app
         from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
-        from buildstock_fetch.main_cli import app
     except ImportError as e:
         raise AssertionError(f"Failed to import modules: {e}")
 

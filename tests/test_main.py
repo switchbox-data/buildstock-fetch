@@ -9,6 +9,7 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
+from buildstock_fetch.cli.availability import BUILDSTOCK_RELEASES_FILE
 from buildstock_fetch.main import (
     LOAD_CURVE_COLUMN_AGGREGATION,
     BuildingID,
@@ -22,7 +23,6 @@ from buildstock_fetch.main import (
     fetch_bldg_data,
     fetch_bldg_ids,
 )
-from buildstock_fetch.main_cli import BUILDSTOCK_RELEASES_FILE
 
 
 @pytest.fixture(scope="function")
