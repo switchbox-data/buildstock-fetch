@@ -32,7 +32,7 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-from buildstock_fetch.types import ReleaseYear, Weather
+from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
 from .building import BuildingID
 from .constants import (
@@ -91,7 +91,7 @@ def _resolve_unique_metadata_urls(bldg_ids: list[BuildingID]) -> list[str | None
 
 
 def fetch_bldg_ids(
-    product: str, release_year: ReleaseYear, weather_file: Weather, release_version: str, state: str, upgrade_id: str
+    product: ResCom, release_year: ReleaseYear, weather_file: Weather, release_version: str, state: str, upgrade_id: str
 ) -> list[BuildingID]:
     """Fetch a list of Building ID's
 

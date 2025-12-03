@@ -474,7 +474,7 @@ def _fetch_all_building_ids(inputs: Inputs) -> list:
             continue
         for upgrade_id in inputs["upgrade_ids"]:
             bldg_id = fetch_bldg_ids(
-                str(inputs["product"]),
+                inputs["product"],
                 inputs["release_year"],
                 inputs["weather_file"],
                 str(inputs["release_version"]),
@@ -613,7 +613,7 @@ def _validate_required_inputs(inputs: Inputs) -> Union[str, bool]:
     return True
 
 
-def _validate_direct_inputs(inputs: Inputs):
+def _validate_direct_inputs(inputs: Inputs) -> bool | str:
     """Validate the direct inputs"""
     # Check required inputs
     required_check = _validate_required_inputs(inputs)
