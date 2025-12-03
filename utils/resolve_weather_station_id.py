@@ -19,13 +19,13 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
-from buildstock_fetch.main import BuildingID, InvalidReleaseNameError, fetch_bldg_ids
-from buildstock_fetch.main_cli import (
-    _get_available_releases_names,
-    _get_state_options,
-    _get_upgrade_ids_options,
-    _handle_cancellation,
+from buildstock_fetch.cli.availability import (
+    get_available_releases_names,
+    get_state_options,
+    get_upgrade_ids_options,
 )
+from buildstock_fetch.cli.questionary import handle_cancellation
+from buildstock_fetch.main import BuildingID, InvalidReleaseNameError, fetch_bldg_ids
 
 # Disable SSL warnings for cleaner output
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -575,7 +575,7 @@ def download_and_extract_weather_station(bldg_id: BuildingID) -> str:
         str: Processed content from the XML file, or empty string if failed
     """
     building_data_url = bldg_id.get_building_data_url()
-    if building_data_url == "":
+    if building_data_url is None:
         raise NoBuildingDataError()
 
     # Create temporary directory for all temporary files
@@ -768,7 +768,7 @@ def _interactive_mode():
     console.print("Please select the release information and file type you would like to fetch:")
 
     # Retrieve available releases
-    available_releases = _get_available_releases_names()
+    available_releases = get_available_releases_names()
 
     selected_release_name = questionary.select("Select release name:", choices=available_releases).ask()
 
@@ -782,19 +782,19 @@ def _interactive_mode():
         raise InvalidProductError()
 
     # Retrieve upgrade ids
-    selected_upgrade_ids = _handle_cancellation(
+    selected_upgrade_ids = handle_cancellation(
         questionary.select(
             "Select upgrade id:",
-            choices=_get_upgrade_ids_options(selected_release_name),
+            choices=get_upgrade_ids_options(selected_release_name),
             instruction="Use spacebar to select/deselect options, enter to confirm",
         ).ask()
     )
 
     # Retrieve state
-    selected_states = _handle_cancellation(
+    selected_states = handle_cancellation(
         questionary.select(
             "Select state:",
-            choices=_get_state_options(),
+            choices=get_state_options(),
             instruction="Use spacebar to select/deselect options, enter to confirm",
         ).ask()
     )

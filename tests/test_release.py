@@ -49,8 +49,8 @@ def test_package_functionality():
     # Test that we can import the main modules
     try:
         import buildstock_fetch
+        from buildstock_fetch.cli.main import app
         from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
-        from buildstock_fetch.main_cli import app
     except ImportError as e:
         raise AssertionError(f"Failed to import modules: {e}")
 
@@ -61,7 +61,7 @@ def test_package_functionality():
     assert app is not None, "CLI app should be available"
 
 
-def test_run_all_tests():
+def test_slow_run_all_tests():
     """Run all tests in the test directory using pytest with the PyPI-installed package."""
 
     # Create a temporary directory for the test environment
