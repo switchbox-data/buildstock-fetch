@@ -201,6 +201,3 @@ per_rule_ignores.DEP002 = [
   "awscli",
   "xmltodict",
 ]
-
-[dependency-groups]
-dev = []
