@@ -851,22 +851,22 @@ def test_fetch_15min_load_curve(cleanup_downloads):
 
     bldg_ids = [
         BuildingID(
-            bldg_id=4849,
+            bldg_id=80963,
             release_year="2025",
             res_com="comstock",
             weather="amy2018",
             release_number="1",
             upgrade_id="0",
-            state="AK",
+            state="OH",
         ),
         BuildingID(
-            bldg_id=4850,
+            bldg_id=82148,
             release_year="2025",
             res_com="comstock",
             weather="amy2018",
             release_number="1",
             upgrade_id="0",
-            state="AK",
+            state="OH",
         ),
     ]
     file_type = ("load_curve_15min",)
@@ -1348,22 +1348,22 @@ def test_fetch_annual_load_curve(cleanup_downloads):
 
     bldg_ids = [
         BuildingID(
-            bldg_id=4849,
+            bldg_id=80963,
             release_year="2025",
             res_com="comstock",
             weather="amy2018",
             release_number="1",
             upgrade_id="0",
-            state="AK",
+            state="OH",
         ),
         BuildingID(
-            bldg_id=4850,
+            bldg_id=82148,
             release_year="2025",
             res_com="comstock",
             weather="amy2018",
             release_number="1",
             upgrade_id="0",
-            state="AK",
+            state="OH",
         ),
     ]
     file_type = ("load_curve_annual",)
