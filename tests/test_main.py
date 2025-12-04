@@ -966,7 +966,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
             state="AL",
         ),
     ]
-    file_type = ("metadata",)
+    file_type = ("load_curve_15min",)
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
@@ -974,11 +974,11 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/metadata/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/metadata/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
     ).exists()
 
     bldg_ids = [
@@ -1001,7 +1001,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
             state="ID",
         ),
     ]
-    file_type = ("metadata",)
+    file_type = ("load_curve_15min",)
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
@@ -1009,11 +1009,11 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/metadata/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/metadata/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
     ).exists()
 
     bldg_ids = [
@@ -1036,7 +1036,7 @@ def test_fetch_15min_load_curve(cleanup_downloads):
             state="IN",
         ),
     ]
-    file_type = ("metadata",)
+    file_type = ("load_curve_15min",)
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
@@ -1044,11 +1044,11 @@ def test_fetch_15min_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/metadata/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/metadata/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
     ).exists()
 
     # 2025 resstock releases
@@ -1072,14 +1072,14 @@ def test_fetch_15min_load_curve(cleanup_downloads):
             state="IA",
         ),
     ]
-    file_type = ("metadata",)
+    file_type = ("load_curve_15min",)
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     assert len(downloaded_paths) == 1
     assert len(failed_downloads) == 0
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_ids[0].get_release_name()}/load_curve_15min/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/{str(bldg_ids[0].bldg_id)!s}-{int(bldg_ids[0].upgrade_id)!s}.parquet"
     ).exists()
 
     bldg_ids = [
@@ -1120,14 +1120,27 @@ def test_fetch_15min_load_curve(cleanup_downloads):
             state="MO",
         ),
     ]
-    file_type = ("metadata",)
+    file_type = ("load_curve_15min",)
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
+    bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+    ).exists()
+    bldg_id = bldg_ids[1]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+    ).exists()
+    bldg_id = bldg_ids[2]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+    ).exists()
+    bldg_id = bldg_ids[3]
+    assert Path(
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
     ).exists()
 
 
