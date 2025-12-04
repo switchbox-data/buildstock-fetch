@@ -178,12 +178,12 @@ class BuildingID:
 
     def _get_building_data_url_2025_upgrade_string(self) -> str:
         """Get upgrade string for 2025 building data URLs."""
-        if self.res_com == "resstock" and self.weather == "amy2018" and self.release_number == 1:
+        if self.res_com == "resstock" and self.weather == "amy2018" and self.release_number == "1":
             return str(int(self.upgrade_id))
         if self.res_com == "comstock" and (
-            (self.weather == "amy2012" and self.release_number == 2)
-            or (self.weather == "amy2018" and self.release_number == 1)
-            or (self.weather == "amy2018" and self.release_number == 2)
+            (self.weather == "amy2012" and self.release_number == "2")
+            or (self.weather == "amy2018" and self.release_number == "1")
+            or (self.weather == "amy2018" and self.release_number == "2")
         ):
             return str(int(self.upgrade_id)).zfill(2)
         return str(int(self.upgrade_id)).zfill(2)

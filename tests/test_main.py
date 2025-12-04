@@ -299,10 +299,10 @@ def test_fetch_bldg_data(cleanup_downloads):
     assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00.xml"
+        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg{str(bldg_ids[0].bldg_id).zfill(7)}-up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}.xml"
     ).exists()
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00_schedule.csv"
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg{str(bldg_ids[0].bldg_id).zfill(7)}-up{str(int(bldg_ids[0].upgrade_id)).zfill(2)}_schedule.csv"
     ).exists()
 
     # Test 2025 resstock amy2012 v1 release - should raise NoBuildingDataError
