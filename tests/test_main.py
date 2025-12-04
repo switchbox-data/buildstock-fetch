@@ -1576,7 +1576,7 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
     assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/load_curve_annual/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
+        f"data/{bldg_ids[0].get_release_name()}/load_curve_annual/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/{bldg_ids[0].get_annual_load_curve_filename()}"
     ).exists()
 
     bldg_ids = [
