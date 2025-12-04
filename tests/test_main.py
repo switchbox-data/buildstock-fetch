@@ -1373,11 +1373,11 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     # Test 2025 comstock release
@@ -1427,19 +1427,19 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[2]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[3]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     # Test 2025 comstock release
@@ -1471,11 +1471,11 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     bldg_ids = [
@@ -1506,11 +1506,11 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     bldg_ids = [
@@ -1541,11 +1541,11 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
     # 2025 resstock releases
@@ -1625,19 +1625,19 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[1]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[2]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
     bldg_id = bldg_ids[3]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_annual_load_curve_filename()}"
     ).exists()
 
 
