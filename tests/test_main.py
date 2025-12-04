@@ -586,6 +586,85 @@ def test_fetch_metadata(cleanup_downloads):
         f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
     ).exists()
 
+    # 2025 resstock releases
+    bldg_ids = [
+        BuildingID(
+            bldg_id=521099,
+            release_year="2025",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="IA",
+        ),
+        BuildingID(
+            bldg_id=7345,
+            release_year="2025",
+            res_com="resstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="IA",
+        ),
+    ]
+    file_type = ("metadata",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 1
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+    ).exists()
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=299072,
+            release_year="2025",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="MI",
+        ),
+        BuildingID(
+            bldg_id=49249,
+            release_year="2025",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="MI",
+        ),
+        BuildingID(
+            bldg_id=185225,
+            release_year="2025",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="MO",
+        ),
+        BuildingID(
+            bldg_id=65529,
+            release_year="2025",
+            res_com="resstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="1",
+            state="MO",
+        ),
+    ]
+    file_type = ("metadata",)
+    output_dir = Path("data")
+
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/metadata/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/metadata.parquet"
+    ).exists()
+
 
 def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
     METADATA_COLUMNS = ["bldg_id", "upgrade", "in."]
