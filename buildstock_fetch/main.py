@@ -195,11 +195,18 @@ class BuildingID:
         ):
             return ""
         upgrade_string = self._get_building_data_url_2025_upgrade_string()
-        return (
-            f"{self.base_url}"
-            f"building_energy_models/upgrade={upgrade_string}/"
-            f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
-        )
+        if self.res_com == "resstock":
+            return (
+                f"{self.base_url}"
+                f"building_energy_models/upgrade={upgrade_string}/"
+                f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.zip"
+            )
+        else:
+            return (
+                f"{self.base_url}"
+                f"building_energy_models/upgrade={upgrade_string}/"
+                f"bldg{str(self.bldg_id).zfill(7)}-up{str(int(self.upgrade_id)).zfill(2)}.osm.gz"
+            )
 
     def get_building_data_url(self) -> str:
         """Generate the S3 download URL for this building."""

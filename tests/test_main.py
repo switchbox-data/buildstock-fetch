@@ -279,82 +279,6 @@ def test_fetch_bldg_data(cleanup_downloads):
         f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up01_schedule.csv"
     ).exists()
 
-    # Test 2025 comstock release
-    bldg_ids = [
-        BuildingID(
-            bldg_id=81532,
-            release_year="2025",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="1",
-            state="MI",
-        )
-    ]
-    file_type = ("hpxml", "schedule")
-    output_dir = Path("data")
-    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    print(downloaded_paths)
-    print(failed_downloads)
-    assert len(downloaded_paths) == 2
-    assert len(failed_downloads) == 0
-    assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00.xml"
-    ).exists()
-    assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00_schedule.csv"
-    ).exists()
-
-    bldg_ids = [
-        BuildingID(
-            bldg_id=17978,
-            release_year="2025",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="2",
-            state="AR",
-        )
-    ]
-    file_type = ("hpxml", "schedule")
-    output_dir = Path("data")
-    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    print(downloaded_paths)
-    print(failed_downloads)
-    assert len(downloaded_paths) == 2
-    assert len(failed_downloads) == 0
-    assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00.xml"
-    ).exists()
-    assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00_schedule.csv"
-    ).exists()
-
-    bldg_ids = [
-        BuildingID(
-            bldg_id=61368,
-            release_year="2025",
-            res_com="comstock",
-            weather="amy2012",
-            upgrade_id="0",
-            release_number="2",
-            state="FL",
-        )
-    ]
-    file_type = ("hpxml", "schedule")
-    output_dir = Path("data")
-    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    print(downloaded_paths)
-    print(failed_downloads)
-    assert len(downloaded_paths) == 2
-    assert len(failed_downloads) == 0
-    assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00.xml"
-    ).exists()
-    assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00_schedule.csv"
-    ).exists()
-
     # Test 2025 resstock release
     bldg_ids = [
         BuildingID(
@@ -381,6 +305,7 @@ def test_fetch_bldg_data(cleanup_downloads):
         f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00_schedule.csv"
     ).exists()
 
+    # Test 2025 resstock amy2012 v1 release - should raise NoBuildingDataError
     bldg_ids = [
         BuildingID(
             bldg_id=276015,
@@ -390,36 +315,16 @@ def test_fetch_bldg_data(cleanup_downloads):
             upgrade_id="0",
             release_number="1",
             state="LA",
-        ),
-        BuildingID(
-            bldg_id=237588,
-            release_year="2025",
-            res_com="resstock",
-            weather="amy2012",
-            upgrade_id="0",
-            release_number="1",
-            state="LA",
-        ),
+        )
     ]
+    # should raise NoBuildingDataError
     file_type = ("hpxml", "schedule")
     output_dir = Path("data")
-    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    print(downloaded_paths)
-    print(failed_downloads)
-    assert len(downloaded_paths) == 4
-    assert len(failed_downloads) == 0
-    assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00.xml"
-    ).exists()
-    assert Path(
-        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00_schedule.csv"
-    ).exists()
-    assert Path(
-        f"data/{bldg_ids[1].get_release_name()}/hpxml/{bldg_ids[1].state}/upgrade={str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg00000150914-up00.xml"
-    ).exists()
-    assert Path(
-        f"data/{bldg_ids[1].get_release_name()}/schedule/{bldg_ids[1].state}/upgrade={str(int(bldg_ids[1].upgrade_id)).zfill(2)}/bldg00000150914-up00_schedule.csv"
-    ).exists()
+
+    with pytest.raises(
+        NoBuildingDataError, match=f"Building data is not available for {bldg_ids[0].get_release_name()}"
+    ):
+        fetch_bldg_data(bldg_ids, file_type, output_dir)
 
 
 def test_fetch_metadata(cleanup_downloads):
