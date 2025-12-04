@@ -148,23 +148,13 @@ The docs are served by Github Pages out of the `gh-pages` branch. We do not publ
 
 ### Releasing the library
 
-To build the package into a wheel file, type:
+To release the latest version of the library, first update the version number in the `pyproject.toml` and `__init__.py` files.
 
-```bash
-just build
-```
+Next, navigate to the library's [publish new release page](https://github.com/switchbox-data/buildstock-fetch/releases/new).
 
-To publish a release to PyPI using [twine](https://pypi.org/project/twine/):
+Under the `Tag: Select tag` dragdown menu, enter the latest version number accordingly and select `Create new tag`
 
-```bash
-just publish
-```
-
-To do both in one go:
-
-```bash
-just build-and-publish
-```
+Include relevant notes for the release inside the `Write` textbox. Once finished, click the `Publish release` button at the bottom to publish the latest release.
 
 ---
 
