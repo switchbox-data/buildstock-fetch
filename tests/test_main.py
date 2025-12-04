@@ -279,6 +279,82 @@ def test_fetch_bldg_data(cleanup_downloads):
         f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg0000007-up01_schedule.csv"
     ).exists()
 
+    # Test 2025 comstock release
+    bldg_ids = [
+        BuildingID(
+            bldg_id=81532,
+            release_year="2025",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="1",
+            state="MI",
+        )
+    ]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00.xml"
+    ).exists()
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00_schedule.csv"
+    ).exists()
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=17978,
+            release_year="2025",
+            res_com="comstock",
+            weather="amy2018",
+            upgrade_id="0",
+            release_number="2",
+            state="AR",
+        )
+    ]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00.xml"
+    ).exists()
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00_schedule.csv"
+    ).exists()
+
+    bldg_ids = [
+        BuildingID(
+            bldg_id=61368,
+            release_year="2025",
+            res_com="comstock",
+            weather="amy2012",
+            upgrade_id="0",
+            release_number="2",
+            state="FL",
+        )
+    ]
+    file_type = ("hpxml", "schedule")
+    output_dir = Path("data")
+    downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
+    print(downloaded_paths)
+    print(failed_downloads)
+    assert len(downloaded_paths) == 2
+    assert len(failed_downloads) == 0
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/hpxml/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00.xml"
+    ).exists()
+    assert Path(
+        f"data/{bldg_ids[0].get_release_name()}/schedule/{bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/bldg00000150914-up00_schedule.csv"
+    ).exists()
+
 
 def test_fetch_metadata(cleanup_downloads):
     METADATA_COLUMNS = ["bldg_id", "upgrade", "in."]
