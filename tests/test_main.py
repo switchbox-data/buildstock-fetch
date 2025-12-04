@@ -1920,7 +1920,7 @@ def _analyze_aggregation_data(load_curve_15min, load_curve_aggregate, column_agg
             matching_15min = load_curve_15min.filter(pl.col("timestamp").dt.strftime("%Y-%m") == grouping_key)
 
         # Verify aggregation values
-        _verify_aggregation_values(matching_15min, row, column_aggregations)
+        _verify_aggregation_values(matching_15min, row, column_aggregations)  # pyright: ignore[reportPossiblyUnboundVariable]
 
 
 def test_aggregation_functions(cleanup_downloads):

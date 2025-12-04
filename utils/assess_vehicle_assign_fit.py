@@ -1,4 +1,5 @@
 # mypy: disable-error-code="import-untyped"  # scikit-learn types
+# type: ignore[reportAssignmentType]
 import os
 
 import numpy as np

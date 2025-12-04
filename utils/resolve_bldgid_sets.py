@@ -23,13 +23,14 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 output_file_path: str = os.path.join(PROJECT_ROOT, "buildstock_fetch", "data", "buildstock_releases.json")
 
 
-class BuildStockRelease(TypedDict):
+class BuildStockRelease(TypedDict, total=False):
     release_year: str
     res_com: str
     weather: str
     release_number: str
     upgrade_ids: list[str]
     available_data: list[str]
+    trip_schedule_states: dict[str, list[str]]
 
 
 class CommonPrefix(TypedDict):
@@ -513,7 +514,7 @@ def append_avail_trip_schedules(
     trip_schedules = _find_trip_schedules(sb_bucket_name, sb_prefix)
     common_keys = [key for key in trip_schedules if key in releases]
     for key in common_keys:
-        releases[key]["available_data"].append("trip_schedules")
+        releases[key].setdefault("available_data", []).append("trip_schedules")
         releases[key]["trip_schedule_states"] = trip_schedules[key]
 
 

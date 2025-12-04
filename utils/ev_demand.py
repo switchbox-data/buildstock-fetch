@@ -84,14 +84,14 @@ class EVDemandConfig:
         if self.pums_path is None:
             self.pums_path = f"{BASEPATH}/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
         if self.output_dir is None:
-            self.output_dir = f"{BASEPATH}/ev_data/outputs/{self.state}_{self.release}"
+            self.output_dir = Path(f"{BASEPATH}/ev_data/outputs/{self.state}_{self.release}")
 
 
 @dataclass
 class VehicleProfile:
     """Represents a vehicle's driving profile parameters."""
 
-    bldg_id: int
+    bldg_id: str
     vehicle_id: int
     weekday_departure_hour: list[int] = field(default_factory=list)  # List of departure hours for each weekday trip
     weekday_arrival_hour: list[int] = field(default_factory=list)  # List of arrival hours for each weekday trip
@@ -256,13 +256,13 @@ class EVDemandCalculator:
 
         return self.vehicle_ownership_model
 
-    def _prepare_nhts_cache(self) -> None:
+    def _prepare_nhts_cache(self) -> dict:
         """
         Pre-group NHTS data by key attributes to avoid repeated filtering.
         This eliminates the need for collect() calls in find_best_matches().
         """
         if self._nhts_cache is not None:
-            return  # Already cached
+            return self._nhts_cache  # Already cached
 
         logging.info("Preparing NHTS data cache to optimize matching...")
 
@@ -277,6 +277,8 @@ class EVDemandCalculator:
         self._nhts_cache = self._build_matching_cache(nhts_df)
 
         logging.info("NHTS cache prepared successfully")
+
+        return self._nhts_cache
 
     def _build_matching_cache(self, df: pl.DataFrame) -> dict:
         """Build cache dictionary for fast matching lookups."""
@@ -354,6 +356,9 @@ class EVDemandCalculator:
         # Step 3: Scale features
         features_scaled = self.scaler.transform(features_encoded.to_numpy())
 
+        if self.vehicle_ownership_model is None:
+            raise ValueError("vehicle_ownership_model")
+
         # Step 4: Make predictions
         predictions_encoded = self.vehicle_ownership_model.predict(features_scaled)
 
@@ -386,11 +391,7 @@ class EVDemandCalculator:
             Tuple of (match_type, list of matched_vehicle_ids)
         """
         # Ensure cache is prepared
-        if self._nhts_cache is None:
-            self._prepare_nhts_cache()
-
-        # Use the single cache (no weekday/weekend separation for matching)
-        cache = self._nhts_cache
+        cache = self._prepare_nhts_cache()
 
         # Try exact match first: (income, occupants, vehicles)
         exact_key = (target_income, target_occupants, target_vehicles)
@@ -520,7 +521,7 @@ class EVDemandCalculator:
     ) -> pl.DataFrame:
         """Generate trip schedules for all days in the date range as a DataFrame."""
         if rng is None:
-            rng = np.random  # Use global numpy random if no rng provided
+            rng = np.random.random.__self__  # Use global numpy random if no rng provided
 
         # Pre-compute constants (move outside loops)
         time_offsets = np.array([-2, -1, 0, 1, 2])
@@ -598,6 +599,12 @@ class EVDemandCalculator:
             )
 
             # Vectorized operations for all trips in this day
+            if departures is None:
+                raise ValueError("departures")
+            if arrivals is None:
+                raise ValueError("arrivals")
+            if base_miles_array is None:
+                raise ValueError("base_miles_array")
             selected_departures = departures[trip_indices]
             selected_arrivals = arrivals[trip_indices]
             selected_base_miles = base_miles_array[trip_indices]
@@ -876,6 +883,8 @@ def main():
             ]).sort(["bldg_id", "vehicle_id", "date"])
 
             # Save locally (default behavior)
+            if config.output_dir is None:
+                raise ValueError("config.output_dir")
             os.makedirs(config.output_dir, exist_ok=True)
             local_file_path = f"{config.output_dir}/{file_name}"
             final_trip_schedules.write_parquet(local_file_path, partition_by=["release", "state"])
