@@ -1,16 +1,23 @@
 import json
+import logging
 import os
 import re
 import tempfile
 import time
 import zipfile
-from importlib.resources import files
 from pathlib import Path
 from typing import Any, TypedDict
 
 import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 output_file_path: str = os.path.join(PROJECT_ROOT, "buildstock_fetch", "data", "buildstock_releases.json")
@@ -30,8 +37,10 @@ class CommonPrefix(TypedDict):
     Prefix: str
 
 
-DATA_DIR = Path(str(files("buildstock_fetch").joinpath("data")))
-RELEASE_JSON_FILE = Path(str(DATA_DIR.joinpath("buildstock_releases.json")))
+# Use source directory, not installed package location
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_DIR = PROJECT_ROOT / "buildstock_fetch" / "data"
+RELEASE_JSON_FILE = DATA_DIR / "buildstock_releases.json"
 
 
 def _find_model_directory(s3_client: Any, bucket_name: str, prefix: str) -> str:
@@ -70,6 +79,42 @@ def _find_model_directory(s3_client: Any, bucket_name: str, prefix: str) -> str:
     return ""
 
 
+def _find_metadata_directory(s3_client: Any, bucket_name: str, prefix: str) -> str:
+    """
+    Find the metadata directory path using breadth-first search.
+    """
+    paginator = s3_client.get_paginator("list_objects_v2")
+    # Queue contains tuples of (prefix, depth) where depth starts at 0
+    # Ensure prefix ends with / for proper directory listing
+    directories_to_search = [(prefix.rstrip("/") + "/", 0)]
+
+    while directories_to_search:
+        current_prefix, current_depth = directories_to_search.pop(0)  # Get next directory to search
+
+        # Stop if we've gone too deep
+        if current_depth >= 3:
+            continue
+
+        # List all directories at current level
+        pages = paginator.paginate(Bucket=bucket_name, Prefix=current_prefix, Delimiter="/")
+
+        for page in pages:
+            # First check directories at this level
+            if "CommonPrefixes" in page:
+                for prefix_obj in page["CommonPrefixes"]:
+                    dir_path = str(prefix_obj["Prefix"])  # Keep the trailing slash for next level search
+                    dir_name = dir_path.rstrip("/").split("/")[-1]
+
+                    # If we found the metadata directory, return its path
+                    if "metadata" in dir_name.lower():
+                        return dir_path.rstrip("/")  # Remove trailing slash from final result
+
+                    # Add this directory to be searched next, with increased depth
+                    directories_to_search.append((dir_path, current_depth + 1))
+
+    return ""
+
+
 def _get_upgrade_ids(s3_client: Any, bucket_name: str, model_path: str) -> list[str]:
     """
     Get the list of upgrade IDs from the building_energy_model directory.
@@ -93,6 +138,79 @@ def _get_upgrade_ids(s3_client: Any, bucket_name: str, model_path: str) -> list[
                     upgrade_ids.append(upgrade_num)
 
     return sorted(upgrade_ids, key=int)  # Sort numerically
+
+
+def _check_has_upgrade_files(paginator: Any, bucket_name: str, dir_path: str) -> bool:
+    """Check if a directory contains any files with 'upgrade' or 'baseline' in the name."""
+    dir_pages = paginator.paginate(Bucket=bucket_name, Prefix=dir_path, Delimiter="/")
+    for page in dir_pages:
+        if "Contents" in page:
+            for obj in page["Contents"]:
+                file_name = obj["Key"].split("/")[-1]
+                if "upgrade" in file_name.lower() or "baseline" in file_name.lower():
+                    return True
+    return False
+
+
+def _extract_upgrade_ids_from_directory(
+    paginator: Any, bucket_name: str, dir_path: str, upgrade_pattern: re.Pattern[str], upgrade_ids: set[str]
+) -> None:
+    """Extract upgrade IDs from all files in a directory. Handles both upgrade and baseline files."""
+    file_pages = paginator.paginate(Bucket=bucket_name, Prefix=dir_path, Delimiter="/")
+    for file_page in file_pages:
+        if "Contents" in file_page:
+            for obj in file_page["Contents"]:
+                file_key = obj["Key"]
+                if file_key.endswith("/"):
+                    continue
+                file_name = file_key.split("/")[-1]
+                # Check for baseline files - add upgrade_id "0"
+                if "baseline" in file_name.lower():
+                    upgrade_ids.add("0")
+                    continue
+                # Check for upgrade files - extract the number
+                match = upgrade_pattern.search(file_name)
+                if match:
+                    upgrade_ids.add(match.group(1))
+
+
+def _get_first_subdirectory(paginator: Any, bucket_name: str, dir_path: str) -> str | None:
+    """Get the first subdirectory path from a directory, or None if no subdirectories exist."""
+    dir_pages = paginator.paginate(Bucket=bucket_name, Prefix=dir_path, Delimiter="/")
+    for page in dir_pages:
+        if page.get("CommonPrefixes"):
+            return page["CommonPrefixes"][0]["Prefix"]
+    return None
+
+
+def _get_upgrade_ids_from_metadata(s3_client: Any, bucket_name: str, metadata_path: str) -> list[str]:
+    """
+    Get the list of upgrade IDs from the metadata directory.
+    Performs depth-first search: follows the first subdirectory at each level until finding
+    a directory with upgrade files, then processes all files in that directory and returns.
+    The upgrade number is in the form "...upgrade%d..." where %d is a number directly after "upgrade".
+    """
+    if not metadata_path:
+        return []
+
+    upgrade_ids: set[str] = set()
+    paginator = s3_client.get_paginator("list_objects_v2")
+    upgrade_pattern = re.compile(r"upgrade(\d+)", re.IGNORECASE)
+
+    def search_directory(dir_path: str) -> bool:
+        """
+        Search a directory depth-first: check files first, then recurse into first subdirectory.
+        Returns True if upgrade files were found and processed, False otherwise.
+        """
+        if _check_has_upgrade_files(paginator, bucket_name, dir_path):
+            _extract_upgrade_ids_from_directory(paginator, bucket_name, dir_path, upgrade_pattern, upgrade_ids)
+            return True
+
+        first_subdir = _get_first_subdirectory(paginator, bucket_name, dir_path)
+        return first_subdir is not None and search_directory(first_subdir)
+
+    search_directory(metadata_path + "/")
+    return sorted(upgrade_ids, key=int)
 
 
 def _process_zip_file(
@@ -247,9 +365,12 @@ def _find_available_data(s3_client: Any, bucket_name: str, prefix: str) -> list[
     queue = [(prefix, 0)]
     visited = set()
 
+    print("Current prefix: ", prefix)
+
     while queue and len(expected_dirs) > 0:
         current_prefix, depth = queue.pop(0)
-        if depth > 1 or current_prefix in visited:
+        file_depth = 2 if "2024/resstock_dataset_2024.1" in current_prefix else 1
+        if depth > file_depth or current_prefix in visited:
             continue
 
         visited.add(current_prefix)
@@ -294,7 +415,12 @@ def _find_upgrade_ids(s3_client: Any, bucket_name: str, prefix: str) -> list[str
         return ["0"]
 
     model_path = _find_model_directory(s3_client, bucket_name, prefix)
-    upgrade_ids = _get_upgrade_ids(s3_client, bucket_name, model_path)
+    # If the model path is empty, find the metadata path
+    if model_path == "":
+        metadata_path = _find_metadata_directory(s3_client, bucket_name, prefix)
+        upgrade_ids = _get_upgrade_ids_from_metadata(s3_client, bucket_name, metadata_path)
+    else:
+        upgrade_ids = _get_upgrade_ids(s3_client, bucket_name, model_path)
     return upgrade_ids
 
 
@@ -392,6 +518,79 @@ def append_avail_trip_schedules(
         releases[key]["trip_schedule_states"] = trip_schedules[key]
 
 
+def _generate_release_key(match: re.Match[str]) -> str:
+    """
+    Generate a release key from a regex match.
+
+    Args:
+        match: Regex match object from pattern matching
+
+    Returns:
+        str: Release key in format {res/com}_{release_year}_{weather}_{release_number}
+    """
+    # Check if this is the 2024 pattern by looking at the pattern itself
+    if "2024/resstock_dataset_2024.1" in match.string:
+        release_year, res_com_type, _, release_number = match.groups()
+        weather = "tmy3"
+    else:
+        release_year, res_com_type, weather, release_number = match.groups()
+
+    return f"{res_com_type}_{release_year}_{weather}_{release_number}"
+
+
+def _process_release_path(
+    s3_client: Any,
+    bucket_name: str,
+    prefix: str,
+    release_path: str,
+    pattern: str,
+    pattern_2024_resstock_tmy3_1: str,
+    releases: dict[str, BuildStockRelease],
+    seen_combinations: set[tuple[str, str, str, str]],
+) -> None:
+    """
+    Process a single release path and add it to releases if it doesn't already exist.
+
+    Args:
+        s3_client: Boto3 S3 client
+        bucket_name: Name of the S3 bucket
+        prefix: Base prefix path
+        release_path: Full release path to process
+        pattern: Standard regex pattern string for matching releases
+        pattern_2024_resstock_tmy3_1: Special pattern string for 2024 ResStock TMY3 release 1
+        releases: Dictionary of releases to update
+        seen_combinations: Set of seen release combinations
+    """
+    # Try to match the pattern against the full path
+    relative_path = release_path.replace(prefix, "").lstrip("/")
+
+    # Check for 2024 ResStock TMY3 release 1 pattern first
+    match = re.match(pattern_2024_resstock_tmy3_1, relative_path)
+    if match:
+        # Generate key and check if release already exists
+        key = _generate_release_key(match)
+        if key in releases:
+            logger.info(f"Skipping existing release: {key}")
+            return
+
+        available_data = _find_available_data(s3_client, bucket_name, release_path)
+        _process_release(s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data)
+        return
+
+    # Then check for standard pattern
+    match = re.match(pattern, relative_path)
+
+    if match:
+        # Generate key and check if release already exists
+        key = _generate_release_key(match)
+        if key in releases:
+            logger.info(f"Skipping existing release: {key}")
+            return
+
+        available_data = _find_available_data(s3_client, bucket_name, release_path)
+        _process_release(s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data)
+
+
 def resolve_bldgid_sets(
     bucket_name: str = "oedi-data-lake",
     prefix: str = "nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock",
@@ -400,6 +599,7 @@ def resolve_bldgid_sets(
     """
     Get URLs containing 'building_energy_models' from the NREL S3 bucket.
     Parses the URL structure to extract available releases.
+    Only processes releases that don't already exist in the output file.
 
     Args:
         bucket_name (str): Name of the S3 bucket
@@ -413,11 +613,28 @@ def resolve_bldgid_sets(
             Each release includes the path to its building_energy_model directory
             and the list of upgrade IDs available for that release.
     """
+    # Ensure data directory exists
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Using data directory: {DATA_DIR}")
+    logger.info(f"Output file will be: {RELEASE_JSON_FILE}")
+
+    # Load existing releases from file if it exists
+    releases: dict[str, BuildStockRelease] = {}
+    initial_count = 0
+    if RELEASE_JSON_FILE.exists():
+        try:
+            with open(RELEASE_JSON_FILE, encoding="utf-8") as f:
+                releases = json.load(f)
+            initial_count = len(releases)
+            logger.info(f"Loaded {initial_count} existing releases from {RELEASE_JSON_FILE}")
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Could not load existing releases file: {e}. Starting fresh.")
+    else:
+        logger.info("No existing releases file found, starting fresh.")
+
     # Initialize S3 client with unsigned requests (for public buckets)
     s3_client = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
-    # Dictionary to store releases
-    releases: dict[str, BuildStockRelease] = {}
     # Set to track unique combinations
     seen_combinations: set[tuple[str, str, str, str]] = set()
 
@@ -447,39 +664,45 @@ def resolve_bldgid_sets(
 
                 for release_prefix in release_page["CommonPrefixes"]:
                     release_path = release_prefix["Prefix"].rstrip("/")
-
-                    # Try to match the pattern against the full path
-                    relative_path = release_path.replace(prefix, "").lstrip("/")
-
-                    # Check for 2024 ResStock TMY3 release 1 pattern first
-                    match = re.match(pattern_2024_resstock_tmy3_1, relative_path)
-                    if match:
-                        available_data = _find_available_data(s3_client, bucket_name, release_path)
-                        _process_release(
-                            s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data
-                        )
-                        continue
-
-                    # Then check for standard pattern
-                    match = re.match(pattern, relative_path)
-
-                    if match:
-                        available_data = _find_available_data(s3_client, bucket_name, release_path)
-                        _process_release(
-                            s3_client, bucket_name, release_path, match, seen_combinations, releases, available_data
-                        )
+                    _process_release_path(
+                        s3_client,
+                        bucket_name,
+                        prefix,
+                        release_path,
+                        pattern,
+                        pattern_2024_resstock_tmy3_1,
+                        releases,
+                        seen_combinations,
+                    )
+    # Update trip schedules for all releases (including existing ones)
     append_avail_trip_schedules(releases)
+
+    # Count new releases added
+    new_releases_count = len(releases) - initial_count
+
+    if new_releases_count > 0:
+        logger.info(f"Added {new_releases_count} new release(s)")
+    else:
+        logger.info("No new releases found")
 
     # Save to JSON file with consistent formatting
     with open(RELEASE_JSON_FILE, "w", encoding="utf-8", newline="\n") as f:
         json.dump(releases, f, indent=2, sort_keys=False, ensure_ascii=False)
         f.write("\n")  # Ensure newline at end of file
 
+    logger.info(f"Saved {len(releases)} total releases to {RELEASE_JSON_FILE}")
+
     return releases
 
 
 if __name__ == "__main__":
+    logger.info("Starting resolve_bldgid_sets script...")
     start_time = time.time()
-    releases = resolve_bldgid_sets()
-    elapsed_time = time.time() - start_time
-    print(f"\nFound {len(releases)} unique releases in {elapsed_time:.2f} seconds")
+    try:
+        releases = resolve_bldgid_sets()
+        elapsed_time = time.time() - start_time
+        logger.info(f"Script completed successfully in {elapsed_time:.2f} seconds")
+        print(f"\nFound {len(releases)} unique releases in {elapsed_time:.2f} seconds")
+    except Exception:
+        logger.exception("Error running resolve_bldgid_sets script")
+        raise

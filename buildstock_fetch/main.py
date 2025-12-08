@@ -2,6 +2,7 @@ import concurrent.futures
 import gc
 import json
 import os
+import shutil
 import tempfile
 import traceback
 import zipfile
@@ -494,7 +495,8 @@ def _aggregate_load_curve_aggregate(
     elif release_year == "2022":
         load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_resstock_load_curve_columns.csv")
     else:
-        raise ValueError("load_curve_map")
+        msg = f"Missing load_curve_map for release year: {release_year}"
+        raise ValueError(msg)
     aggregation_rules = pl.read_csv(load_curve_map)
 
     # Create a dictionary mapping column names to their aggregation functions
@@ -653,7 +655,8 @@ def download_bldg_data(
                         / new_name
                     )
                     new_path.parent.mkdir(parents=True, exist_ok=True)
-                    old_path.rename(new_path)
+                    # Use shutil.move instead of rename to handle cross-device moves
+                    shutil.move(str(old_path), str(new_path))
                     downloaded_paths["hpxml"] = new_path
 
             if file_type.schedule:
@@ -674,7 +677,8 @@ def download_bldg_data(
                         / new_name
                     )
                     new_path.parent.mkdir(parents=True, exist_ok=True)
-                    old_path.rename(new_path)
+                    # Use shutil.move instead of rename to handle cross-device moves
+                    shutil.move(str(old_path), str(new_path))
                     downloaded_paths["schedule"] = new_path
 
         # Remove the zip file and temp directory after extraction
@@ -937,7 +941,8 @@ def _process_annual_load_curve_file(file_path: Path) -> None:
     filtered_file.write_parquet(temp_file_path)
 
     # Replace the original file with the filtered one
-    os.replace(temp_file_path, file_path)
+    # Use shutil.move instead of os.replace to handle cross-device moves
+    shutil.move(temp_file_path, file_path)
 
     # Force garbage collection to free memory immediately
     gc.collect()
