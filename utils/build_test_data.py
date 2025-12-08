@@ -11,10 +11,10 @@ def main():
     prod = list(
         product(
             (1235,),
-            ("1", "2"),
+            ("1", "2", "3"),
             ("2021", "2022", "2023", "2024", "2025"),
             ("resstock", "comstock"),
-            ("tmy3", "amy2018"),
+            ("tmy3", "amy2018", "amy2012"),
             map(str, range(10)),
             STATE_CODES[:1],
         )

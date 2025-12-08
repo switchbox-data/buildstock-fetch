@@ -1517,7 +1517,7 @@ def download_annual_load_curve_with_progress(
         raise NoAnnualLoadCurveError(message)
 
     output_filename = bldg_id.get_annual_load_curve_filename()
-    if output_filename == "":
+    if output_filename is None:
         message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
         raise NoAnnualLoadCurveError(message)
 
@@ -1590,7 +1590,7 @@ def _download_annual_load_curves_parallel(
                     / "load_curve_annual"
                     / f"state={bldg_id.state}"
                     / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-                    / output_filename
+                    / (output_filename or "")  # TODO: Find a better way
                 )
                 failed_downloads.append(str(output_file))
                 console.print(f"[red]Annual load curve not available for {bldg_id.get_release_name()}[/red]")
@@ -1602,7 +1602,7 @@ def _download_annual_load_curves_parallel(
                     / "load_curve_annual"
                     / f"state={bldg_id.state}"
                     / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-                    / output_filename
+                    / (output_filename or "")  # TODO: Find a better way
                 )
                 failed_downloads.append(str(output_file))
                 console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
