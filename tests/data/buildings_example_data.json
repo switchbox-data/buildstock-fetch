@@ -2529,7 +2529,7 @@
     "state": "AL",
     "results": {
       "get_building_data_url": null,
-      "get_metadata_url": null,
+      "get_metadata_url": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/resstock_dataset_2024.1/resstock_tmy3/metadata/baseline.parquet",
       "get_15min_load_curve_url": null,
       "get_aggregate_load_curve_url": null,
       "get_annual_load_curve_url": null,
@@ -2550,7 +2550,7 @@
     "state": "AL",
     "results": {
       "get_building_data_url": null,
-      "get_metadata_url": null,
+      "get_metadata_url": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/resstock_dataset_2024.1/resstock_tmy3/metadata/upgrade01.parquet",
       "get_15min_load_curve_url": null,
       "get_aggregate_load_curve_url": null,
       "get_annual_load_curve_url": null,
@@ -2571,7 +2571,7 @@
     "state": "AL",
     "results": {
       "get_building_data_url": null,
-      "get_metadata_url": null,
+      "get_metadata_url": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/resstock_dataset_2024.1/resstock_tmy3/metadata/upgrade02.parquet",
       "get_15min_load_curve_url": null,
       "get_aggregate_load_curve_url": null,
       "get_annual_load_curve_url": null,
@@ -2592,7 +2592,7 @@
     "state": "AL",
     "results": {
       "get_building_data_url": null,
-      "get_metadata_url": null,
+      "get_metadata_url": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/resstock_dataset_2024.1/resstock_tmy3/metadata/upgrade03.parquet",
       "get_15min_load_curve_url": null,
       "get_aggregate_load_curve_url": null,
       "get_annual_load_curve_url": null,
@@ -2613,7 +2613,7 @@
     "state": "AL",
     "results": {
       "get_building_data_url": null,
-      "get_metadata_url": null,
+      "get_metadata_url": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/resstock_dataset_2024.1/resstock_tmy3/metadata/upgrade04.parquet",
       "get_15min_load_curve_url": null,
       "get_aggregate_load_curve_url": null,
       "get_annual_load_curve_url": null,
@@ -2634,7 +2634,7 @@
     "state": "AL",
     "results": {
       "get_building_data_url": null,
-      "get_metadata_url": null,
+      "get_metadata_url": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/resstock_dataset_2024.1/resstock_tmy3/metadata/upgrade05.parquet",
       "get_15min_load_curve_url": null,
       "get_aggregate_load_curve_url": null,
       "get_annual_load_curve_url": null,
@@ -2655,7 +2655,7 @@
     "state": "AL",
     "results": {
       "get_building_data_url": null,
-      "get_metadata_url": null,
+      "get_metadata_url": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/resstock_dataset_2024.1/resstock_tmy3/metadata/upgrade06.parquet",
       "get_15min_load_curve_url": null,
       "get_aggregate_load_curve_url": null,
       "get_annual_load_curve_url": null,
@@ -2676,7 +2676,7 @@
     "state": "AL",
     "results": {
       "get_building_data_url": null,
-      "get_metadata_url": null,
+      "get_metadata_url": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/resstock_dataset_2024.1/resstock_tmy3/metadata/upgrade07.parquet",
       "get_15min_load_curve_url": null,
       "get_aggregate_load_curve_url": null,
       "get_annual_load_curve_url": null,
@@ -2697,7 +2697,7 @@
     "state": "AL",
     "results": {
       "get_building_data_url": null,
-      "get_metadata_url": null,
+      "get_metadata_url": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/resstock_dataset_2024.1/resstock_tmy3/metadata/upgrade08.parquet",
       "get_15min_load_curve_url": null,
       "get_aggregate_load_curve_url": null,
       "get_annual_load_curve_url": null,
@@ -2718,7 +2718,7 @@
     "state": "AL",
     "results": {
       "get_building_data_url": null,
-      "get_metadata_url": null,
+      "get_metadata_url": "https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2024/resstock_dataset_2024.1/resstock_tmy3/metadata/upgrade09.parquet",
       "get_15min_load_curve_url": null,
       "get_aggregate_load_curve_url": null,
       "get_annual_load_curve_url": null,
