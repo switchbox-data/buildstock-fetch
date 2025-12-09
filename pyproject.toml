@@ -34,7 +34,7 @@ Repository = "https://github.com/switchbox-data/buildstock-fetch"
 Documentation = "https://switchbox-data.github.io/buildstock-fetch/"
 
 [project.scripts]
-bsf = "buildstock_fetch.main_cli:app"
+bsf = "buildstock_fetch.cli.main:app"
 
 [project.optional-dependencies]
 # Core testing dependencies
@@ -89,7 +89,6 @@ packages = ["buildstock_fetch"]
   "data/buildstock_upgrades_lookup.json",
 ]
 
-
 [tool.mypy]
 files = ["buildstock_fetch"]
 disallow_untyped_defs = true
@@ -106,6 +105,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 target-version = "py39"
@@ -166,11 +166,15 @@ ignore = [
 [tool.ruff.format]
 preview = true
 
+
+[tool.pyright]
+exclude = [".venv", "tests"]
+venv = ".venv"
+
+# Ignore dev-only dependencies that are not used in main package code
 [tool.deptry]
 # Exclude directories that shouldn't be analyzed
 exclude = ["utils", "\\.venv"]
-
-# Ignore dev-only dependencies that are not used in main package code
 per_rule_ignores.DEP002 = [
   # Testing framework
   "pytest",
