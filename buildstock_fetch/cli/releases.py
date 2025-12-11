@@ -2,9 +2,10 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple, Self
+from typing import NamedTuple
 
 import typedload
+from typing_extensions import Self
 
 from buildstock_fetch.constants import BUILDSTOCK_RELEASES_FILE, UPGRADES_LOOKUP_FILE
 from buildstock_fetch.types import (

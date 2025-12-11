@@ -203,3 +203,4 @@ per_rule_ignores.DEP002 = [
   "xmltodict",
   "tomli",
 ]
+per_rule_ignores.DEP003 = ["typing_extensions"]
