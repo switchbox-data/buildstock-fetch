@@ -8,6 +8,7 @@ import zipfile
 from collections import defaultdict
 from importlib.resources import files
 from pathlib import Path
+from typing import get_args
 
 import polars as pl
 import questionary
@@ -19,13 +20,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
-from buildstock_fetch.cli.availability import (
-    get_available_releases_names,
-    get_state_options,
-    get_upgrade_ids_options,
-)
-from buildstock_fetch.cli.questionary import handle_cancellation
+from buildstock_fetch.cli.main import cancel
+from buildstock_fetch.cli.releases import BuildstockReleases
 from buildstock_fetch.main import BuildingID, InvalidReleaseNameError, fetch_bldg_ids
+from buildstock_fetch.types import USStateCode
 
 # Disable SSL warnings for cleaner output
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -767,10 +765,12 @@ def _interactive_mode():
     console.print(Panel("Weather Station Mapping Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
     console.print("Please select the release information and file type you would like to fetch:")
 
+    releases = BuildstockReleases.from_json()
     # Retrieve available releases
-    available_releases = get_available_releases_names()
+    available_releases = releases.names
 
-    selected_release_name = questionary.select("Select release name:", choices=available_releases).ask()
+    selected_release_name = questionary.select("Select release name:", choices=sorted(available_releases)).ask()
+    release = releases[selected_release_name]
 
     product, release_year, weather_file, release_version = selected_release_name.split("_")
 
@@ -782,22 +782,28 @@ def _interactive_mode():
         raise InvalidProductError()
 
     # Retrieve upgrade ids
-    selected_upgrade_ids = handle_cancellation(
-        questionary.select(
-            "Select upgrade id:",
-            choices=get_upgrade_ids_options(selected_release_name),
-            instruction="Use spacebar to select/deselect options, enter to confirm",
-        ).ask()
-    )
+    selected_upgrade_ids = questionary.select(
+        "Select upgrade id:",
+        choices=[
+            questionary.Choice(
+                title=f"{upgrade.id}: {upgrade.description}" if upgrade.description else str(upgrade.id),
+                value=upgrade.id,
+            )
+            for upgrade in release.upgrades
+        ],
+        instruction="Use spacebar to select/deselect options, enter to confirm",
+    ).ask()
+    if selected_upgrade_ids is None:
+        cancel()
 
     # Retrieve state
-    selected_states = handle_cancellation(
-        questionary.select(
-            "Select state:",
-            choices=get_state_options(),
-            instruction="Use spacebar to select/deselect options, enter to confirm",
-        ).ask()
-    )
+    selected_states = questionary.select(
+        "Select state:",
+        choices=sorted(get_args(USStateCode)),
+        instruction="Use spacebar to select/deselect options, enter to confirm",
+    ).ask()
+    if selected_states is None:
+        cancel()
 
     # Fetch building IDs
     bldg_ids = fetch_bldg_ids(
