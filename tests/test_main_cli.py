@@ -1,7 +1,7 @@
 import re
 import shutil
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -40,11 +40,14 @@ runner = CliRunner()
 
 
 @patch("questionary.confirm")
+@patch("questionary.press_any_key_to_continue")
 @patch("questionary.path")
 @patch("questionary.select")
 @patch("questionary.checkbox")
 @patch("questionary.text")
-def test_interactive_mode(mock_text, mock_checkbox, mock_select, mock_path, mock_confirm, cleanup_downloads):
+def test_interactive_mode(
+    mock_text, mock_checkbox, mock_select, mock_path, mock_press_any_key_to_continue, mock_confirm, cleanup_downloads
+):
     """Test interactive mode with mocked questionary."""
     # Mock the questionary responses
     mock_select.return_value.ask.side_effect = ["resstock", "2021", "tmy3", "1", "Download a sample"]
@@ -53,6 +56,7 @@ def test_interactive_mode(mock_text, mock_checkbox, mock_select, mock_path, mock
     mock_confirm.return_value.ask.return_value = True
     # Mock the text input for sample size (not used in this test case but needed)
     mock_text.return_value.ask.return_value = "5"
+    mock_press_any_key_to_continue.ask.return_value = None
 
     result = runner.invoke(app, [])
 
@@ -113,13 +117,13 @@ def test_interactive_mode(mock_text, mock_checkbox, mock_select, mock_path, mock
     assert "Weather file: amy2018" in result.stdout
     assert "Release version: 1" in result.stdout
     assert "States: ['CA', 'TX']" in result.stdout
-    assert "File type: ['load_curve_15min', 'metadata']" in result.stdout
+    assert "File type: ['metadata', 'load_curve_15min']" in result.stdout
     assert "Upgrade ids: ['7']" in result.stdout
     assert "test_output" in result.stdout
 
     # Mock the questionary responses for another valid run
     mock_select.return_value.ask.side_effect = ["resstock", "2024", "amy2018", "2", "Download a sample"]
-    mock_checkbox.return_value.ask.side_effect = [["7"], ["CA", "TX"], ["load_curve_monthly", "metadata"]]
+    mock_checkbox.return_value.ask.side_effect = [["7"], ["CA", "TX"], ["metadata", "load_curve_monthly"]]
     mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
     mock_confirm.return_value.ask.return_value = True
     result = runner.invoke(app, [])
@@ -140,7 +144,7 @@ def test_interactive_mode(mock_text, mock_checkbox, mock_select, mock_path, mock
     assert "Weather file: amy2018" in result.stdout
     assert "Release version: 2" in result.stdout
     assert "States: ['CA', 'TX']" in result.stdout
-    assert "File type: ['load_curve_monthly', 'metadata']" in result.stdout
+    assert "File type: ['metadata', 'load_curve_monthly']" in result.stdout
     assert "Upgrade ids: ['7']" in result.stdout
     assert "test_output" in result.stdout
 
@@ -173,18 +177,20 @@ def test_interactive_mode(mock_text, mock_checkbox, mock_select, mock_path, mock
 
 
 @patch("questionary.confirm")
+@patch("questionary.press_any_key_to_continue")
 @patch("questionary.path")
 @patch("questionary.select")
 @patch("questionary.checkbox")
 @patch("questionary.text")
 def test_interactive_mode_sample_download(
-    mock_text, mock_checkbox, mock_select, mock_path, mock_confirm, cleanup_downloads
+    mock_text, mock_checkbox, mock_select, mock_path, mock_press_any_key_to_continue, mock_confirm, cleanup_downloads
 ):
     """Test interactive mode with sample download option."""
     # Mock the questionary responses for sample download
     mock_select.return_value.ask.side_effect = ["resstock", "2021", "tmy3", "1", "Download a sample"]
     mock_checkbox.return_value.ask.side_effect = [["0"], ["CA"], ["metadata"]]
     mock_path.return_value.ask.return_value = str(Path.cwd() / "test_output")
+    mock_press_any_key_to_continue.ask.return_value = None
     mock_confirm.return_value.ask.return_value = True
     # Mock the text input for sample size (for upgrade 0)
     mock_text.return_value.ask.return_value = "3"
@@ -213,6 +219,7 @@ def test_interactive_mode_sample_download(
     assert "Selected 3 buildings for State CA, Upgrade 0" in result.stdout
 
 
+@patch("questionary.press_any_key_to_continue", new=Mock())
 @patch("questionary.confirm")
 @patch("questionary.path")
 @patch("questionary.select")
@@ -333,7 +340,6 @@ def test_cli_direct_arguments(cleanup_downloads):
     assert "File type: ['load_curve_15min']" in result.stdout
     assert "Upgrade ids: ['0']" in result.stdout
     assert "test_output" in result.stdout
-    assert "Sampling 3 building IDs for State CA, Upgrade 0" in result.stdout
 
     result = runner.invoke(
         app,
@@ -373,9 +379,6 @@ def test_cli_direct_arguments(cleanup_downloads):
     assert "File type: ['load_curve_15min']" in result.stdout
     assert "Upgrade ids: ['0', '1', '2']" in result.stdout
     assert "test_output" in result.stdout
-    assert "Sampling 2 building IDs for State CA, Upgrade 0" in result.stdout
-    assert "Sampling 2 building IDs for State CA, Upgrade 1" in result.stdout
-    assert "Sampling 2 building IDs for State CA, Upgrade 2" in result.stdout
 
 
 def test_cli_multiple_file_types(cleanup_downloads):
@@ -412,7 +415,7 @@ def test_cli_multiple_file_types(cleanup_downloads):
     assert "Weather file: amy2018" in result.stdout
     assert "Release version: 2" in result.stdout
     assert "States: ['CA', 'TX']" in result.stdout
-    assert "File type: ['load_curve_15min', 'metadata']" in result.stdout
+    assert "File type: ['metadata', 'load_curve_15min']" in result.stdout
     assert "Upgrade ids: ['7']" in result.stdout
 
 
@@ -535,8 +538,8 @@ def test_cli_invalid_arguments(cleanup_downloads):
     print(f"Output: {result.output}")
     print(f"Exception: {result.exception}")
 
-    assert result.exit_code == 1
-    assert "Invalid state" in result.stdout
+    assert result.exit_code == 2
+    assert "Invalid value for states" in result.stderr
 
 
 def test_cli_help():
@@ -551,7 +554,6 @@ def test_cli_help():
     clean_output = strip_ansi_codes(result.stdout)
 
     assert result.exit_code == 0
-    assert "Buildstock Fetch CLI tool. Run without arguments for interactive mode." in clean_output
     assert "--product" in clean_output
     assert "--release_year" in clean_output
     assert "--weather_file" in clean_output

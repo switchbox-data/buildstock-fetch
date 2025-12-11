@@ -99,6 +99,7 @@ dependencies = [
     { name = "requests" },
     { name = "rich" },
     { name = "tomli" },
+    { name = "typedload" },
     { name = "typer" },
 ]
 
@@ -177,6 +178,7 @@ requires-dist = [
     { name = "scikit-learn", marker = "extra == 'dev-utils'", specifier = ">=1.6.1" },
     { name = "tomli", specifier = ">=2.0.0" },
     { name = "tox-uv", marker = "extra == 'dev'", specifier = ">=1.11.3" },
+    { name = "typedload", specifier = ">=2.39" },
     { name = "typer", specifier = ">=0.9.0" },
     { name = "types-boto3", marker = "extra == 'lint'", specifier = ">=1.33.0" },
     { name = "types-requests", marker = "extra == 'lint'", specifier = ">=2.31.0" },
@@ -1722,6 +1724,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/4f/90/06752775b8cfadba8856190f5beae9f552547e0f287e0246677972107375/tox_uv-1.29.0.tar.gz", hash = "sha256:30fa9e6ad507df49d3c6a2f88894256bcf90f18e240a00764da6ecab1db24895", size = 23427, upload-time = "2025-10-09T20:40:27.384Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5c/17/221d62937c4130b044bb437caac4181e7e13d5536bbede65264db1f0ac9f/tox_uv-1.29.0-py3-none-any.whl", hash = "sha256:b1d251286edeeb4bc4af1e24c8acfdd9404700143c2199ccdbb4ea195f7de6cc", size = 17254, upload-time = "2025-10-09T20:40:25.885Z" },
+]
+
+[[package]]
+name = "typedload"
+version = "2.39"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/58/70/fec3f45d83fe5cff2e03c2f1b4ae1d4e0b9c14f046e57a9e0320439b0971/typedload-2.39.tar.gz", hash = "sha256:bbeb448f4d8f11236bd9471adb53a1c4113a7e235626521dcebc558e3920bb46", size = 79106, upload-time = "2025-10-21T07:07:47.285Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/b3/b21f88a867f81fc98faf7bbc4a67e4be0bc335f5c88a0451c8bf586c6f67/typedload-2.39-py3-none-any.whl", hash = "sha256:8e4a58a2e00e519b50fc9ac75ab8e6a2c1e5826835ac4ebfe661a909bfa79068", size = 56313, upload-time = "2025-10-21T07:07:45.796Z" },
 ]
 
 [[package]]

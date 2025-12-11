@@ -20,7 +20,7 @@ __all__ = [
 weather_map_df = pl.read_parquet(WEATHER_FILE_DIR)
 
 
-@dataclass
+@dataclass(frozen=True)
 class BuildingID:
     bldg_id: int
     release_number: str = "1"
