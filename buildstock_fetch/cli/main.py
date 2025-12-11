@@ -245,8 +245,6 @@ def select_upgrade_ids(releases: BuildstockReleases, inputs: InputsMaybe) -> set
         choices=choices,
         instruction="Use spacebar to select/deselect options, 'a' to select all, 'i' to invert selection, enter to confirm",
         validate=lambda answer: "You must select at least one upgrade id" if len(answer) == 0 else True,
-        use_jk_keys=False,
-        use_search_filter=True,
     ).ask()
     if not result:
         cancel()
@@ -260,8 +258,6 @@ def select_states() -> set[USStateCode]:
         choices=states,
         instruction="Use spacebar to select/deselect options, enter to confirm",
         validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
-        use_jk_keys=False,
-        use_search_filter=True,
     ).ask()
     if not result:
         cancel()
