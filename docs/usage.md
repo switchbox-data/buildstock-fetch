@@ -34,6 +34,7 @@ BuildStock Fetch (`bsf`) makes it easier to download the files available on [NRE
 Besides weather files, all the data that `bsf` allows you to download is on **building units**, either residential dwellings or commercial establishments.
 
 ### Buildstock Releases
+
 These units are grouped into **Buildstock releases**, which are defined by:
 
 - **Product**: either ResStock (for residential buildings) or ComStock (for commercial buildings).
@@ -103,6 +104,7 @@ The interactive CLI mode only shows valid release options and file types, based 
 
 Once all the inputs have been collected, BuildStock Fetch will ask whether to download all files for the release, or just a sample. Each release has around 10,000 to 30,000 building units associated with it. If the user wishes to download just a small sample, they can specify the number of files to download for each state-upgrade version pair.
 
+You can also specify the sample size via `--sample` command-line argument. Use `0` to download all files.
 
 ### Direct Command Line
 
@@ -117,10 +119,17 @@ bsf \
   --states "CA NY" \
   --file_type "metadata load_curve_15min" \
   --upgrade_id "0 1" \
-  --output_directory ./data
+  --output_directory ./data \
+  --sample 0
 ```
 
 `bsf` will warn you if you've specified an invalid buildstock release, state, file type, upgrade, or output directory.
+
+You can provide only some of the arguments, in which case the app will launch in interactive mode, and ask for parameters you did not provide yet.
+
+### Specifying the number of concurrent downloads
+
+By default, `bsf` will limit the number of concurrent downloads to 15. You may increase or decrease that number by providing `--threads <number>` command-line argument (i.e. `--threads: 5` will limit concurrent downloads to 5 files at a time)
 
 ### Output Structure
 
@@ -167,6 +176,7 @@ bsf \
 ```
 
 **Output Structure:**
+
 ```
 sample_buildings/
 └── com_2024_amy2018_1/
