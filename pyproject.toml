@@ -201,4 +201,5 @@ per_rule_ignores.DEP002 = [
   "scikit-learn",
   "awscli",
   "xmltodict",
+  "tomli",
 ]

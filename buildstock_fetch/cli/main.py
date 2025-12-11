@@ -2,13 +2,14 @@ import importlib.metadata
 import pprint
 import re
 from pathlib import Path
-from typing import Annotated, NamedTuple, Never, cast, get_args
+from typing import Annotated, NamedTuple, cast, get_args
 
 import questionary
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from typing_extensions import Never
 
 from buildstock_fetch.building import BuildingID
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
