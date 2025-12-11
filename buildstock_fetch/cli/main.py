@@ -108,7 +108,7 @@ def main(  # noqa: C901
     ] = None,
     threads: Annotated[
         int, typer.Option("--threads", "-t", help="Number of files to download at the same time", min=1, max=50)
-    ] = 10,
+    ] = 15,
 ) -> None:
     states = _parse_and_validate_states(states_raw) if states_raw else None
     file_types = _parse_and_validate_file_types(file_types_raw) if file_types_raw else None
