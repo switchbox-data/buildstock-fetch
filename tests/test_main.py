@@ -1,4 +1,3 @@
-import json
 import shutil
 import sys
 from datetime import timedelta
@@ -9,7 +8,7 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from buildstock_fetch.cli.availability import BUILDSTOCK_RELEASES_FILE
+from buildstock_fetch.cli.releases import BuildstockReleases
 from buildstock_fetch.main import (
     LOAD_CURVE_COLUMN_AGGREGATION,
     BuildingID,
@@ -26,8 +25,8 @@ from buildstock_fetch.main import (
 
 
 @pytest.fixture(scope="function")
-def buildstock_releases_json():
-    return json.loads(Path(BUILDSTOCK_RELEASES_FILE).read_text(encoding="utf-8"))
+def buildstock_releases():
+    return BuildstockReleases.from_json()
 
 
 @pytest.fixture(scope="function")
@@ -2273,7 +2272,7 @@ def test_fetch_weather_station_name(cleanup_downloads):
         assert weather_station_name == expected_weather_station_names[i]
 
 
-def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
+def test_fetch_weather_file(cleanup_downloads, buildstock_releases):
     bldg_ids = [
         BuildingID(
             bldg_id=376421,
@@ -2317,7 +2316,7 @@ def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
     output_dir = Path("data")
 
     release_name = "res_2022_amy2012_1"
-    weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
+    weather_states = buildstock_releases[release_name].weather_map_available_states
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
     assert len(downloaded_paths) == len(bldg_ids)
@@ -2337,10 +2336,7 @@ def test_fetch_weather_file(cleanup_downloads, buildstock_releases_json):
     output_dir = Path("data")
 
     release_name = "com_2024_amy2018_1"
-    if "weather_map_available_states" in buildstock_releases_json[release_name]:
-        weather_states = buildstock_releases_json[release_name]["weather_map_available_states"]
-    else:
-        weather_states = []
+    weather_states = buildstock_releases[release_name].weather_map_available_states
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir, weather_states=weather_states)
     assert len(downloaded_paths) == 0
     assert len(failed_downloads) == 1

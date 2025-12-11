@@ -26,6 +26,7 @@ dependencies = [
   "boto3>=1.33.0",
   "botocore>=1.33.0",
   "pyarrow>=14.0.1",
+  "typedload>=2.39",
 ]
 
 [project.urls]
@@ -200,4 +201,6 @@ per_rule_ignores.DEP002 = [
   "scikit-learn",
   "awscli",
   "xmltodict",
+  "tomli",
 ]
+per_rule_ignores.DEP003 = ["typing_extensions"]
