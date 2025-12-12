@@ -372,7 +372,7 @@ def process_parquet_file(
     """
     try:
         # Read parquet file with selected columns
-        df, available_columns = _read_parquet_with_columns(file_key, s3, bucket_name)
+        df, _available_columns = _read_parquet_with_columns(file_key, s3, bucket_name)
 
         # Handle bldg_id column extraction
         df = _handle_bldg_id_column(df, file_key, s3, bucket_name)
