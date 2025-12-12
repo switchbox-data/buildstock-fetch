@@ -15,6 +15,8 @@ uv pip install -e ".[lint]"
 # Add the virtual environment to PATH so CLI commands are available
 echo 'export PATH="/workspaces/buildstock-fetch/.venv/bin:$PATH"' >> ~/.bashrc
 
+# Install prek
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/j178/prek/releases/download/v0.2.11/prek-installer.sh | sh
+
 # Install pre-commit hooks
-git config --global --add safe.directory /workspaces/buildstock-fetch # Needed for pre-commit install to work
-uv run pre-commit install --install-hooks
+prek install --install-hooks
