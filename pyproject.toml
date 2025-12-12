@@ -163,6 +163,13 @@ ignore = [
   "B904",   # Within an `except` clause, raise exceptions with `raise ... from err`
   "TRY003", # Avoid specifying long messages outside the exception class
 ]
+"tests/test_io.py" = [
+  "PGH003", # Use specific rule codes when ignoring type issues (intentional for testing invalid types)
+]
+"buildstock_fetch/io.py" = [
+  "TRY003", # Avoid specifying long messages outside the exception class (user-facing error messages)
+  "S112",   # try-except-continue (intentional for graceful degradation)
+]
 
 [tool.ruff.format]
 preview = true
