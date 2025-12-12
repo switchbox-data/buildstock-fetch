@@ -37,9 +37,12 @@ Documentation = "https://switchbox-data.github.io/buildstock-fetch/"
 [project.scripts]
 bsf = "buildstock_fetch.cli.main:app"
 
-[project.optional-dependencies]
+[dependency-groups]
 # Core testing dependencies
-test = ["pytest>=7.2.0"]
+test = [
+  "pytest>=7.2.0",
+  "tox-uv>=1.11.3",
+]
 
 # Documentation dependencies
 docs = [
@@ -50,12 +53,12 @@ docs = [
 
 # Code quality and linting dependencies
 lint = [
-  "mypy>=0.991",
   "ruff>=0.11.5",
   "deptry>=0.23.0",
   "types-requests>=2.31.0",
   "types-boto3>=1.33.0",
   "pandas-stubs>=2.2.0",
+  "ty>=0.0.1a33",
 ]
 
 # Development utilities dependencies (only for utils/ directory)
@@ -69,7 +72,12 @@ dev-utils = [
 ]
 
 # All development dependencies (convenience group)
-dev = ["buildstock-fetch[test,docs,lint,dev-utils]", "tox-uv>=1.11.3"]
+dev = [
+  { include-group = "test" },
+  { include-group = "docs" },
+  { include-group = "lint" },
+  { include-group = "dev-utils" },
+]
 
 [build-system]
 requires = ["setuptools>=45", "wheel"]
@@ -88,20 +96,6 @@ packages = ["buildstock_fetch"]
   "data/load_curve_column_map/*.csv",
   "data/buildstock_upgrades_lookup.json",
 ]
-
-[tool.mypy]
-files = ["buildstock_fetch"]
-disallow_untyped_defs = true
-disallow_any_unimported = true
-no_implicit_optional = true
-check_untyped_defs = true
-warn_return_any = true
-warn_unused_ignores = true
-show_error_codes = true
-
-[[tool.mypy.overrides]]
-module = ["pyarrow.*"]
-ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -183,11 +177,10 @@ per_rule_ignores.DEP002 = [
   "mkdocs-material",
   "mkdocstrings",
   # Code quality tools
-  "pre-commit",
   "tox-uv",
   "deptry",
-  "mypy",
   "ruff",
+  "ty",
   # Type stubs
   "types-requests",
   "types-boto3",
