@@ -8,10 +8,13 @@
 check:
     echo "🚀 Checking lock file consistency with 'pyproject.toml'"
     uv lock --locked
-    echo "🚀 Linting code: Running pre-commit"
-    uv run pre-commit run -a
+    echo "🚀 Linting, formatting, and type checking code"
+    prek run -a
     echo "🚀 Static type checking: Running mypy"
     uv run mypy
+
+# Check for obsolete dependencies
+check-deps:
     echo "🚀 Checking for obsolete dependencies: Running deptry"
     uv run deptry .
 
@@ -63,9 +66,8 @@ build-and-publish: build publish
 
 # Install the virtual environment and install the pre-commit hooks
 install:
-    echo "🚀 Creating virtual environment using uv"
-    uv sync
-    uv run pre-commit install
+    echo "🚀 Creating virtual environment using uv, install pre-commit hooks with prek"
+    .devcontainer/postCreateCommand.sh
 
 # =============================================================================
 # 📊 DATA DOWNLOAD

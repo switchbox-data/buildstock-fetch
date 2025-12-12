@@ -17,17 +17,21 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          key: prek-${{ hashFiles('.pre-commit-config.yaml') }}
 
       - name: Set up the environment
         uses: ./.github/actions/setup-python-env
 
+      - name: Install prek
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/j178/prek/releases/download/v0.2.11/prek-installer.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
       - name: Run checks
         run: |
           uv lock --locked
-          uv run pre-commit run -a
+          prek run -a
           uv run mypy
-          uv run deptry .
 
   tests-and-type-check:
     runs-on: ubuntu-latest

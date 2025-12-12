@@ -50,7 +50,6 @@ docs = [
 
 # Code quality and linting dependencies
 lint = [
-  "pre-commit>=2.20.0",
   "mypy>=0.991",
   "ruff>=0.11.5",
   "deptry>=0.23.0",

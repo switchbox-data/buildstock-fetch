@@ -461,7 +461,7 @@ class EVDemandCalculator:
                 continue
 
             # Find best vehicle matches for all cars at this building
-            match_type, matched_vehicle_ids = self.find_best_matches(
+            _match_type, matched_vehicle_ids = self.find_best_matches(
                 target_income=row["income_bucket"],
                 target_occupants=row["occupants"],
                 target_vehicles=num_vehicles,
