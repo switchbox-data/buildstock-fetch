@@ -1,22 +1,25 @@
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: "v5.0.0"
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.13.2
     hooks:
-      - id: check-case-conflict
-      - id: check-merge-conflict
-      - id: check-toml
+      # Run the linter.
+      - id: ruff-check
+        args: [--fix]
+      # Run the formatter.
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
       - id: check-yaml
       - id: check-json
-        exclude: ^.devcontainer/devcontainer.json
       - id: pretty-format-json
-        exclude: ^.devcontainer/devcontainer.json
         args: [--autofix, --no-sort-keys]
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: "v0.11.5"
-    hooks:
-      - id: ruff
-        args: [--exit-non-zero-on-fix]
-      - id: ruff-format
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=600"]
+        exclude: uv.lock
+      - id: check-merge-conflict
+      - id: check-case-conflict
