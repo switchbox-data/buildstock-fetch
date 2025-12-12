@@ -8,8 +8,8 @@
 check:
     echo "🚀 Checking lock file consistency with 'pyproject.toml'"
     uv lock --locked
-    echo "🚀 Linting code: Running pre-commit"
-    uv run pre-commit run -a
+    echo "🚀 Linting, formatting, and type checking code"
+    prek run -a
     echo "🚀 Static type checking: Running mypy"
     uv run mypy
     echo "🚀 Checking for obsolete dependencies: Running deptry"
