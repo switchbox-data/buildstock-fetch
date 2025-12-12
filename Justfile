@@ -66,9 +66,8 @@ build-and-publish: build publish
 
 # Install the virtual environment and install the pre-commit hooks
 install:
-    echo "🚀 Creating virtual environment using uv"
-    uv sync
-    uv run pre-commit install
+    echo "🚀 Creating virtual environment using uv, install pre-commit hooks with prek"
+    .devcontainer/postCreateCommand.sh
 
 # =============================================================================
 # 📊 DATA DOWNLOAD
