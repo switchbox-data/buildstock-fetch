@@ -298,3 +298,208 @@ downloaded_paths, failed_downloads = fetch_bldg_data(
     output_dir=Path("./data")
 )
 ```
+
+## Reading Downloaded Data with BuildStockRead
+
+Once you've downloaded data using `bsf`, you can read it efficiently using the `BuildStockRead` class:
+
+```python
+from buildstock_fetch import BuildStockRead, BuildStockRelease, State
+
+# Initialize reader
+bsr = BuildStockRead(
+    data_path="./data",
+    release=BuildStockRelease.RES_2024_TMY3_2,
+    states=State.NY,
+)
+
+# Read metadata (returns Polars LazyFrame)
+metadata = bsr.read_metadata(upgrades=["0", "1"])
+df = metadata.collect()
+
+# Read load curves
+load_curves = bsr.read_load_curve_hourly(upgrades="0")
+df_loads = load_curves.collect()
+```
+
+For more details, see the [BuildStockRead API documentation](modules.md).
+
+## Mixed Upgrade Scenarios
+
+The `MixedUpgradeScenario` class enables modeling multi-year adoption trajectories where buildings progressively adopt different upgrades over time. This is useful for:
+
+- Energy policy analysis (e.g., heat pump adoption over time)
+- Grid planning with technology adoption scenarios
+- Impact assessment of building upgrade programs
+
+### Key Concepts
+
+**Scenario**: A dictionary mapping upgrade IDs to adoption fractions per year.
+
+```python
+scenario = {
+    4: [0.06, 0.18, 0.30],  # Upgrade 4: 6%, 18%, 30% adoption over 3 years
+    8: [0.04, 0.12, 0.20],  # Upgrade 8: 4%, 12%, 20% adoption over 3 years
+}
+```
+
+**Monotonic Adoption**: Once a building adopts an upgrade, it stays with that upgrade. Buildings can only transition from baseline (upgrade 0) to an upgrade, never backwards.
+
+**Reproducibility**: The `seed` parameter ensures reproducible building sampling and allocation across runs.
+
+### Basic Usage
+
+```python
+from buildstock_fetch import MixedUpgradeScenario, BuildStockRelease, State
+from buildstock_fetch import uniform_adoption
+
+# Define scenario using helper function
+scenario = uniform_adoption(
+    upgrade_ids=[4, 8],
+    weights={4: 0.6, 8: 0.4},  # 60% choose upgrade 4, 40% choose upgrade 8
+    adoption_trajectory=[0.1, 0.3, 0.5],  # 10%, 30%, 50% total adoption
+)
+
+# Initialize with sampled buildings
+mus = MixedUpgradeScenario(
+    data_path="./data",
+    release=BuildStockRelease.RES_2024_TMY3_2,
+    states=State.NY,
+    sample_n=1000,
+    seed=42,
+    scenario=scenario,
+)
+
+# Read metadata across all years
+metadata = mus.read_metadata().collect()
+
+# Read metadata for specific years
+metadata_year_1 = mus.read_metadata(years=[1]).collect()
+
+# Read load curves
+loads = mus.read_load_curve_hourly().collect()
+
+# Export scenario for external tools (e.g., CAIRO)
+mus.export_scenario_to_cairo("./scenario.csv")
+```
+
+### Custom Scenario with Staggered Adoption
+
+For more complex scenarios where upgrades become available at different times:
+
+```python
+# Custom scenario: upgrade 4 available from year 0,
+# upgrade 8 only starts in year 2
+custom_scenario = {
+    4: [0.10, 0.25, 0.25],  # Ramps up then plateaus
+    8: [0.00, 0.00, 0.15],  # Enters in year 2
+}
+
+mus = MixedUpgradeScenario(
+    data_path="./data",
+    release=BuildStockRelease.RES_2024_TMY3_2,
+    states=[State.NY, State.MA],
+    sample_n=2000,
+    seed=123,
+    scenario=custom_scenario,
+)
+
+# Read load curves for year 2 when both upgrades are available
+loads_year_2 = mus.read_load_curve_hourly(years=[2]).collect()
+```
+
+### Multi-State Regional Analysis
+
+```python
+# Use multiple states for regional analysis
+mus = MixedUpgradeScenario(
+    data_path="./data",
+    release=BuildStockRelease.RES_2024_TMY3_2,
+    states=[State.NY, State.MA, State.CT],  # Northeast region
+    sample_n=5000,
+    seed=42,
+    scenario=scenario,
+)
+
+# Read metadata and aggregate by region
+metadata = mus.read_metadata().collect()
+regional_summary = metadata.group_by("in.state", "upgrade_id", "year").agg(
+    pl.col("bldg_id").count().alias("count")
+)
+```
+
+### Returned Data Schema
+
+All read methods return Polars LazyFrames with the following columns:
+
+- **`bldg_id`**: Building ID (from sampled baseline)
+- **`upgrade_id`**: Upgrade ID for this building in this year (0 for baseline, or scenario upgrade)
+- **`year`**: Year index (0-indexed)
+- **Original columns**: All columns from the underlying data (metadata or load curves)
+
+For metadata:
+```python
+df = mus.read_metadata().collect()
+# Columns: bldg_id, upgrade_id, year, in.state, in.vintage, in.sqft, ...
+```
+
+For load curves:
+```python
+df = mus.read_load_curve_15min().collect()
+# Columns: bldg_id, upgrade_id, year, timestamp, out.electricity.total.energy_consumption, ...
+```
+
+### CAIRO Export Format
+
+The `export_scenario_to_cairo()` method creates a CSV file with one row per building and one column per year:
+
+```csv
+bldg_id,year_0,year_1,year_2
+405821,0,0,0
+612547,0,4,4
+789234,0,0,8
+341098,0,0,0
+528763,0,0,4
+```
+
+Each cell contains the upgrade ID for that building in that year.
+
+### Validation and Error Handling
+
+The `MixedUpgradeScenario` class validates scenarios during initialization:
+
+- **Fractions must be in [0, 1]**: Each adoption fraction must be between 0 and 1
+- **Monotonic adoption**: Per-upgrade fractions must be non-decreasing over time
+- **Total adoption ≤ 1.0**: Sum of all upgrade fractions per year cannot exceed 1.0
+- **Data availability**: Verifies that all required upgrade data exists on disk before reading
+
+```python
+from buildstock_fetch.scenarios import InvalidScenarioError
+
+# This will raise InvalidScenarioError
+invalid_scenario = {4: [0.6, 0.4, 0.3]}  # Non-monotonic (decreases)
+```
+
+### Helper Functions
+
+**`uniform_adoption()`**: Generate scenario from total adoption and fixed upgrade weights.
+
+```python
+from buildstock_fetch import uniform_adoption
+
+scenario = uniform_adoption(
+    upgrade_ids=[4, 8],
+    weights={4: 0.6, 8: 0.4},  # Must sum to 1.0
+    adoption_trajectory=[0.1, 0.3, 0.5],  # Must be non-decreasing
+)
+# Returns: {4: [0.06, 0.18, 0.30], 8: [0.04, 0.12, 0.20]}
+```
+
+**`validate_scenario()`**: Manually validate a scenario definition.
+
+```python
+from buildstock_fetch import validate_scenario
+
+scenario = {4: [0.1, 0.2, 0.3], 8: [0.05, 0.10, 0.15]}
+validate_scenario(scenario)  # Raises InvalidScenarioError if invalid
+```
