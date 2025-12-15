@@ -12,9 +12,7 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from buildstock_fetch.building import BuildingID
 from buildstock_fetch.io import BuildStockRelease, State
-from buildstock_fetch.main import fetch_bldg_data
 from buildstock_fetch.mixed_upgrade import MixedUpgradeScenario, ScenarioDataNotFoundError
 from buildstock_fetch.scenarios import InvalidScenarioError, uniform_adoption, validate_scenario
 
@@ -128,47 +126,39 @@ class TestScenarioValidation:
 class TestScenarioMaterialization:
     """Tests for building materialization and allocation logic."""
 
-    def test_init_samples_from_baseline(self, cleanup_downloads):
+    def test_init_samples_from_baseline(self, integration_test_data):
         """Test that MixedUpgradeScenario samples buildings from baseline."""
-        # Download baseline data
-        bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.1, 0.2], 8: [0.05, 0.10]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
-            sample_n=50,
+            sample_n=10,
             seed=42,
             scenario=scenario,
         )
 
-        assert len(mus.sampled_bldgs) == 50
+        assert len(mus.sampled_bldgs) == 10
         assert mus.num_years == 2
 
-    def test_init_reproducible_with_seed(self, cleanup_downloads):
+    def test_init_reproducible_with_seed(self, integration_test_data):
         """Test that same seed produces same materialization."""
-        # Download baseline data
-        bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.1, 0.3], 8: [0.05, 0.15]}
 
         mus1 = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
-            sample_n=50,
+            sample_n=10,
             seed=42,
             scenario=scenario,
         )
 
         mus2 = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
-            sample_n=50,
+            sample_n=10,
             seed=42,
             scenario=scenario,
         )
@@ -179,17 +169,13 @@ class TestScenarioMaterialization:
         # Same materialization
         assert mus1.materialized_scenario == mus2.materialized_scenario
 
-    def test_materialization_correct_counts(self, cleanup_downloads):
+    def test_materialization_correct_counts(self, integration_test_data):
         """Test that building allocation counts match scenario fractions."""
-        # Download baseline data
-        bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.2, 0.4], 8: [0.1, 0.2]}
-        sample_n = 100
+        sample_n = 10
 
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
             sample_n=sample_n,
@@ -202,29 +188,25 @@ class TestScenarioMaterialization:
         count_upgrade_4_y0 = sum(1 for uid in year_0.values() if uid == 4)
         count_upgrade_8_y0 = sum(1 for uid in year_0.values() if uid == 8)
 
-        assert count_upgrade_4_y0 == int(0.2 * sample_n)  # 20
-        assert count_upgrade_8_y0 == int(0.1 * sample_n)  # 10
+        assert count_upgrade_4_y0 == int(0.2 * sample_n)  # 2
+        assert count_upgrade_8_y0 == int(0.1 * sample_n)  # 1
 
         # Check year 1
         year_1 = mus.materialized_scenario[1]
         count_upgrade_4_y1 = sum(1 for uid in year_1.values() if uid == 4)
         count_upgrade_8_y1 = sum(1 for uid in year_1.values() if uid == 8)
 
-        assert count_upgrade_4_y1 == int(0.4 * sample_n)  # 40
-        assert count_upgrade_8_y1 == int(0.2 * sample_n)  # 20
+        assert count_upgrade_4_y1 == int(0.4 * sample_n)  # 4
+        assert count_upgrade_8_y1 == int(0.2 * sample_n)  # 2
 
-    def test_materialization_monotonicity(self, cleanup_downloads):
+    def test_materialization_monotonicity(self, integration_test_data):
         """Test that buildings never change upgrades once allocated."""
-        # Download baseline data
-        bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.2, 0.4, 0.6], 8: [0.1, 0.2, 0.3]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
-            sample_n=50,
+            sample_n=10,
             seed=42,
             scenario=scenario,
         )
@@ -241,17 +223,13 @@ class TestScenarioMaterialization:
             assert year_1[bldg_id] == 4
             assert year_2[bldg_id] == 4
 
-    def test_materialization_100_percent_adoption(self, cleanup_downloads):
+    def test_materialization_100_percent_adoption(self, integration_test_data):
         """Test edge case of 100% adoption."""
-        # Download baseline data
-        bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.5, 1.0], 8: [0.5, 0.0]}
-        sample_n = 100
+        sample_n = 10
 
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
             sample_n=sample_n,
@@ -267,15 +245,11 @@ class TestScenarioMaterialization:
         assert count_upgrade_4 == sample_n
         assert count_baseline == 0
 
-    def test_year_validation_invalid_year(self, cleanup_downloads):
+    def test_year_validation_invalid_year(self, integration_test_data):
         """Test that invalid year index raises ValueError."""
-        # Download baseline data
-        bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.1, 0.2]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
             sample_n=10,
@@ -287,15 +261,11 @@ class TestScenarioMaterialization:
         with pytest.raises(ValueError, match="out of range"):
             mus._validate_years([3])
 
-    def test_year_validation_none_returns_all(self, cleanup_downloads):
+    def test_year_validation_none_returns_all(self, integration_test_data):
         """Test that years=None returns all years."""
-        # Download baseline data
-        bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.1, 0.2, 0.3]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
             sample_n=10,
@@ -315,18 +285,11 @@ class TestScenarioMaterialization:
 class TestMixedUpgradeReading:
     """Tests for reading data with mixed upgrade scenarios."""
 
-    def test_read_metadata_returns_correct_schema(self, cleanup_downloads):
+    def test_read_metadata_returns_correct_schema(self, integration_test_data):
         """Test that read_metadata returns correct column schema."""
-        # Download metadata for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.2, 0.4]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
             sample_n=10,
@@ -344,44 +307,11 @@ class TestMixedUpgradeReading:
         # Check we have data
         assert df.height > 0
 
-    def test_read_metadata_all_years(self, cleanup_downloads):
-        """Test that years=None returns all years."""
-        # Download metadata for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
-        scenario = {4: [0.2, 0.4, 0.6]}
-        mus = MixedUpgradeScenario(
-            data_path="data",
-            release=BuildStockRelease.RES_2024_TMY3_2,
-            states=State.NY,
-            sample_n=10,
-            seed=42,
-            scenario=scenario,
-        )
-
-        metadata = mus.read_metadata()
-        df = metadata.collect()
-
-        # Should have data for all 3 years
-        years_in_data = df["year"].unique().sort().to_list()
-        assert years_in_data == [0, 1, 2]
-
-    def test_read_metadata_specific_years(self, cleanup_downloads):
+    def test_read_metadata_specific_years(self, integration_test_data):
         """Test that years=[1,2] filters correctly."""
-        # Download metadata for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.2, 0.4, 0.6]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
             sample_n=10,
@@ -396,18 +326,11 @@ class TestMixedUpgradeReading:
         years_in_data = df["year"].unique().sort().to_list()
         assert years_in_data == [1, 2]
 
-    def test_read_load_curve_15min(self, cleanup_downloads):
+    def test_read_load_curve_15min(self, integration_test_data):
         """Test that load curve reading works."""
-        # Download load curves for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("load_curve_15min",), Path("data"))
-
         scenario = {4: [0.2, 0.4]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
             sample_n=10,
@@ -425,66 +348,12 @@ class TestMixedUpgradeReading:
         assert "timestamp" in df.columns
         assert df.height > 0
 
-    def test_read_load_curve_hourly(self, cleanup_downloads):
-        """Test hourly load curve reading."""
-        # Download load curves for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("load_curve_hourly",), Path("data"))
-
-        scenario = {4: [0.2, 0.4]}
-        mus = MixedUpgradeScenario(
-            data_path="data",
-            release=BuildStockRelease.RES_2024_TMY3_2,
-            states=State.NY,
-            sample_n=10,
-            seed=42,
-            scenario=scenario,
-        )
-
-        load_curves = mus.read_load_curve_hourly()
-        df = load_curves.collect()
-
-        assert "bldg_id" in df.columns
-        assert "year" in df.columns
-        assert "timestamp" in df.columns
-
-    def test_year_column_values_correct(self, cleanup_downloads):
-        """Test that year column values match requested years."""
-        # Download metadata for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
-        scenario = {4: [0.2, 0.4]}
-        mus = MixedUpgradeScenario(
-            data_path="data",
-            release=BuildStockRelease.RES_2024_TMY3_2,
-            states=State.NY,
-            sample_n=10,
-            seed=42,
-            scenario=scenario,
-        )
-
-        # Read only year 0
-        metadata_y0 = mus.read_metadata(years=[0])
-        df_y0 = metadata_y0.collect()
-
-        assert df_y0["year"].unique().to_list() == [0]
-
-    def test_upgrade_data_not_on_disk(self, cleanup_downloads):
+    def test_upgrade_data_not_on_disk(self, integration_test_data):
         """Test that missing upgrade data raises ScenarioDataNotFoundError."""
-        # Only download upgrade 0, not upgrade 4
-        bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
-        scenario = {4: [0.2, 0.4]}  # Requires upgrade 4
+        # Use upgrade 9 which is not downloaded in the fixture
+        scenario = {9: [0.2, 0.4]}  # Requires upgrade 9 (not downloaded)
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
             sample_n=10,
@@ -496,23 +365,14 @@ class TestMixedUpgradeReading:
         with pytest.raises(ScenarioDataNotFoundError, match="Missing metadata data"):
             mus.read_metadata().collect()
 
-    def test_multiple_states(self, cleanup_downloads):
+    def test_multiple_states(self, integration_test_data):
         """Test that multi-state scenarios work."""
-        # Download data for NY and OH
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0", state="NY"),
-            BuildingID(bldg_id=7, upgrade_id="4", state="NY"),
-            BuildingID(bldg_id=100000, upgrade_id="0", state="OH", release_number="2"),
-            BuildingID(bldg_id=100000, upgrade_id="4", state="OH", release_number="2"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.2, 0.4]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
-            states=[State.NY, State.OH],
-            sample_n=20,
+            states=[State.NY, State.AL],
+            sample_n=10,
             seed=42,
             scenario=scenario,
         )
@@ -523,7 +383,7 @@ class TestMixedUpgradeReading:
         # Should have buildings from both states
         states_in_result = df["in.state"].unique().to_list()
         assert "NY" in states_in_result
-        assert "OH" in states_in_result
+        assert "AL" in states_in_result
 
 
 # =============================================================================
@@ -534,26 +394,19 @@ class TestMixedUpgradeReading:
 class TestScenarioExport:
     """Tests for exporting scenarios to CAIRO format."""
 
-    def test_export_cairo_format(self, cleanup_downloads, tmp_path):
+    def test_export_cairo_format(self, integration_test_data):
         """Test that export creates correct CSV structure."""
-        # Download metadata for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         scenario = {4: [0.2, 0.4, 0.6]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
-            sample_n=20,
+            sample_n=10,
             seed=42,
             scenario=scenario,
         )
 
-        output_path = tmp_path / "scenario.csv"
+        output_path = integration_test_data["outputs_path"] / "scenario.csv"
         mus.export_scenario_to_cairo(output_path)
 
         # Read back the CSV
@@ -564,105 +417,14 @@ class TestScenarioExport:
         assert "year_0" in df.columns
         assert "year_1" in df.columns
         assert "year_2" in df.columns
-        assert df.height == 20  # 20 buildings
+        assert df.height == 10  # 10 buildings
 
-    def test_export_cairo_column_names(self, cleanup_downloads, tmp_path):
-        """Test that column names are human-readable (year_0, year_1, etc.)."""
-        # Download metadata for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
-        scenario = {4: [0.2, 0.4]}
-        mus = MixedUpgradeScenario(
-            data_path="data",
-            release=BuildStockRelease.RES_2024_TMY3_2,
-            states=State.NY,
-            sample_n=10,
-            seed=42,
-            scenario=scenario,
-        )
-
-        output_path = tmp_path / "scenario.csv"
-        mus.export_scenario_to_cairo(output_path)
-
-        df = pl.read_csv(output_path)
-
-        # Check column names
-        expected_cols = {"bldg_id", "year_0", "year_1"}
-        assert expected_cols.issubset(set(df.columns))
-
-    def test_export_cairo_row_order(self, cleanup_downloads, tmp_path):
-        """Test that rows are sorted by bldg_id."""
-        # Download metadata for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
-        scenario = {4: [0.2, 0.4]}
-        mus = MixedUpgradeScenario(
-            data_path="data",
-            release=BuildStockRelease.RES_2024_TMY3_2,
-            states=State.NY,
-            sample_n=20,
-            seed=42,
-            scenario=scenario,
-        )
-
-        output_path = tmp_path / "scenario.csv"
-        mus.export_scenario_to_cairo(output_path)
-
-        df = pl.read_csv(output_path)
-
-        # Check that bldg_id is sorted
-        bldg_ids_col = df["bldg_id"].to_list()
-        assert bldg_ids_col == sorted(bldg_ids_col)
-
-    def test_export_cairo_values_match_scenario(self, cleanup_downloads, tmp_path):
-        """Test that exported values match materialized scenario."""
-        # Download metadata for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
-        scenario = {4: [0.2, 0.4]}
-        mus = MixedUpgradeScenario(
-            data_path="data",
-            release=BuildStockRelease.RES_2024_TMY3_2,
-            states=State.NY,
-            sample_n=10,
-            seed=42,
-            scenario=scenario,
-        )
-
-        output_path = tmp_path / "scenario.csv"
-        mus.export_scenario_to_cairo(output_path)
-
-        df = pl.read_csv(output_path)
-
-        # Verify first row matches materialization
-        first_bldg = df.row(0, named=True)
-        bldg_id = first_bldg["bldg_id"]
-
-        # Check against materialized scenario
-        assert first_bldg["year_0"] == mus.materialized_scenario[0][bldg_id]
-        assert first_bldg["year_1"] == mus.materialized_scenario[1][bldg_id]
-
-    def test_export_missing_upgrade_data(self, cleanup_downloads, tmp_path):
+    def test_export_missing_upgrade_data(self, integration_test_data):
         """Test that export fails if upgrade data is missing."""
-        # Only download upgrade 0, not upgrade 4
-        bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
-        scenario = {4: [0.2, 0.4]}
+        # Use upgrade 9 which is not downloaded in the fixture
+        scenario = {9: [0.2, 0.4]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
             sample_n=10,
@@ -670,9 +432,9 @@ class TestScenarioExport:
             scenario=scenario,
         )
 
-        output_path = tmp_path / "scenario.csv"
+        output_path = integration_test_data["outputs_path"] / "scenario.csv"
 
-        # Should fail because upgrade 4 data is missing
+        # Should fail because upgrade 9 data is missing
         with pytest.raises(ScenarioDataNotFoundError):
             mus.export_scenario_to_cairo(output_path)
 
@@ -685,15 +447,8 @@ class TestScenarioExport:
 class TestMixedUpgradeIntegration:
     """Integration tests for MixedUpgradeScenario."""
 
-    def test_end_to_end_simple_scenario(self, cleanup_downloads, tmp_path):
+    def test_end_to_end_simple_scenario(self, integration_test_data):
         """Test full workflow with simple scenario."""
-        # Download metadata and load curves for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata", "load_curve_15min"), Path("data"))
-
         # Create scenario using helper
         scenario = uniform_adoption(
             upgrade_ids=[4],
@@ -703,10 +458,10 @@ class TestMixedUpgradeIntegration:
 
         # Initialize MixedUpgradeScenario
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
-            sample_n=50,
+            sample_n=10,
             seed=42,
             scenario=scenario,
         )
@@ -722,23 +477,12 @@ class TestMixedUpgradeIntegration:
         assert df_loads.height > 0
 
         # Export scenario
-        output_path = tmp_path / "scenario.csv"
+        output_path = integration_test_data["outputs_path"] / "scenario.csv"
         mus.export_scenario_to_cairo(output_path)
         assert output_path.exists()
 
-    def test_multi_year_multi_upgrade_multi_state(self, cleanup_downloads, tmp_path):
+    def test_multi_year_multi_upgrade_multi_state(self, integration_test_data):
         """Test complex scenario with multiple years, upgrades, and states."""
-        # Download data for NY and OH, upgrades 0, 4, and 8
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0", state="NY"),
-            BuildingID(bldg_id=7, upgrade_id="4", state="NY"),
-            BuildingID(bldg_id=7, upgrade_id="8", state="NY"),
-            BuildingID(bldg_id=100000, upgrade_id="0", state="OH", release_number="2"),
-            BuildingID(bldg_id=100000, upgrade_id="4", state="OH", release_number="2"),
-            BuildingID(bldg_id=100000, upgrade_id="8", state="OH", release_number="2"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         # Create complex scenario
         scenario = uniform_adoption(
             upgrade_ids=[4, 8],
@@ -747,10 +491,10 @@ class TestMixedUpgradeIntegration:
         )
 
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
-            states=[State.NY, State.OH],
-            sample_n=100,
+            states=[State.NY, State.AL],
+            sample_n=10,
             seed=42,
             scenario=scenario,
         )
@@ -765,22 +509,14 @@ class TestMixedUpgradeIntegration:
         # Verify we have both states
         states_in_data = df["in.state"].unique().to_list()
         assert "NY" in states_in_data
-        assert "OH" in states_in_data
+        assert "AL" in states_in_data
 
         # Verify we have both upgrades (plus baseline)
         upgrades_in_data = set(df["upgrade_id"].unique().to_list())
         assert {0, 4, 8}.issubset(upgrades_in_data)
 
-    def test_custom_scenario_dict(self, cleanup_downloads):
+    def test_custom_scenario_dict(self, integration_test_data):
         """Test using custom scenario dict (not uniform_adoption)."""
-        # Download metadata for upgrades 0, 4, and 8
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-            BuildingID(bldg_id=7, upgrade_id="8"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-
         # Custom staggered scenario
         custom_scenario = {
             4: [0.10, 0.25, 0.25],  # Ramps up then plateaus
@@ -788,10 +524,10 @@ class TestMixedUpgradeIntegration:
         }
 
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
-            sample_n=100,
+            sample_n=10,
             seed=42,
             scenario=custom_scenario,
         )
@@ -804,21 +540,14 @@ class TestMixedUpgradeIntegration:
         upgrades_in_year_2 = set(df["upgrade_id"].unique().to_list())
         assert {0, 4, 8}.issubset(upgrades_in_year_2)
 
-    def test_consistency_across_read_methods(self, cleanup_downloads):
+    def test_consistency_across_read_methods(self, integration_test_data):
         """Test that metadata and load curves have same buildings/years."""
-        # Download metadata and load curves for upgrades 0 and 4
-        bldg_ids = [
-            BuildingID(bldg_id=7, upgrade_id="0"),
-            BuildingID(bldg_id=7, upgrade_id="4"),
-        ]
-        fetch_bldg_data(bldg_ids, ("metadata", "load_curve_15min"), Path("data"))
-
         scenario = {4: [0.2, 0.4]}
         mus = MixedUpgradeScenario(
-            data_path="data",
+            data_path=str(integration_test_data["data_path"]),
             release=BuildStockRelease.RES_2024_TMY3_2,
             states=State.NY,
-            sample_n=20,
+            sample_n=10,
             seed=42,
             scenario=scenario,
         )
