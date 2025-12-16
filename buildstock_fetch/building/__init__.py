@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass
 
 import polars as pl
 
-from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, WEATHER_FILE_DIR
+from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, SB_ANALYSIS_UPGRADES_FILE, WEATHER_FILE_DIR
 from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
 from .annualcurve import get_annual_load_curve_url
@@ -160,13 +160,13 @@ class BuildingID:
 
     def is_SB_upgrade(self) -> bool:
         """Check if the upgrade is a SB upgrade."""
-        return (
-            self.release_year == "2024"
-            and self.res_com == "resstock"
-            and (self.weather == "tmy3" or self.weather == "amy2018")
-            and self.release_number == "2"
-            and int(self.upgrade_id) >= 17
-        )
+        with open(SB_ANALYSIS_UPGRADES_FILE) as f:
+            sb_analysis_upgrades = json.load(f)
+        release_name = self.get_release_name()
+        if release_name not in sb_analysis_upgrades:
+            return False
+        sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
+        return self.upgrade_id in sb_analysis_upgrade_data["upgrade_ids"]
 
     def copy(self, upgrade_id: str | None = None) -> "BuildingID":
         return BuildingID(
