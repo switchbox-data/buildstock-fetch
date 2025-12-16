@@ -234,6 +234,8 @@ def select_release_version(releases: BuildstockReleases, inputs: InputsMaybe) ->
 
 def select_upgrade_ids(releases: BuildstockReleases, inputs: InputsMaybe) -> set[UpgradeID]:
     release = releases.filter_one(inputs)
+    # Add additional upgrades for SwitchBox Analysis
+    release = release.add_SB_upgrades()
     upgrades_sorted = sorted(release.upgrades, key=lambda _: int(_.id))
     choices = [
         questionary.Choice(
