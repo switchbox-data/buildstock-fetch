@@ -1132,15 +1132,15 @@
       "22"
     ],
     "available_data": [
-      "load_curve_daily",
-      "metadata",
-      "hpxml",
-      "load_curve_monthly",
-      "load_curve_15min",
-      "weather",
-      "load_curve_annual",
-      "schedule",
       "load_curve_hourly",
+      "metadata",
+      "load_curve_15min",
+      "load_curve_monthly",
+      "schedule",
+      "load_curve_annual",
+      "load_curve_daily",
+      "weather",
+      "hpxml",
       "trip_schedules"
     ],
     "trip_schedule_states": [
@@ -1178,15 +1178,15 @@
       "22"
     ],
     "available_data": [
-      "load_curve_daily",
-      "metadata",
-      "hpxml",
-      "load_curve_monthly",
-      "load_curve_15min",
-      "weather",
-      "load_curve_annual",
-      "schedule",
       "load_curve_hourly",
+      "metadata",
+      "load_curve_15min",
+      "load_curve_monthly",
+      "schedule",
+      "load_curve_annual",
+      "load_curve_daily",
+      "weather",
+      "hpxml",
       "trip_schedules"
     ],
     "trip_schedule_states": [
