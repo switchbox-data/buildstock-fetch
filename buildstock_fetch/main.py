@@ -729,6 +729,16 @@ def download_15min_load_curve_with_progress(
     Returns:
         Path to the downloaded file.
     """
+
+    if bldg_id.is_SB_upgrade():
+        return (
+            output_dir
+            / bldg_id.get_release_name()
+            / "load_curve_15min"
+            / f"state={bldg_id.state}"
+            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+            / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        )
     download_url = bldg_id.get_15min_load_curve_url()
     if download_url is None:
         message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}"

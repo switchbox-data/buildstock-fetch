@@ -47,3 +47,44 @@ def get_15min_load_curve_url(building: "BuildingID") -> str | None:
         )
     else:
         return None
+
+
+def get_SB_upgrade_15min_load_curve_url(building: "BuildingID") -> list[str] | None:
+    if (
+        building.release_year == "2024"
+        and building.res_com == "resstock"
+        and (building.weather == "tmy3" or building.weather == "amy2018")
+        and building.release_number == "2"
+        and int(building.upgrade_id) >= 17
+        and int(building.upgrade_id) <= 22
+    ):
+        upgrade_id_mix = []
+        upgrade_id_int = int(building.upgrade_id)
+        if upgrade_id_int == 17:
+            upgrade_id_mix.append(1)
+            upgrade_id_mix.append(11)
+        elif upgrade_id_int == 18:
+            upgrade_id_mix.append(2)
+            upgrade_id_mix.append(12)
+        elif upgrade_id_int == 19:
+            upgrade_id_mix.append(3)
+            upgrade_id_mix.append(13)
+        elif upgrade_id_int == 20:
+            upgrade_id_mix.append(4)
+            upgrade_id_mix.append(14)
+        elif upgrade_id_int == 21:
+            upgrade_id_mix.append(5)
+            upgrade_id_mix.append(15)
+        elif upgrade_id_int == 22:
+            upgrade_id_mix.append(0)
+            upgrade_id_mix.append(11)
+        download_url_list = []
+        for upgrade_id in upgrade_id_mix:
+            download_url_list.append(
+                f"{building.base_url}timeseries_individual_buildings/"
+                f"by_state/upgrade={upgrade_id}/"
+                f"state={building.state}/"
+                f"{building.bldg_id!s}-{upgrade_id!s}.parquet"
+            )
+        return download_url_list
+    return None

@@ -154,3 +154,13 @@ class BuildingID:
     def to_json(self) -> str:
         """Convert the building ID object to a JSON string."""
         return json.dumps(asdict(self))
+
+    def is_SB_upgrade(self) -> bool:
+        """Check if the upgrade is a SB upgrade."""
+        return (
+            self.release_year == "2024"
+            and self.res_com == "resstock"
+            and (self.weather == "tmy3" or self.weather == "amy2018")
+            and self.release_number == "2"
+            and int(self.upgrade_id) >= 17
+        )
