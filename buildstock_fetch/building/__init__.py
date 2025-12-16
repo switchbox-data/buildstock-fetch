@@ -9,7 +9,7 @@ from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 from .annualcurve import get_annual_load_curve_url
 from .annualcurvefilename import get_annual_load_curve_filename
 from .buildingdataurl import get_building_data_url
-from .get15minurl import get_15min_load_curve_url
+from .get15minurl import get_15min_load_curve_url, get_SB_upgrade_load_component_bldg_ids
 from .metadataurl import get_metadata_url
 from .weatherurl import build_weather_url
 
@@ -76,6 +76,9 @@ class BuildingID:
 
     def get_15min_load_curve_url(self) -> str | None:
         return get_15min_load_curve_url(self)
+
+    def get_SB_upgrade_load_component_bldg_ids(self) -> list["BuildingID"] | None:
+        return get_SB_upgrade_load_component_bldg_ids(self)
 
     def get_aggregate_load_curve_url(self) -> str | None:
         """Generate the S3 download URL for this building. The url is the same as the 15-minute load curve url."""
@@ -163,4 +166,15 @@ class BuildingID:
             and (self.weather == "tmy3" or self.weather == "amy2018")
             and self.release_number == "2"
             and int(self.upgrade_id) >= 17
+        )
+
+    def copy(self, upgrade_id: str | None = None) -> "BuildingID":
+        return BuildingID(
+            bldg_id=self.bldg_id,
+            release_number=self.release_number,
+            release_year=self.release_year,
+            res_com=self.res_com,
+            weather=self.weather,
+            upgrade_id=upgrade_id if upgrade_id is not None else self.upgrade_id,
+            state=self.state,
         )

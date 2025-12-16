@@ -49,7 +49,7 @@ def get_15min_load_curve_url(building: "BuildingID") -> str | None:
         return None
 
 
-def get_SB_upgrade_15min_load_curve_url(building: "BuildingID") -> list[str] | None:
+def get_SB_upgrade_load_component_bldg_ids(building: "BuildingID") -> list["BuildingID"] | None:
     if (
         building.release_year == "2024"
         and building.res_com == "resstock"
@@ -58,33 +58,25 @@ def get_SB_upgrade_15min_load_curve_url(building: "BuildingID") -> list[str] | N
         and int(building.upgrade_id) >= 17
         and int(building.upgrade_id) <= 22
     ):
-        upgrade_id_mix = []
+        bldg_id_component_list = []
         upgrade_id_int = int(building.upgrade_id)
         if upgrade_id_int == 17:
-            upgrade_id_mix.append(1)
-            upgrade_id_mix.append(11)
+            bldg_id_component_list.append(building.copy(upgrade_id="1"))
+            bldg_id_component_list.append(building.copy(upgrade_id="11"))
         elif upgrade_id_int == 18:
-            upgrade_id_mix.append(2)
-            upgrade_id_mix.append(12)
+            bldg_id_component_list.append(building.copy(upgrade_id="2"))
+            bldg_id_component_list.append(building.copy(upgrade_id="12"))
         elif upgrade_id_int == 19:
-            upgrade_id_mix.append(3)
-            upgrade_id_mix.append(13)
+            bldg_id_component_list.append(building.copy(upgrade_id="3"))
+            bldg_id_component_list.append(building.copy(upgrade_id="13"))
         elif upgrade_id_int == 20:
-            upgrade_id_mix.append(4)
-            upgrade_id_mix.append(14)
+            bldg_id_component_list.append(building.copy(upgrade_id="4"))
+            bldg_id_component_list.append(building.copy(upgrade_id="14"))
         elif upgrade_id_int == 21:
-            upgrade_id_mix.append(5)
-            upgrade_id_mix.append(15)
+            bldg_id_component_list.append(building.copy(upgrade_id="5"))
+            bldg_id_component_list.append(building.copy(upgrade_id="15"))
         elif upgrade_id_int == 22:
-            upgrade_id_mix.append(0)
-            upgrade_id_mix.append(11)
-        download_url_list = []
-        for upgrade_id in upgrade_id_mix:
-            download_url_list.append(
-                f"{building.base_url}timeseries_individual_buildings/"
-                f"by_state/upgrade={upgrade_id}/"
-                f"state={building.state}/"
-                f"{building.bldg_id!s}-{upgrade_id!s}.parquet"
-            )
-        return download_url_list
+            bldg_id_component_list.append(building.copy(upgrade_id="0"))
+            bldg_id_component_list.append(building.copy(upgrade_id="11"))
+        return bldg_id_component_list
     return None

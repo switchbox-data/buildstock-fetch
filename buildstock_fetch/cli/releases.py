@@ -1,6 +1,6 @@
 import json
 from collections.abc import Iterator
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
@@ -108,32 +108,6 @@ class BuildstockRelease:
         if inputs.upgrade_ids is not None and inputs.upgrade_ids - self.upgrade_ids:
             return False
         return not (inputs.file_types is not None and inputs.file_types - self.file_types)
-
-    def add_SB_upgrades(self) -> Self:
-        """Add new upgrades for SwitchBox Analysis"""
-        if self.release_year == "2024" and self.product == "resstock":
-            if not self.upgrades:
-                return self
-            # Get the highest upgrade ID
-            max_upgrade_id = max(int(upgrade.id) for upgrade in self.upgrades)
-            # Load upgrade descriptions from the lookup file
-            upgrades_filepath = Path(UPGRADES_LOOKUP_FILE)
-            upgrades_content = upgrades_filepath.read_text()
-            upgrades_json = json.loads(upgrades_content)
-            # Get upgrade descriptions for this release, if they exist
-            release_data = upgrades_json.get(str(self.name))
-            release_upgrades = release_data.get("upgrade_descriptions", {}) if release_data else {}
-            # Create 6 new upgrades starting from max_upgrade_id + 1
-            new_upgrades = frozenset(
-                Upgrade(
-                    UpgradeID(str(max_upgrade_id + i)),
-                    release_upgrades.get(str(max_upgrade_id + i)),
-                )
-                for i in range(1, 7)
-            )
-            # Return a new instance with the combined upgrades
-            return replace(self, upgrades=self.upgrades | new_upgrades)
-        return self
 
 
 @dataclass(frozen=True)

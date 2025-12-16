@@ -731,7 +731,36 @@ def download_15min_load_curve_with_progress(
     """
 
     if bldg_id.is_SB_upgrade():
-        return (
+        bldg_id_component_list = bldg_id.get_SB_upgrade_load_component_bldg_ids()
+        if bldg_id_component_list is None:
+            message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}"
+            raise No15minLoadCurveError(message)
+
+        for bldg_id_component in bldg_id_component_list:
+            download_url = bldg_id_component.get_15min_load_curve_url()
+            if download_url is None:
+                message = f"15 min load profile timeseries is not available for {bldg_id_component.get_release_name()}"
+                raise No15minLoadCurveError(message)
+
+            output_file_component = (
+                output_dir
+                / bldg_id.get_release_name()
+                / "load_curve_15min"
+                / f"state={bldg_id.state}"
+                / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id_component.upgrade_id)!s}.parquet"
+            )
+            output_file_component.parent.mkdir(parents=True, exist_ok=True)
+
+            # Download with progress tracking if progress object is provided
+            if progress and task_id is not None:
+                _download_with_progress(download_url, output_file_component, progress, task_id)
+            else:
+                response = requests.get(download_url, timeout=30, verify=True)
+                response.raise_for_status()
+                output_file_component.write_bytes(response.content)
+
+        output_file = (
             output_dir
             / bldg_id.get_release_name()
             / "load_curve_15min"
@@ -739,6 +768,7 @@ def download_15min_load_curve_with_progress(
             / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
             / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
         )
+        return output_file
     download_url = bldg_id.get_15min_load_curve_url()
     if download_url is None:
         message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}"
