@@ -1,4 +1,7 @@
+import json
 from typing import TYPE_CHECKING
+
+from buildstock_fetch.constants import SB_ANALYSIS_UPGRADES_FILE
 
 if TYPE_CHECKING:
     from . import BuildingID
@@ -50,33 +53,14 @@ def get_15min_load_curve_url(building: "BuildingID") -> str | None:
 
 
 def get_SB_upgrade_load_component_bldg_ids(building: "BuildingID") -> list["BuildingID"] | None:
-    if (
-        building.release_year == "2024"
-        and building.res_com == "resstock"
-        and (building.weather == "tmy3" or building.weather == "amy2018")
-        and building.release_number == "2"
-        and int(building.upgrade_id) >= 17
-        and int(building.upgrade_id) <= 22
-    ):
-        bldg_id_component_list = []
-        upgrade_id_int = int(building.upgrade_id)
-        if upgrade_id_int == 17:
-            bldg_id_component_list.append(building.copy(upgrade_id="1"))
-            bldg_id_component_list.append(building.copy(upgrade_id="11"))
-        elif upgrade_id_int == 18:
-            bldg_id_component_list.append(building.copy(upgrade_id="2"))
-            bldg_id_component_list.append(building.copy(upgrade_id="12"))
-        elif upgrade_id_int == 19:
-            bldg_id_component_list.append(building.copy(upgrade_id="3"))
-            bldg_id_component_list.append(building.copy(upgrade_id="13"))
-        elif upgrade_id_int == 20:
-            bldg_id_component_list.append(building.copy(upgrade_id="4"))
-            bldg_id_component_list.append(building.copy(upgrade_id="14"))
-        elif upgrade_id_int == 21:
-            bldg_id_component_list.append(building.copy(upgrade_id="5"))
-            bldg_id_component_list.append(building.copy(upgrade_id="15"))
-        elif upgrade_id_int == 22:
-            bldg_id_component_list.append(building.copy(upgrade_id="0"))
-            bldg_id_component_list.append(building.copy(upgrade_id="11"))
-        return bldg_id_component_list
-    return None
+    with open(SB_ANALYSIS_UPGRADES_FILE) as f:
+        sb_analysis_upgrades = json.load(f)
+    release_name = building.get_release_name()
+    if release_name not in sb_analysis_upgrades:
+        return None
+    sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
+    upgrade_components = sb_analysis_upgrade_data["upgrade_components"][building.upgrade_id]
+    bldg_id_component_list = []
+    for component_id in upgrade_components:
+        bldg_id_component_list.append(building.copy(upgrade_id=component_id))
+    return bldg_id_component_list
