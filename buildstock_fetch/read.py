@@ -1,12 +1,12 @@
 import logging
 from collections.abc import Collection
 from functools import cached_property
-from os import PathLike
 from pathlib import Path
 from random import Random
-from typing import cast, final, override
+from typing import cast
 
 import polars as pl
+from typing_extensions import final, override
 
 from buildstock_fetch.explore import DownloadedData, filter_downloads
 from buildstock_fetch.releases import BuildstockRelease, BuildstockReleases
