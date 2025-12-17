@@ -7,6 +7,8 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
+import shutil
+
 from buildstock_fetch.main import (
     LOAD_CURVE_COLUMN_AGGREGATION,
     BuildingID,
@@ -21,7 +23,6 @@ from buildstock_fetch.main import (
     fetch_bldg_ids,
 )
 from buildstock_fetch.releases import BuildstockReleases
-import shutil
 
 
 @pytest.fixture(scope="function")
