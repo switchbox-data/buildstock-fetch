@@ -36,10 +36,7 @@ from rich.progress import (
 from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
 from .building import BuildingID
-from .constants import (
-    LOAD_CURVE_COLUMN_AGGREGATION,
-    METADATA_DIR,
-)
+from .constants import LOAD_CURVE_COLUMN_AGGREGATION, METADATA_DIR, SB_ANALYSIS_UPGRADES_FILE
 from .exception import (
     InvalidProductError,
     InvalidReleaseNameError,
@@ -52,6 +49,40 @@ from .exception import (
 )
 
 # from buildstock_fetch.main_cli import _get_all_available_releases
+
+# Module-level cache for SB analysis upgrades data
+_SB_ANALYSIS_UPGRADES_CACHE: dict[str, Any] | None = None
+
+
+def _get_SB_analysis_upgrades() -> dict[str, Any] | None:
+    """Load SB analysis upgrades data once and cache it for subsequent calls."""
+    global _SB_ANALYSIS_UPGRADES_CACHE
+    if _SB_ANALYSIS_UPGRADES_CACHE is None:
+        with open(SB_ANALYSIS_UPGRADES_FILE) as f:
+            _SB_ANALYSIS_UPGRADES_CACHE = json.load(f)
+    return _SB_ANALYSIS_UPGRADES_CACHE
+
+
+# Module-level cache for SB analysis upgrades column map
+_SB_ANALYSIS_UPGRADES_COLUMN_MAP_CACHE: pl.DataFrame | None = None
+
+
+def _get_SB_analysis_upgrades_column_map(release_year: ReleaseYear) -> pl.DataFrame:
+    """Load SB analysis upgrades column map once and cache it for subsequent calls."""
+    global _SB_ANALYSIS_UPGRADES_COLUMN_MAP_CACHE
+    if release_year == "2024":
+        SB_ANALYSIS_UPGRADES_COLUMN_MAP_FILE = LOAD_CURVE_COLUMN_AGGREGATION.joinpath(
+            "data_dictionary_2024_labeled.csv"
+        )
+    elif release_year == "2022":
+        SB_ANALYSIS_UPGRADES_COLUMN_MAP_FILE = LOAD_CURVE_COLUMN_AGGREGATION.joinpath(
+            "data_dictionary_2022_labeled.csv"
+        )
+    else:
+        msg = f"Release year {release_year} not supported"
+        raise ValueError(msg)
+    _SB_ANALYSIS_UPGRADES_COLUMN_MAP_CACHE = pl.read_csv(SB_ANALYSIS_UPGRADES_COLUMN_MAP_FILE)
+    return _SB_ANALYSIS_UPGRADES_COLUMN_MAP_CACHE
 
 
 @dataclass
@@ -730,6 +761,7 @@ def download_15min_load_curve_with_progress(
         Path to the downloaded file.
     """
 
+    # Special case for SwitchBox Analysis upgrades
     if bldg_id.is_SB_upgrade():
         bldg_id_component_list = bldg_id.get_SB_upgrade_load_component_bldg_ids()
         if bldg_id_component_list is None:
@@ -769,6 +801,8 @@ def download_15min_load_curve_with_progress(
             / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
         )
         return output_file
+
+    # Regular upgrade case
     download_url = bldg_id.get_15min_load_curve_url()
     if download_url is None:
         message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}"
@@ -1428,6 +1462,9 @@ def _process_download_future_15min(
     try:
         output_file = future.result()
         downloaded_paths.append(output_file)
+        # Special case for SwitchBox Analysis upgrades
+        if bldg_id.is_SB_upgrade():
+            _process_SB_upgrade_load_curve(bldg_id, output_file)
     except No15minLoadCurveError:
         output_file = (
             output_dir
@@ -1451,6 +1488,18 @@ def _process_download_future_15min(
         )
         failed_downloads.append(str(output_file))
         console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
+
+
+def _process_SB_upgrade_load_curve(bldg_id: BuildingID, output_file: Path) -> None:
+    """Process a SwitchBox Analysis upgrade load curve."""
+    sb_analysis_upgrades = _get_SB_analysis_upgrades()
+    if sb_analysis_upgrades is None:
+        msg = "SB analysis upgrades data not available"
+        raise ValueError(msg)
+    sb_analysis_upgrades_column_map = _get_SB_analysis_upgrades_column_map(bldg_id.release_year)
+    if sb_analysis_upgrades_column_map is None:
+        msg = "SB analysis upgrades column map not available"
+        raise ValueError(msg)
 
 
 def _download_aggregate_load_curves_parallel(
