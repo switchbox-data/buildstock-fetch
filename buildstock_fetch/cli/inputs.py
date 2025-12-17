@@ -1,8 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import final, override
 
-from typing_extensions import Self
+from typing_extensions import Self, final, override
 
 from buildstock_fetch.releases import ReleaseFilter
 from buildstock_fetch.types import (
