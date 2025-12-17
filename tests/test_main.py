@@ -1,4 +1,3 @@
-import shutil
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -8,7 +7,6 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from buildstock_fetch.releases import BuildstockReleases
 from buildstock_fetch.main import (
     LOAD_CURVE_COLUMN_AGGREGATION,
     BuildingID,
@@ -22,6 +20,7 @@ from buildstock_fetch.main import (
     fetch_bldg_data,
     fetch_bldg_ids,
 )
+from buildstock_fetch.releases import BuildstockReleases
 
 
 @pytest.fixture(scope="function")

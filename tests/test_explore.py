@@ -1,9 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from buildstock_fetch.building import BuildingID
 from buildstock_fetch.explore import DownloadedData, filter_downloads
 from buildstock_fetch.main import fetch_bldg_data
-import pytest
 
 
 @pytest.mark.usefixtures("cleanup_downloads")

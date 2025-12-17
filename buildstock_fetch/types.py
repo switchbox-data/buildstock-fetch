@@ -1,4 +1,5 @@
-from typing import Any, Literal, NewType, TypeAlias, TypeGuard, get_args
+from typing import Any, Literal, NewType, TypeAlias, get_args
+
 from typing_extensions import TypeIs
 
 __all__ = [

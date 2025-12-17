@@ -5,7 +5,7 @@ import pytest
 
 from buildstock_fetch.building import BuildingID
 from buildstock_fetch.main import fetch_bldg_data
-from buildstock_fetch.read import BuildStockRead, FileTypeNotAvailableError, NoUpgradesFoundError, UpgradeNotFoundError
+from buildstock_fetch.read import BuildStockRead, FileTypeNotAvailableError, NoUpgradesFoundError
 
 
 @pytest.mark.usefixtures("cleanup_downloads")

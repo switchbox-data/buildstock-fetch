@@ -129,7 +129,7 @@ class BuildstockRelease:
             return False
         if (upgrade_ids := predicate.get("upgrade_ids")) is not None and set(upgrade_ids) - self.upgrade_ids:
             return False
-        if (file_types := predicate.get("file_types")) is not None and set(file_types) - self.file_types:  # noqa: SIM103
+        if (file_types := predicate.get("file_types")) is not None and set(file_types) - self.file_types:
             return False
         return True
 
