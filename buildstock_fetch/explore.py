@@ -72,7 +72,7 @@ class DownloadedDataInfo:
     def release(self) -> BuildstockRelease:
         return self.releases[self.release_key]
 
-    def match(
+    def match(  # noqa: C901
         self,
         release_key: ReleaseKey | Collection[ReleaseKey] | None = None,
         file_type: FileType | Collection[FileType] | None = None,
