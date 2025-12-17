@@ -21,8 +21,8 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
 from buildstock_fetch.cli.main import cancel
-from buildstock_fetch.cli.releases import BuildstockReleases
 from buildstock_fetch.main import BuildingID, InvalidReleaseNameError, fetch_bldg_ids
+from buildstock_fetch.releases import BuildstockReleases
 from buildstock_fetch.types import USStateCode
 
 # Disable SSL warnings for cleaner output
@@ -765,9 +765,9 @@ def _interactive_mode():
     console.print(Panel("Weather Station Mapping Interactive CLI", title="BuildStock Fetch CLI", border_style="blue"))
     console.print("Please select the release information and file type you would like to fetch:")
 
-    releases = BuildstockReleases.from_json()
+    releases = BuildstockReleases.load()
     # Retrieve available releases
-    available_releases = releases.names
+    available_releases = releases.keys
 
     selected_release_name = questionary.select("Select release name:", choices=sorted(available_releases)).ask()
     release = releases[selected_release_name]

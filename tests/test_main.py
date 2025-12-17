@@ -8,7 +8,7 @@ import pytest
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from buildstock_fetch.cli.releases import BuildstockReleases
+from buildstock_fetch.releases import BuildstockReleases
 from buildstock_fetch.main import (
     LOAD_CURVE_COLUMN_AGGREGATION,
     BuildingID,
@@ -26,21 +26,7 @@ from buildstock_fetch.main import (
 
 @pytest.fixture(scope="function")
 def buildstock_releases():
-    return BuildstockReleases.from_json()
-
-
-@pytest.fixture(scope="function")
-def cleanup_downloads():
-    # Setup - clean up any existing files before test
-    data_dir = Path("data")
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
-
-    yield
-
-    # Teardown - clean up downloaded files after test
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
+    return BuildstockReleases.load()
 
 
 def test_fetch_bldg_ids():

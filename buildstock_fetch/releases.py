@@ -1,38 +1,52 @@
 import json
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypedDict, final, override
 
 import typedload
-from typing_extensions import Self
+from typing_extensions import Self, Unpack
 
 from buildstock_fetch.constants import BUILDSTOCK_RELEASES_FILE, UPGRADES_LOOKUP_FILE
 from buildstock_fetch.types import (
     FileType,
-    ReleaseName,
+    ReleaseKey,
     ReleaseVersion,
     ReleaseYear,
     ResCom,
     UpgradeID,
     USStateCode,
     Weather,
+    normalize_upgrade_id,
 )
 
-from .inputs import InputsMaybe
 
-
+@final
 class MoreThanOneReleaseError(Exception):
     def __init__(self, actual_number: int):
         self.actual_number = actual_number
+        super().__init__()
 
+    @override
     def __str__(self) -> str:
         return f"Expected only one release to be left, not {self.actual_number}"
 
 
+@final
 class NoReleasesLeftError(Exception):
+    @override
     def __str__(self) -> str:
         return "No releases left"
+
+
+class ReleaseFilter(TypedDict, total=False):
+    product: ResCom
+    year: ReleaseYear
+    weather: Weather
+    version: ReleaseVersion
+    states: Collection[USStateCode]
+    file_types: Collection[FileType]
+    upgrade_ids: Collection[UpgradeID]
 
 
 @dataclass(frozen=True)
@@ -47,6 +61,13 @@ class BuildstockReleaseDefinitionRaw:
     trip_schedule_states: frozenset[USStateCode] = field(default_factory=frozenset)
 
 
+class UpgradeDescriptionsRaw(TypedDict):
+    upgrade_descriptions: dict[str, str]
+
+
+UpgradesLookupRaw = dict[ReleaseKey, UpgradeDescriptionsRaw]
+
+
 class Upgrade(NamedTuple):
     id: UpgradeID
     description: str | None
@@ -54,11 +75,11 @@ class Upgrade(NamedTuple):
 
 @dataclass(frozen=True)
 class BuildstockRelease:
-    name: ReleaseName
-    release_year: ReleaseYear
+    key: ReleaseKey
+    year: ReleaseYear
     product: ResCom
     weather: Weather
-    release_version: ReleaseVersion
+    version: ReleaseVersion
     upgrades: frozenset[Upgrade]
     file_types: frozenset[FileType]
     weather_map_available_states: frozenset[USStateCode]
@@ -67,25 +88,26 @@ class BuildstockRelease:
     @classmethod
     def from_definitions(
         cls,
-        name: ReleaseName,
+        key: ReleaseKey,
         raw_definition: BuildstockReleaseDefinitionRaw,
         upgrade_descriptions: dict[str, str] | None,
     ) -> Self:
         if upgrade_descriptions:
             upgrades = frozenset(
-                Upgrade(UpgradeID(str(id_int)), description)
+                Upgrade(normalize_upgrade_id(str(id_int)), description)
                 for id_str, description in upgrade_descriptions.items()
-                if (id_int := int(id_str)) is not None
+                if (id_int := int(id_str)) is not None  # pyright: ignore[reportUnnecessaryComparison]
                 if id_int in map(int, raw_definition.upgrade_ids)
             )
         else:
-            upgrades = frozenset(Upgrade(UpgradeID(id_), None) for id_ in raw_definition.upgrade_ids)
+            upgrades = frozenset(Upgrade(normalize_upgrade_id(id_), None) for id_ in raw_definition.upgrade_ids)
+
         return cls(
-            name=name,
-            release_year=raw_definition.release_year,
+            key=key,
+            year=raw_definition.release_year,
             product=raw_definition.res_com,
             weather=raw_definition.weather,
-            release_version=raw_definition.release_number,
+            version=raw_definition.release_number,
             file_types=raw_definition.available_data,
             upgrades=upgrades,
             weather_map_available_states=raw_definition.weather_map_available_states,
@@ -96,80 +118,83 @@ class BuildstockRelease:
     def upgrade_ids(self) -> frozenset[UpgradeID]:
         return frozenset(_.id for _ in self.upgrades)
 
-    def filter(self, inputs: InputsMaybe) -> bool:
-        if inputs.release_year is not None and inputs.release_year != self.release_year:
+    def matches(self, **predicate: Unpack[ReleaseFilter]) -> bool:
+        if (year := predicate.get("year")) is not None and year != self.year:
             return False
-        if inputs.product is not None and inputs.product != self.product:
+        if (product := predicate.get("product")) is not None and product != self.product:
             return False
-        if inputs.weather_file is not None and inputs.weather_file != self.weather:
+        if (weather := predicate.get("weather")) is not None and weather != self.weather:
             return False
-        if inputs.release_version is not None and inputs.release_version != self.release_version:
+        if (version := predicate.get("version")) is not None and version != self.version:
             return False
-        if inputs.upgrade_ids is not None and inputs.upgrade_ids - self.upgrade_ids:
+        if (upgrade_ids := predicate.get("upgrade_ids")) is not None and set(upgrade_ids) - self.upgrade_ids:
             return False
-        return not (inputs.file_types is not None and inputs.file_types - self.file_types)
+        if (file_types := predicate.get("file_types")) is not None and set(file_types) - self.file_types:  # noqa: SIM103
+            return False
+        return True
 
 
 @dataclass(frozen=True)
 class BuildstockReleases:
-    releases: set[BuildstockRelease]
+    releases: frozenset[BuildstockRelease]
 
     def __iter__(self) -> Iterator[BuildstockRelease]:
         yield from self.releases
 
     @classmethod
-    def from_json(cls, filepath: Path | None = None, upgrades_filepath: Path | None = None) -> Self:
+    def load(cls, filepath: Path | None = None, upgrades_filepath: Path | None = None) -> Self:
         filepath = filepath or Path(BUILDSTOCK_RELEASES_FILE)
         content = filepath.read_text()
-        json_ = json.loads(content)
-        releases_dict = typedload.load(json_, dict[ReleaseName, BuildstockReleaseDefinitionRaw])
+        json_ = json.loads(content)  # pyright: ignore[reportAny]
+        releases_dict = typedload.load(json_, dict[ReleaseKey, BuildstockReleaseDefinitionRaw])
 
         upgrades_filepath = upgrades_filepath or Path(UPGRADES_LOOKUP_FILE)
         upgrades_content = upgrades_filepath.read_text()
-        upgrades_json = json.loads(upgrades_content)
+        upgrades_json = json.loads(upgrades_content)  # pyright: ignore[reportAny]
+        upgrades = typedload.load(upgrades_json, UpgradesLookupRaw)
         upgrades_dict = {
-            ReleaseName(release_name): {str(k): str(v) for k, v in value["upgrade_descriptions"].items()}
-            for release_name, value in upgrades_json.items()
+            release_key: {str(k): str(v) for k, v in value["upgrade_descriptions"].items()}
+            for release_key, value in upgrades.items()
         }
 
-        releases = {
+        releases = frozenset(
             BuildstockRelease.from_definitions(name, definition, upgrades_dict.get(name, {}))
             for name, definition in releases_dict.items()
-        }
+        )
 
         return cls(releases)
 
-    def filter(self, inputs: InputsMaybe) -> "BuildstockReleases":
-        return BuildstockReleases({r for r in self.releases if r.filter(inputs)})
+    def filter(self, **predicate: Unpack[ReleaseFilter]) -> "BuildstockReleases":
+        return BuildstockReleases(frozenset(r for r in self.releases if r.matches(**predicate)))
 
-    def filter_at_least_one(self, inputs: InputsMaybe) -> "BuildstockReleases":
-        result = self.filter(inputs)
+    def filter_at_least_one(self, **predicate: Unpack[ReleaseFilter]) -> "BuildstockReleases":
+        result = self.filter(**predicate)
         if not len(result):
             raise NoReleasesLeftError()
         return result
 
-    def filter_one(self, inputs: InputsMaybe) -> BuildstockRelease:
-        result_releases = self.filter(inputs)
+    def filter_one(self, **predicate: Unpack[ReleaseFilter]) -> BuildstockRelease:
+        result_releases = self.filter(**predicate)
         actual_number = len(result_releases)
         if actual_number > 1:
             raise MoreThanOneReleaseError(actual_number)
         if actual_number == 0:
             raise NoReleasesLeftError()
-        return result_releases.releases.pop()
+        return next(iter(result_releases.releases))
 
     def __len__(self) -> int:
         return len(self.releases)
 
-    def __getitem__(self, name: str) -> BuildstockRelease:
-        return next(_ for _ in self.releases if _.name == name)
+    def __getitem__(self, key: str) -> BuildstockRelease:
+        return next(_ for _ in self.releases if _.key == key)
 
     @property
-    def names(self) -> frozenset[ReleaseName]:
-        return frozenset(_.name for _ in self)
+    def keys(self) -> frozenset[ReleaseKey]:
+        return frozenset(_.key for _ in self)
 
     @property
-    def release_years(self) -> frozenset[ReleaseYear]:
-        return frozenset(_.release_year for _ in self)
+    def years(self) -> frozenset[ReleaseYear]:
+        return frozenset(_.year for _ in self)
 
     @property
     def products(self) -> frozenset[ResCom]:
@@ -180,8 +205,8 @@ class BuildstockReleases:
         return frozenset(_.weather for _ in self)
 
     @property
-    def release_versions(self) -> frozenset[ReleaseVersion]:
-        return frozenset(_.release_version for _ in self)
+    def versions(self) -> frozenset[ReleaseVersion]:
+        return frozenset(_.version for _ in self)
 
     @property
     def upgrade_ids(self) -> frozenset[UpgradeID]:
@@ -196,3 +221,6 @@ class BuildstockReleases:
         for item in self:
             result |= item.file_types
         return result
+
+
+RELEASES = BuildstockReleases.load()

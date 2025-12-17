@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import final, override
 
 from typing_extensions import Self
 
+from buildstock_fetch.releases import ReleaseFilter
 from buildstock_fetch.types import (
     FileType,
     ReleaseVersion,
@@ -14,11 +16,13 @@ from buildstock_fetch.types import (
 )
 
 
+@final
 class InputsNotFinalizedError(Exception):
     def __init__(self, field: str):
         super().__init__()
         self.field = field
 
+    @override
     def __str__(self) -> str:
         return f"Input not finalized: {self.field}"
 
@@ -45,6 +49,24 @@ class InputsMaybe:
             self.upgrade_ids is not None,
             self.output_directory is not None,
         ))
+
+    def as_filter(self) -> ReleaseFilter:
+        result: ReleaseFilter = {}
+        if self.product is not None:
+            result["product"] = self.product
+        if self.release_year is not None:
+            result["year"] = self.release_year
+        if self.weather_file is not None:
+            result["weather"] = self.weather_file
+        if self.release_version is not None:
+            result["version"] = self.release_version
+        if self.states is not None:
+            result["states"] = self.states
+        if self.file_types is not None:
+            result["file_types"] = self.file_types
+        if self.upgrade_ids is not None:
+            result["upgrade_ids"] = self.upgrade_ids
+        return result
 
 
 @dataclass(frozen=True)
