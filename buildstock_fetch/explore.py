@@ -39,7 +39,7 @@ class DownloadedDataInfo:
     release_key: ReleaseKey
     file_type: FileType
     state: USStateCode
-    upgrade_id: UpgradeID
+    upgrade: UpgradeID
     releases: BuildstockReleases = RELEASES
 
     @classmethod
@@ -51,7 +51,7 @@ class DownloadedDataInfo:
         groups = match.groupdict()
 
         filename = cast(str, groups["filename"])
-        upgrade_id = normalize_upgrade_id(cast(str, groups["upgrade_id"]))
+        upgrade = normalize_upgrade_id(cast(str, groups["upgrade_id"]))
         state = normalize_state_code(cast(str, groups["state"]))
         file_type = normalize_file_type(cast(str, groups["file_type"]))
         release_key = normalize_release_key(cast(str, groups["release_key"]))
@@ -64,7 +64,7 @@ class DownloadedDataInfo:
             release_key=release_key,
             file_type=file_type,
             state=state,
-            upgrade_id=upgrade_id,
+            upgrade=upgrade,
             releases=releases,
         )
 
@@ -77,7 +77,7 @@ class DownloadedDataInfo:
         release_key: ReleaseKey | Collection[ReleaseKey] | None = None,
         file_type: FileType | Collection[FileType] | None = None,
         state: USStateCode | Collection[USStateCode] | None = None,
-        upgrade_id: UpgradeID | Collection[UpgradeID] | None = None,
+        upgrade: UpgradeID | Collection[UpgradeID] | None = None,
         suffix: str | Collection[str] | None = None,
     ) -> bool:
         if is_valid_release_key(release_key):
@@ -86,8 +86,8 @@ class DownloadedDataInfo:
             file_type = ((file_type),)
         if is_valid_state_code(state):
             state = (state,)
-        if is_valid_upgrade_id(upgrade_id):
-            upgrade_id = (upgrade_id,)
+        if is_valid_upgrade_id(upgrade):
+            upgrade = (upgrade,)
         if isinstance(suffix, str):
             suffix = (suffix,)
 
@@ -97,7 +97,7 @@ class DownloadedDataInfo:
             return False
         if state is not None and all(_ != self.state for _ in state):
             return False
-        if upgrade_id is not None and all(_ != self.upgrade_id for _ in upgrade_id):
+        if upgrade is not None and all(_ != self.upgrade for _ in upgrade):
             return False
         if suffix is not None and all(_ != self.file_path.suffix for _ in suffix):
             return False
@@ -117,18 +117,18 @@ class DownloadedData(frozenset[DownloadedDataInfo]):
     def states(self) -> frozenset[USStateCode]:
         return frozenset(_.state for _ in self)
 
-    def upgrade_ids(self) -> frozenset[UpgradeID]:
-        return frozenset(_.upgrade_id for _ in self)
+    def upgrades(self) -> frozenset[UpgradeID]:
+        return frozenset(_.upgrade for _ in self)
 
     def filter(
         self,
         release_key: ReleaseKey | Collection[ReleaseKey] | None = None,
         file_type: FileType | Collection[FileType] | None = None,
         state: USStateCode | Collection[USStateCode] | None = None,
-        upgrade_id: UpgradeID | Collection[UpgradeID] | None = None,
+        upgrade: UpgradeID | Collection[UpgradeID] | None = None,
         suffix: str | Collection[str] | None = None,
     ) -> Self:
-        return self.__class__(_ for _ in self if _.match(release_key, file_type, state, upgrade_id, suffix))
+        return self.__class__(_ for _ in self if _.match(release_key, file_type, state, upgrade, suffix))
 
 
 def filter_downloads(
@@ -136,7 +136,7 @@ def filter_downloads(
     release_key: Collection[ReleaseKey] | ReleaseKey | None = None,
     file_type: Collection[FileType] | FileType | None = None,
     state: Collection[USStateCode] | USStateCode | None = None,
-    upgrade_id: Collection[UpgradeID] | UpgradeID | None = None,
+    upgrade: Collection[UpgradeID] | UpgradeID | None = None,
     releases: BuildstockReleases = RELEASES,
 ) -> Iterator[DownloadedDataInfo]:
     if is_valid_release_key(release_key):
@@ -145,8 +145,8 @@ def filter_downloads(
         file_type = (file_type,)
     if is_valid_state_code(state):
         state = (state,)
-    if is_valid_upgrade_id(upgrade_id):
-        upgrade_id = (upgrade_id,)
+    if is_valid_upgrade_id(upgrade):
+        upgrade = (upgrade,)
 
     return (
         DownloadedDataInfo.from_file_path(file_, releases)
@@ -162,11 +162,11 @@ def filter_downloads(
         if (state_value := noraise(normalize_state_code, state_path.name.replace("state=", ""))) is not None
         if state is None or state_value in state
         if state_path.is_dir()
-        for upgrade_id_path in state_path.iterdir()
-        if (upgrade_id_value := noraise(normalize_upgrade_id, upgrade_id_path.name.replace("upgrade=", ""))) is not None
-        if upgrade_id is None or upgrade_id_value in upgrade_id
-        if upgrade_id_path.is_dir()
-        for file_ in upgrade_id_path.iterdir()
+        for upgrade_path in state_path.iterdir()
+        if (upgrade_id_value := noraise(normalize_upgrade_id, upgrade_path.name.replace("upgrade=", ""))) is not None
+        if upgrade is None or upgrade_id_value in upgrade
+        if upgrade_path.is_dir()
+        for file_ in upgrade_path.iterdir()
         if not file_.is_dir()
     )
 

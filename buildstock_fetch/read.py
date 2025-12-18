@@ -25,21 +25,21 @@ class DataNotFoundError(Exception): ...
 
 @final
 class InvalidUpgradeForRelease(ValueError):
-    def __init__(self, release: BuildstockRelease, *upgrade_ids: UpgradeID) -> None:
+    def __init__(self, release: BuildstockRelease, *upgrades: UpgradeID) -> None:
         self.release = release
-        self.upgrade_ids = upgrade_ids
+        self.upgrades = upgrades
         super().__init__()
 
     @override
     def __str__(self) -> str:
-        if len(self.upgrade_ids) == 1:
+        if len(self.upgrades) == 1:
             return (
-                f"Upgrade {self.upgrade_ids[0]} is not valid for release {self.release.key}. "
-                f"Valid upgrades: {sorted(self.release.upgrade_ids, key=int)}"
+                f"Upgrade {self.upgrades[0]} is not valid for release {self.release.key}. "
+                f"Valid upgrades: {sorted(self.release.upgrades, key=int)}"
             )
         return (
-            f"Upgrades {self.upgrade_ids} are not valid for release {self.release.key}. "
-            f"Valid upgrades: {sorted(self.release.upgrade_ids, key=int)}"
+            f"Upgrades {self.upgrades} are not valid for release {self.release.key}. "
+            f"Valid upgrades: {sorted(self.release.upgrades, key=int)}"
         )
 
 
@@ -182,7 +182,7 @@ class BuildStockRead:
         metadata_files = self.downloaded_data.filter(file_type="metadata", suffix=".parquet")
         if not metadata_files:
             raise MetadataNotFoundError(self.release, self.states)
-        first_metadata_file = min(metadata_files, key=lambda _: int(_.upgrade_id))
+        first_metadata_file = min(metadata_files, key=lambda _: int(_.upgrade))
         df = pl.scan_parquet(first_metadata_file.file_path).select("bldg_id").collect()
         all_building_ids = cast(list[int], df["bldg_id"].unique().to_list())
 
@@ -195,61 +195,61 @@ class BuildStockRead:
 
         return frozenset(self.random.sample(all_building_ids, self.sample_n))
 
-    def read_metadata(self, upgrade_ids: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("metadata", upgrade_ids)
+    def read_metadata(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
+        return self.read_parquets("metadata", upgrades)
 
-    def read_load_curve_15min(self, upgrade_ids: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("load_curve_15min", upgrade_ids)
+    def read_load_curve_15min(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
+        return self.read_parquets("load_curve_15min", upgrades)
 
-    def read_load_curve_hourly(self, upgrade_ids: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("load_curve_hourly", upgrade_ids)
+    def read_load_curve_hourly(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
+        return self.read_parquets("load_curve_hourly", upgrades)
 
-    def read_load_curve_daily(self, upgrade_ids: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("load_curve_daily", upgrade_ids)
+    def read_load_curve_daily(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
+        return self.read_parquets("load_curve_daily", upgrades)
 
-    def read_load_curve_monthly(self, upgrade_ids: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("load_curve_monthly", upgrade_ids)
+    def read_load_curve_monthly(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
+        return self.read_parquets("load_curve_monthly", upgrades)
 
-    def read_load_curve_annual(self, upgrade_ids: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("load_curve_annual", upgrade_ids)
+    def read_load_curve_annual(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
+        return self.read_parquets("load_curve_annual", upgrades)
 
-    def read_parquets(self, file_type: FileType, upgrade_ids: str | Collection[str] | None = None) -> pl.LazyFrame:
+    def read_parquets(self, file_type: FileType, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
         if "metadata" not in self.release.file_types:
             raise FileTypeNotAvailableError(self.release, file_type)
 
-        upgrade_ids = self._validate_upgrades(file_type, upgrade_ids)
+        upgrades = self._validate_upgrades(file_type, upgrades)
 
-        files = self.downloaded_data.filter(file_type=file_type, suffix=".parquet", upgrade_id=upgrade_ids)
+        files = self.downloaded_data.filter(file_type=file_type, suffix=".parquet", upgrade=upgrades)
         lf = pl.scan_parquet([_.file_path for _ in files])
         lf = self._apply_sampling_filter(lf)
         return lf
 
     def _validate_upgrades(
-        self, file_type: FileType, upgrade_ids: str | Collection[str] | None = None
+        self, file_type: FileType, upgrades: str | Collection[str] | None = None
     ) -> frozenset[UpgradeID]:
-        if upgrade_ids is None:
-            upgrade_ids = None
-        elif isinstance(upgrade_ids, str):
-            upgrade_ids = [normalize_upgrade_id(upgrade_ids)]
+        if upgrades is None:
+            upgrades = None
+        elif isinstance(upgrades, str):
+            upgrades = [normalize_upgrade_id(upgrades)]
         else:
-            upgrade_ids = [normalize_upgrade_id(_) for _ in upgrade_ids]
+            upgrades = [normalize_upgrade_id(_) for _ in upgrades]
 
         # We shouldn't raise an error here - an empty list may be passed intentionally
-        if upgrade_ids is not None and not upgrade_ids:
+        if upgrades is not None and not upgrades:
             logging.getLogger(__name__).info("Empty upgrades list got passed into validate_upgrades")
             return frozenset()
 
-        if upgrade_ids and (invalid_upgrades := [_ for _ in upgrade_ids if _ not in self.release.upgrade_ids]):
+        if upgrades and (invalid_upgrades := [_ for _ in upgrades if _ not in self.release.upgrades]):
             raise InvalidUpgradeForRelease(self.release, *invalid_upgrades)  # type: ignore[arg-type]
 
-        available_upgrades = self.downloaded_data.filter(state=self.states, file_type=file_type).upgrade_ids()
+        available_upgrades = self.downloaded_data.filter(state=self.states, file_type=file_type).upgrades()
         if not available_upgrades:
             raise NoUpgradesFoundError(self.release)
 
-        if upgrade_ids and (missing_upgrades := [_ for _ in upgrade_ids if _ not in available_upgrades]):
+        if upgrades and (missing_upgrades := [_ for _ in upgrades if _ not in available_upgrades]):
             raise UpgradeNotFoundError(self.release, available_upgrades, *missing_upgrades)  # type: ignore[arg-type]
 
-        return frozenset(upgrade_ids or available_upgrades)  # type: ignore [arg-type]
+        return frozenset(upgrades or available_upgrades)  # type: ignore [arg-type]
 
     def _apply_sampling_filter(self, lf: pl.LazyFrame) -> pl.LazyFrame:
         """Apply sampling filter if sampled_bldgs is set."""

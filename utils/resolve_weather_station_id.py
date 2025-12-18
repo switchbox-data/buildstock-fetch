@@ -1,3 +1,4 @@
+# pyright: basic, reportOperatorIssue=none
 import concurrent.futures
 import json
 import os
@@ -789,7 +790,7 @@ def _interactive_mode():
                 title=f"{upgrade.id}: {upgrade.description}" if upgrade.description else str(upgrade.id),
                 value=upgrade.id,
             )
-            for upgrade in release.upgrades
+            for upgrade in release.upgrades_with_descriptions
         ],
         instruction="Use spacebar to select/deselect options, enter to confirm",
     ).ask()

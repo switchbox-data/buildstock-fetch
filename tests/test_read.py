@@ -43,7 +43,7 @@ def test_read_metadata_single_upgrade():
         release="res_2022_tmy3_1",
         states="NY",
     )
-    metadata = bsr.read_metadata(upgrade_ids="0")
+    metadata = bsr.read_metadata(upgrades="0")
     assert isinstance(metadata, pl.LazyFrame)
     df = metadata.collect()
     assert "bldg_id" in df.columns
@@ -65,7 +65,7 @@ def test_read_metadata_multiple_upgrades():
         states="NY",
     )
 
-    metadata = bsr.read_metadata(upgrade_ids=["0", "1"])
+    metadata = bsr.read_metadata(upgrades=["0", "1"])
 
     df = metadata.collect()
 
@@ -109,7 +109,7 @@ def test_read_load_curve_15min():
         states="NY",
     )
 
-    load_curve = bsr.read_load_curve_15min(upgrade_ids="0")
+    load_curve = bsr.read_load_curve_15min(upgrades="0")
     assert isinstance(load_curve, pl.LazyFrame)
 
     df = load_curve.collect()
@@ -139,7 +139,7 @@ def test_read_load_curve_hourly():
         states="NY",
     )
 
-    load_curve = bsr.read_load_curve_hourly(upgrade_ids="0")
+    load_curve = bsr.read_load_curve_hourly(upgrades="0")
     assert isinstance(load_curve, pl.LazyFrame)
 
     df = load_curve.collect()
@@ -167,7 +167,7 @@ def test_read_load_curve_daily():
         states="NY",
     )
 
-    load_curve = bsr.read_load_curve_daily(upgrade_ids="0")
+    load_curve = bsr.read_load_curve_daily(upgrades="0")
     assert isinstance(load_curve, pl.LazyFrame)
 
     df = load_curve.collect()
@@ -197,7 +197,7 @@ def test_read_load_curve_annual():
         states="NY",
     )
 
-    load_curve = bsr.read_load_curve_annual(upgrade_ids="0")
+    load_curve = bsr.read_load_curve_annual(upgrades="0")
     assert isinstance(load_curve, pl.LazyFrame)
 
     df = load_curve.collect()
@@ -226,7 +226,7 @@ def test_read_load_curve_not_available_for_release():
     )
     # RES_2024_TMY3_2 should have load_curve_15min available, but not on disk
     with pytest.raises((FileTypeNotAvailableError, NoUpgradesFoundError)):
-        bsr.read_load_curve_15min(upgrade_ids="0")
+        bsr.read_load_curve_15min(upgrades="0")
 
 
 @pytest.mark.usefixtures("cleanup_downloads")

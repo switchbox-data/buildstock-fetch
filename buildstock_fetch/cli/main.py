@@ -235,7 +235,7 @@ def select_release_version(releases: BuildstockReleases, inputs: InputsMaybe) ->
 
 def select_upgrade_ids(releases: BuildstockReleases, inputs: InputsMaybe) -> set[UpgradeID]:
     release = releases.filter_one(**inputs.as_filter())
-    upgrades_sorted = sorted(release.upgrades, key=lambda _: int(_.id))
+    upgrades_sorted = sorted(release.upgrades_with_descriptions, key=lambda _: int(_.id))
     choices = [
         questionary.Choice(
             title=f"{upgrade.id}: {upgrade.description}" if upgrade.description else str(upgrade.id), value=upgrade.id

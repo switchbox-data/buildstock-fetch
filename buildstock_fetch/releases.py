@@ -46,7 +46,7 @@ class ReleaseFilter(TypedDict, total=False):
     version: ReleaseVersion
     states: Collection[USStateCode]
     file_types: Collection[FileType]
-    upgrade_ids: Collection[UpgradeID]
+    upgrades: Collection[UpgradeID]
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,7 @@ class UpgradeDescriptionsRaw(TypedDict):
 UpgradesLookupRaw = dict[ReleaseKey, UpgradeDescriptionsRaw]
 
 
-class Upgrade(NamedTuple):
+class UpgradeWithDescription(NamedTuple):
     id: UpgradeID
     description: str | None
 
@@ -80,7 +80,7 @@ class BuildstockRelease:
     product: ResCom
     weather: Weather
     version: ReleaseVersion
-    upgrades: frozenset[Upgrade]
+    upgrades_with_descriptions: frozenset[UpgradeWithDescription]
     file_types: frozenset[FileType]
     weather_map_available_states: frozenset[USStateCode]
     trip_schedule_states: frozenset[USStateCode]
@@ -94,13 +94,15 @@ class BuildstockRelease:
     ) -> Self:
         if upgrade_descriptions:
             upgrades = frozenset(
-                Upgrade(normalize_upgrade_id(str(id_int)), description)
+                UpgradeWithDescription(normalize_upgrade_id(str(id_int)), description)
                 for id_str, description in upgrade_descriptions.items()
                 if (id_int := int(id_str)) is not None  # pyright: ignore[reportUnnecessaryComparison]
                 if id_int in map(int, raw_definition.upgrade_ids)
             )
         else:
-            upgrades = frozenset(Upgrade(normalize_upgrade_id(id_), None) for id_ in raw_definition.upgrade_ids)
+            upgrades = frozenset(
+                UpgradeWithDescription(normalize_upgrade_id(id_), None) for id_ in raw_definition.upgrade_ids
+            )
 
         return cls(
             key=key,
@@ -109,14 +111,14 @@ class BuildstockRelease:
             weather=raw_definition.weather,
             version=raw_definition.release_number,
             file_types=raw_definition.available_data,
-            upgrades=upgrades,
+            upgrades_with_descriptions=upgrades,
             weather_map_available_states=raw_definition.weather_map_available_states,
             trip_schedule_states=raw_definition.trip_schedule_states,
         )
 
     @property
-    def upgrade_ids(self) -> frozenset[UpgradeID]:
-        return frozenset(_.id for _ in self.upgrades)
+    def upgrades(self) -> frozenset[UpgradeID]:
+        return frozenset(_.id for _ in self.upgrades_with_descriptions)
 
     def matches(self, **predicate: Unpack[ReleaseFilter]) -> bool:
         if (year := predicate.get("year")) is not None and year != self.year:
@@ -127,7 +129,7 @@ class BuildstockRelease:
             return False
         if (version := predicate.get("version")) is not None and version != self.version:
             return False
-        if (upgrade_ids := predicate.get("upgrade_ids")) is not None and set(upgrade_ids) - self.upgrade_ids:
+        if (upgrades := predicate.get("upgrades")) is not None and set(upgrades) - self.upgrades:
             return False
         if (file_types := predicate.get("file_types")) is not None and set(file_types) - self.file_types:
             return False
@@ -212,7 +214,7 @@ class BuildstockReleases:
     def upgrade_ids(self) -> frozenset[UpgradeID]:
         result: frozenset[UpgradeID] = frozenset()
         for item in self:
-            result |= item.upgrade_ids
+            result |= item.upgrades
         return result
 
     @property

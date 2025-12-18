@@ -1,3 +1,4 @@
+# pyright: basic, reportCallIssue=none, reportArgumentType=none
 import contextlib
 import gc
 import json
