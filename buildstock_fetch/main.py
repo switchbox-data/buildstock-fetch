@@ -67,16 +67,12 @@ def _get_SB_analysis_upgrades() -> dict[str, Any] | None:
 _SB_ANALYSIS_UPGRADES_COLUMN_MAP_CACHE: pl.DataFrame | None = None
 
 
-def _get_SB_analysis_upgrades_column_map(release_year: ReleaseYear) -> pl.DataFrame:
+def _get_SB_analysis_upgrades_load_curve_column_map(release_year: ReleaseYear) -> pl.DataFrame:
     """Load SB analysis upgrades column map once and cache it for subsequent calls."""
     global _SB_ANALYSIS_UPGRADES_COLUMN_MAP_CACHE
     if release_year == "2024":
         SB_ANALYSIS_UPGRADES_COLUMN_MAP_FILE = LOAD_CURVE_COLUMN_AGGREGATION.joinpath(
-            "data_dictionary_2024_labeled.csv"
-        )
-    elif release_year == "2022":
-        SB_ANALYSIS_UPGRADES_COLUMN_MAP_FILE = LOAD_CURVE_COLUMN_AGGREGATION.joinpath(
-            "data_dictionary_2022_labeled.csv"
+            "data_dictionary_2024_load_curve_labeled.csv"
         )
     else:
         msg = f"Release year {release_year} not supported"
@@ -717,33 +713,6 @@ def download_bldg_data(
         temp_dir.rmdir()  # Remove empty temp directory
 
     return downloaded_paths
-
-
-def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
-    """Download the 15 min load profile timeseries for a given building.
-
-    Args:
-        bldg_id: A BuildingID object to download 15 min load profile timeseries for.
-        output_dir: Directory to save the downloaded 15 min load profile timeseries.
-    """
-
-    download_url = bldg_id.get_15min_load_curve_url()
-    if download_url is None:
-        message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}"
-        raise No15minLoadCurveError(message)
-    response = requests.get(download_url, timeout=30, verify=True)
-    response.raise_for_status()
-    output_file = (
-        output_dir
-        / bldg_id.get_release_name()
-        / "load_curve_15min"
-        / f"state={bldg_id.state}"
-        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
-    )
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_bytes(response.content)
-    return output_file
 
 
 def download_15min_load_curve_with_progress(
@@ -1464,7 +1433,7 @@ def _process_download_future_15min(
         downloaded_paths.append(output_file)
         # Special case for SwitchBox Analysis upgrades
         if bldg_id.is_SB_upgrade():
-            _process_SB_upgrade_load_curve(bldg_id, output_file)
+            _process_SB_upgrade_load_curve(bldg_id, output_dir, output_file)
     except No15minLoadCurveError:
         output_file = (
             output_dir
@@ -1490,16 +1459,115 @@ def _process_download_future_15min(
         console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
-def _process_SB_upgrade_load_curve(bldg_id: BuildingID, output_file: Path) -> None:
+def _process_SB_upgrade_load_curve(bldg_id: BuildingID, output_dir: Path, output_file: Path) -> None:
     """Process a SwitchBox Analysis upgrade load curve."""
+    # Load SB analysis upgrades data json file
     sb_analysis_upgrades = _get_SB_analysis_upgrades()
     if sb_analysis_upgrades is None:
         msg = "SB analysis upgrades data not available"
         raise ValueError(msg)
-    sb_analysis_upgrades_column_map = _get_SB_analysis_upgrades_column_map(bldg_id.release_year)
+    # Load SB analysis upgrades column map csv file (maps which columns are HVAC and which are appliances)
+    sb_analysis_upgrades_column_map = _get_SB_analysis_upgrades_load_curve_column_map(bldg_id.release_year)
     if sb_analysis_upgrades_column_map is None:
         msg = "SB analysis upgrades column map not available"
         raise ValueError(msg)
+    # Extract out this specific release's data
+    release_name = bldg_id.get_release_name()
+    if release_name not in sb_analysis_upgrades:
+        return
+    sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
+    upgrade_components = sb_analysis_upgrade_data["upgrade_components"][bldg_id.upgrade_id]
+    # See which upgrades make up which components (e.g. for upgrade 17, HVAC comes from 1 and appliances from 11)
+    hvac_heating_upgrade_id = sb_analysis_upgrade_data["HVAC_heating"][bldg_id.upgrade_id]
+    hvac_cooling_upgrade_id = sb_analysis_upgrade_data["HVAC_cooling"][bldg_id.upgrade_id]
+    appliances_upgrade_id = sb_analysis_upgrade_data["appliances"][bldg_id.upgrade_id]
+    hot_water_upgrade_id = sb_analysis_upgrade_data["hot_water"][bldg_id.upgrade_id]
+
+    # Initialize the final SB upgrade load curve dataframe. Load the timestamp from the first upgrade component.
+    SB_upgrade_load_curve_df = pl.DataFrame()
+    first_upgrade_component = upgrade_components[0]
+    first_upgrade_component_filename = (
+        output_dir
+        / bldg_id.get_release_name()
+        / "load_curve_15min"
+        / f"state={bldg_id.state}"
+        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"{str(bldg_id.bldg_id)!s}-{int(first_upgrade_component)!s}.parquet"
+    )
+    SB_upgrade_load_curve_df = pl.read_parquet(first_upgrade_component_filename).select("timestamp")
+
+    # Update each upgrade component's load curve to the final SB upgrade load curve dataframe.
+    for upgrade_component in upgrade_components:
+        # See which component this upgrade makes up
+        bldg_id_component = bldg_id.copy(upgrade_id=upgrade_component)
+        component_filename = (
+            output_dir
+            / bldg_id.get_release_name()
+            / "load_curve_15min"
+            / f"state={bldg_id.state}"
+            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+            / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id_component.upgrade_id)!s}.parquet"
+        )
+        if bldg_id_component.upgrade_id in hvac_heating_upgrade_id:
+            # Extract field_name values where functional_group is "HVAC_heating"
+            HVAC_heating_column_names = (
+                sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == "HVAC_heating")
+                .select("field_name")
+                .to_series()
+                .to_list()
+            )
+            # Read the load curve for this component and add to the final SB upgrade load curve dataframe
+            component_load_curve_df = pl.read_parquet(component_filename).select([
+                "timestamp",
+                *HVAC_heating_column_names,
+            ])
+            SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.join(component_load_curve_df, on="timestamp")
+        elif bldg_id_component.upgrade_id in hvac_cooling_upgrade_id:
+            # Extract field_name values where functional_group is "HVAC_cooling"
+            HVAC_cooling_column_names = (
+                sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == "HVAC_cooling")
+                .select("field_name")
+                .to_series()
+                .to_list()
+            )
+            # Read the load curve for this component and add to the final SB upgrade load curve dataframe
+            component_load_curve_df = pl.read_parquet(component_filename).select([
+                "timestamp",
+                *HVAC_cooling_column_names,
+            ])
+            SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.join(component_load_curve_df, on="timestamp")
+        elif bldg_id_component.upgrade_id in appliances_upgrade_id:
+            # Extract field_name values where functional_group is "Appliances"
+            appliances_column_names = (
+                sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == "Appliances")
+                .select("field_name")
+                .to_series()
+                .to_list()
+            )
+            # Read the load curve for this component and add to the final SB upgrade load curve dataframe
+            component_load_curve_df = pl.read_parquet(component_filename).select([
+                "timestamp",
+                *appliances_column_names,
+            ])
+            SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.join(component_load_curve_df, on="timestamp")
+        elif bldg_id_component.upgrade_id in hot_water_upgrade_id:
+            # Extract field_name values where functional_group is "Hot water"
+            hot_water_column_names = (
+                sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == "Hot water")
+                .select("field_name")
+                .to_series()
+                .to_list()
+            )
+            # Read the load curve for this component and add to the final SB upgrade load curve dataframe
+            component_load_curve_df = pl.read_parquet(component_filename).select(["timestamp", *hot_water_column_names])
+            SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.join(component_load_curve_df, on="timestamp")
+
+        # Delete the component load curve dataframe
+        os.remove(component_filename)
+        gc.collect()
+
+    # Save the final SB upgrade load curve dataframe to a parquet file
+    SB_upgrade_load_curve_df.write_parquet(output_file)
 
 
 def _download_aggregate_load_curves_parallel(
