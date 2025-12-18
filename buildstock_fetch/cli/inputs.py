@@ -64,7 +64,7 @@ class InputsMaybe:
         if self.file_types is not None:
             result["file_types"] = self.file_types
         if self.upgrade_ids is not None:
-            result["upgrade_ids"] = self.upgrade_ids
+            result["upgrades"] = self.upgrade_ids
         return result
 
 
