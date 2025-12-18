@@ -13,6 +13,7 @@ from typing_extensions import Never
 
 from buildstock_fetch.building import BuildingID
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
+from buildstock_fetch.releases import BuildstockReleases
 from buildstock_fetch.types import (
     FileType,
     ReleaseVersion,
@@ -26,7 +27,6 @@ from buildstock_fetch.types import (
 )
 
 from .inputs import InputsFinal, InputsMaybe
-from .releases import BuildstockReleases
 
 # File types that haven't been implemented yet
 UNAVAILABLE_FILE_TYPES: list[str] = []
@@ -135,7 +135,7 @@ def main(  # noqa: C901
         console.print("This tool allows you to fetch data from the NREL BuildStock API.")
         console.print("Please select the release information and file type you would like to fetch:")
 
-    releases = BuildstockReleases.from_json()
+    releases = BuildstockReleases.load()
 
     if inputs.product is None:
         inputs.product = select_product(releases, inputs)
@@ -164,11 +164,12 @@ def main(  # noqa: C901
     inputs_final = InputsFinal.from_finalized_maybe(inputs)
 
     if not inputs_finalized:
-        verify_inputs(inputs_final)
+        if not verify_inputs(inputs_final):
+            cancel()
         display_cli_args(inputs_final, threads, sample)
 
     display_download_parameters(inputs_final)
-    release = releases.filter_one(inputs)
+    release = releases.filter_one(**inputs.as_filter())
 
     if "trip_schedules" in inputs.file_types:
         for state in inputs.states:
@@ -177,13 +178,13 @@ def main(  # noqa: C901
 
     building_groups = fetch_building_groups(inputs_final)
     if sample is not None:
-        buildings = set()
+        buildings: set[BuildingID] = set()
         for group in building_groups:
             buildings |= set(group.buildings[: -1 if sample == "all" else sample])
     else:
         buildings = get_buildings_sample(building_groups)
 
-    fetch_bldg_data(
+    _unused = fetch_bldg_data(
         list(buildings),
         tuple(inputs_final.file_types),
         inputs_final.output_directory,
@@ -193,32 +194,32 @@ def main(  # noqa: C901
 
 
 def select_product(releases: BuildstockReleases, inputs: InputsMaybe) -> ResCom:
-    available_releases = releases.filter_at_least_one(inputs)
+    available_releases = releases.filter_at_least_one(**inputs.as_filter())
     products = sorted(available_releases.products)
     products.reverse()
-    result = questionary.select("Select product type", choices=products).ask()
+    result = cast(ResCom | None, questionary.select("Select product type", choices=products).ask())
     return cast(ResCom, result) or cancel()
 
 
 def select_release_year(releases: BuildstockReleases, inputs: InputsMaybe) -> ReleaseYear:
-    available_releases = releases.filter_at_least_one(inputs)
-    years = sorted(available_releases.release_years)
+    available_releases = releases.filter_at_least_one(**inputs.as_filter())
+    years = sorted(available_releases.years)
     years.reverse()
-    result = questionary.select("Select release year:", choices=years).ask()
+    result = cast(ReleaseYear | None, questionary.select("Select release year:", choices=years).ask())
     return cast(ReleaseYear, result) or cancel()
 
 
 def select_weather_file(releases: BuildstockReleases, inputs: InputsMaybe) -> Weather:
-    available_releases = releases.filter_at_least_one(inputs)
+    available_releases = releases.filter_at_least_one(**inputs.as_filter())
     desired_order = ["tmy3", "amy2018", "amy2012"]
     weathers = sorted(available_releases.weathers, key=lambda _: desired_order.index(_))
-    result = questionary.select("Select weather file", choices=weathers).ask()
+    result = cast(Weather | None, questionary.select("Select weather file", choices=weathers).ask())
     return cast(Weather, result) or cancel()
 
 
 def select_release_version(releases: BuildstockReleases, inputs: InputsMaybe) -> ReleaseVersion:
-    available_releases = releases.filter_at_least_one(inputs)
-    versions = set(available_releases.release_versions)
+    available_releases = releases.filter_at_least_one(**inputs.as_filter())
+    versions = set(available_releases.versions)
     if (
         inputs.product == "resstock"
         and inputs.weather_file == "tmy3"
@@ -228,25 +229,28 @@ def select_release_version(releases: BuildstockReleases, inputs: InputsMaybe) ->
         versions.remove("1")
     desired_order = ["2", "1.1", "1"]
     versions_sorted = sorted(versions, key=lambda _: desired_order.index(_))
-    result = questionary.select("Select release version:", choices=versions_sorted).ask()
+    result = cast(ReleaseVersion | None, questionary.select("Select release version:", choices=versions_sorted).ask())
     return cast(ReleaseVersion, result) or cancel()
 
 
 def select_upgrade_ids(releases: BuildstockReleases, inputs: InputsMaybe) -> set[UpgradeID]:
-    release = releases.filter_one(inputs)
-    upgrades_sorted = sorted(release.upgrades, key=lambda _: int(_.id))
+    release = releases.filter_one(**inputs.as_filter())
+    upgrades_sorted = sorted(release.upgrades_with_descriptions, key=lambda _: int(_.id))
     choices = [
         questionary.Choice(
             title=f"{upgrade.id}: {upgrade.description}" if upgrade.description else str(upgrade.id), value=upgrade.id
         )
         for upgrade in upgrades_sorted
     ]
-    result = questionary.checkbox(
-        "Select upgrade ids:",
-        choices=choices,
-        instruction="Use spacebar to select/deselect options, 'a' to select all, 'i' to invert selection, enter to confirm",
-        validate=lambda answer: "You must select at least one upgrade id" if len(answer) == 0 else True,
-    ).ask()
+    result = cast(
+        list[UpgradeID],
+        questionary.checkbox(
+            "Select upgrade ids:",
+            choices=choices,
+            instruction="Use spacebar to select/deselect options, 'a' to select all, 'i' to invert selection, enter to confirm",
+            validate=lambda answer: "You must select at least one upgrade id" if len(answer) == 0 else True,
+        ).ask(),
+    )
     if not result:
         cancel()
     return set(result)
@@ -254,20 +258,23 @@ def select_upgrade_ids(releases: BuildstockReleases, inputs: InputsMaybe) -> set
 
 def select_states() -> set[USStateCode]:
     states = sorted(get_args(USStateCode))
-    result = questionary.checkbox(
-        "Select states:",
-        choices=states,
-        instruction="Use spacebar to select/deselect options, enter to confirm",
-        validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
-    ).ask()
+    result = cast(
+        list[USStateCode],
+        questionary.checkbox(
+            "Select states:",
+            choices=states,
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+            validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
+        ).ask(),
+    )
     if not result:
         cancel()
     return set(result)
 
 
 def select_file_types(releases: BuildstockReleases, inputs: InputsMaybe) -> set[FileType]:
-    available_releases = releases.filter_at_least_one(inputs)
-    choices = []
+    available_releases = releases.filter_at_least_one(**inputs.as_filter())
+    choices: list[questionary.Choice] = []
     if "metadata" in available_releases.file_types:
         choices.append(_category_choice("Metadata"))
         choices.append(_filetype_choice("metadata"))
@@ -303,25 +310,31 @@ def select_file_types(releases: BuildstockReleases, inputs: InputsMaybe) -> set[
         choices.append(_category_choice("Weather"))
         choices.append(_filetype_choice("weather"))
 
-    result = questionary.checkbox(
-        "Select file type:",
-        choices=choices,
-        instruction="Use spacebar to select/deselect options, enter to confirm",
-        validate=lambda answer: "You must select at least one file type" if len(answer) == 0 else True,
-    ).ask()
+    result = cast(
+        list[FileType],
+        questionary.checkbox(
+            "Select file type:",
+            choices=choices,
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+            validate=lambda answer: "You must select at least one file type" if len(answer) == 0 else True,
+        ).ask(),
+    )
     if not result:
         cancel()
     return set(result)
 
 
 def select_output_directory() -> Path:
-    result = questionary.path(
-        "Select output directory:",
-        default=str(Path.cwd() / "data"),
-        only_directories=True,
-        validate=_validate_output_directory,
-    ).ask()
-    return Path(cast(str, result))
+    result = cast(
+        str,
+        questionary.path(
+            "Select output directory:",
+            default=str(Path.cwd() / "data"),
+            only_directories=True,
+            validate=_validate_output_directory,
+        ).ask(),
+    )
+    return Path(result)
 
 
 def verify_inputs(inputs: InputsFinal) -> bool:
@@ -342,7 +355,7 @@ def verify_inputs(inputs: InputsFinal) -> bool:
     console.print(Panel(table, border_style="green"))
 
     try:
-        result = questionary.confirm("Are these selections correct?", default=True).ask()
+        result = cast(bool | None, questionary.confirm("Are these selections correct?", default=True).ask())
     except KeyboardInterrupt:
         cancel()
 
@@ -361,15 +374,18 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[BuildingI
     for group in building_groups:
         console.print(f"  • State {group.state}, Upgrade {group.upgrade_id}: {len(group.buildings)} buildings")
 
-    choice = questionary.select(
-        "Would you like to download all files or a sample of them?",
-        choices=["Download all files", "Download a sample"],
-    ).ask()
+    choice = cast(
+        str | None,
+        questionary.select(
+            "Would you like to download all files or a sample of them?",
+            choices=["Download all files", "Download a sample"],
+        ).ask(),
+    )
 
     if not choice:
         cancel()
 
-    result = set()
+    result: set[BuildingID] = set()
     if choice == "Download all files":
         for group in building_groups:
             result |= set(group.buildings)
@@ -377,11 +393,14 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[BuildingI
 
     for group in building_groups:
         total_for_state_upgrade = len(group.buildings)
-        sample_size_str = questionary.text(
-            f"Enter the number of files to download for State {group.state}, Upgrade {group.upgrade_id} (0-{total_for_state_upgrade}):",
-            validate=lambda text, max_val=total_for_state_upgrade: (text.isdigit() and 0 <= int(text) <= max_val)
-            or f"Please enter a number between 0 and {max_val}",
-        ).ask()
+        sample_size_str = cast(
+            str | None,
+            questionary.text(
+                f"Enter the number of files to download for State {group.state}, Upgrade {group.upgrade_id} (0-{total_for_state_upgrade}):",
+                validate=lambda text, max_val=total_for_state_upgrade: (text.isdigit() and 0 <= int(text) <= max_val)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+                or f"Please enter a number between 0 and {max_val}",
+            ).ask(),
+        )
 
         if sample_size_str is None:
             cancel()
@@ -452,7 +471,7 @@ def fetch_building_groups(inputs: InputsFinal) -> list[BuildingsGroup]:
 
 
 def _category_choice(name: str) -> questionary.Choice:
-    return questionary.Choice(title=f"--- {name} ---", value=None, disabled=True)  # type: ignore[arg-type]
+    return questionary.Choice(title=f"--- {name} ---", value=None, disabled=True)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
 
 def _filetype_choice(file_type: FileType) -> questionary.Choice:
@@ -462,7 +481,7 @@ def _filetype_choice(file_type: FileType) -> questionary.Choice:
 def _validate_output_directory(output_directory: str) -> bool | str:
     try:
         path = Path(output_directory)
-        path.resolve()
+        _ = path.resolve()
     except (OSError, ValueError):
         return "Please enter a valid directory path"
     else:
@@ -474,7 +493,7 @@ def _parse_and_validate_states(value: str) -> set[USStateCode]:
     bad_states = [state for state in states if not is_valid_state_code(state)]
     if bad_states:
         raise typer.BadParameter(message=", ".join(bad_states), param_hint="states")
-    return cast(set[USStateCode], states)
+    return set(cast(list[USStateCode], states))
 
 
 def _parse_and_validate_file_types(value: str) -> set[FileType]:
