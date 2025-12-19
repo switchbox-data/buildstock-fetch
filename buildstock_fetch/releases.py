@@ -2,7 +2,7 @@ import json
 from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, NamedTuple, TypedDict
+from typing import NamedTuple, TypedDict
 
 import typedload
 from typing_extensions import Self, Unpack, final, override

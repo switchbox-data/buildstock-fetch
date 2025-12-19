@@ -1,11 +1,9 @@
 from dataclasses import dataclass
-from math import prod
 from typing import overload
 from urllib.parse import urljoin
 
 from buildstock_fetch.releases import RELEASES, BuildstockRelease
 from buildstock_fetch.types import (
-    ReleaseKey,
     ReleaseKeyY2021,
     ReleaseVersion,
     ReleaseYear,
@@ -13,7 +11,6 @@ from buildstock_fetch.types import (
     UpgradeID,
     USStateCode,
     Weather,
-    is_valid_release_key,
 )
 
 
