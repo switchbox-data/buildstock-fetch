@@ -598,8 +598,7 @@ def _download_and_process_aggregate(
 
             # Process with Polars
             load_curve_15min = pl.read_parquet(temp_path)
-            load_curve_aggregate = _aggregate_load_curve_aggregate(load_curve_15min, aggregate_time_step, release_year)
-            _add_time_aggregation_columns(load_curve_aggregate, aggregate_time_step)
+            load_curve_aggregate = _process_aggregate_load_curve(load_curve_15min, aggregate_time_step, release_year)
 
             # Save processed file to final destination
             load_curve_aggregate.write_parquet(output_file)
@@ -734,13 +733,13 @@ def download_15min_load_curve_with_progress(
     if bldg_id.is_SB_upgrade():
         bldg_id_component_list = bldg_id.get_SB_upgrade_load_component_bldg_ids()
         if bldg_id_component_list is None:
-            message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}"
+            message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
             raise No15minLoadCurveError(message)
 
         for bldg_id_component in bldg_id_component_list:
             download_url = bldg_id_component.get_15min_load_curve_url()
             if download_url is None:
-                message = f"15 min load profile timeseries is not available for {bldg_id_component.get_release_name()}"
+                message = f"15 min load profile timeseries is not available for {bldg_id_component.get_release_name()}, upgrade {bldg_id_component.upgrade_id}"
                 raise No15minLoadCurveError(message)
 
             output_file_component = (
@@ -840,11 +839,7 @@ def download_aggregate_time_step_load_curve_with_progress(
 ) -> Path:
     """Download the aggregate time step load profile timeseries for a given building with progress tracking."""
 
-    download_url = bldg_id.get_aggregate_load_curve_url()
-    if download_url is None:
-        message = f"Aggregate load profile timeseries is not available for {bldg_id.get_release_name()}"
-        raise NoAggregateLoadCurveError(message)
-
+    # Process the aggregate time step load curve directory name
     if aggregate_time_step == "monthly":
         load_curve_dir = "load_curve_monthly"
     elif aggregate_time_step == "hourly":
@@ -854,6 +849,20 @@ def download_aggregate_time_step_load_curve_with_progress(
     else:
         message = f"Unknown aggregate time step: {aggregate_time_step}"
         raise ValueError(message)
+
+    if bldg_id.is_SB_upgrade():
+        output_file = _download_aggregate_load_curve_components_SB_upgrade(
+            bldg_id, output_dir, progress, task_id, aggregate_time_step, load_curve_dir
+        )
+        load_curve_type = load_curve_dir
+        _process_SB_upgrade_load_curve(bldg_id, output_dir, output_file, load_curve_type, aggregate_time_step)
+        return output_file
+
+    # Regular upgrade case
+    download_url = bldg_id.get_aggregate_load_curve_url()
+    if download_url is None:
+        message = f"Aggregate load profile timeseries is not available for {bldg_id.get_release_name()}"
+        raise NoAggregateLoadCurveError(message)
 
     output_file = (
         output_dir
@@ -882,10 +891,9 @@ def download_aggregate_time_step_load_curve_with_progress(
 
                 # Process with Polars
                 load_curve_15min = pl.read_parquet(temp_path)
-                load_curve_aggregate = _aggregate_load_curve_aggregate(
+                load_curve_aggregate = _process_aggregate_load_curve(
                     load_curve_15min, aggregate_time_step, bldg_id.release_year
                 )
-                _add_time_aggregation_columns(load_curve_aggregate, aggregate_time_step)
 
                 # Save processed file to final destination
                 load_curve_aggregate.write_parquet(output_file)
@@ -893,6 +901,65 @@ def download_aggregate_time_step_load_curve_with_progress(
                 if temp_path.exists():
                     temp_path.unlink()
 
+    return output_file
+
+
+def _process_aggregate_load_curve(
+    preaggregate_load_curve: pl.DataFrame,
+    aggregate_time_step: str,
+    release_year: str,
+) -> pl.DataFrame:
+    """Process the aggregate load curve."""
+    load_curve_aggregate = _aggregate_load_curve_aggregate(preaggregate_load_curve, aggregate_time_step, release_year)
+    _add_time_aggregation_columns(load_curve_aggregate, aggregate_time_step)
+    return load_curve_aggregate
+
+
+def _download_aggregate_load_curve_components_SB_upgrade(
+    bldg_id: BuildingID,
+    output_dir: Path,
+    progress: Optional[Progress],
+    task_id: Optional[TaskID],
+    aggregate_time_step: str,
+    load_curve_dir: str,
+) -> Path:
+    bldg_id_component_list = bldg_id.get_SB_upgrade_load_component_bldg_ids()
+    if bldg_id_component_list is None:
+        message = f"{aggregate_time_step} load profile timeseries is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
+        raise NoAggregateLoadCurveError(message)
+
+    for bldg_id_component in bldg_id_component_list:
+        download_url = bldg_id_component.get_aggregate_load_curve_url()
+        if download_url is None:
+            message = f"{aggregate_time_step} load profile timeseries is not available for {bldg_id_component.get_release_name()}, upgrade {bldg_id_component.upgrade_id}"
+            raise NoAggregateLoadCurveError(message)
+
+        output_file_component = (
+            output_dir
+            / bldg_id.get_release_name()
+            / load_curve_dir
+            / f"state={bldg_id.state}"
+            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+            / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id_component.upgrade_id)!s}.parquet"
+        )
+        output_file_component.parent.mkdir(parents=True, exist_ok=True)
+
+        # Download with progress tracking if progress object is provided
+        if progress and task_id is not None:
+            _download_with_progress(download_url, output_file_component, progress, task_id)
+        else:
+            response = requests.get(download_url, timeout=30, verify=True)
+            response.raise_for_status()
+            output_file_component.write_bytes(response.content)
+
+    output_file = (
+        output_dir
+        / bldg_id.get_release_name()
+        / load_curve_dir
+        / f"state={bldg_id.state}"
+        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+    )
     return output_file
 
 
@@ -1433,7 +1500,9 @@ def _process_download_future_15min(
         downloaded_paths.append(output_file)
         # Special case for SwitchBox Analysis upgrades
         if bldg_id.is_SB_upgrade():
-            _process_SB_upgrade_load_curve(bldg_id, output_dir, output_file)
+            load_curve_type = "load_curve_15min"
+            aggregate_time_step = "15min"
+            _process_SB_upgrade_load_curve(bldg_id, output_dir, output_file, load_curve_type, aggregate_time_step)
     except No15minLoadCurveError:
         output_file = (
             output_dir
@@ -1459,7 +1528,13 @@ def _process_download_future_15min(
         console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
-def _process_SB_upgrade_load_curve(bldg_id: BuildingID, output_dir: Path, output_file: Path) -> None:
+def _process_SB_upgrade_load_curve(
+    bldg_id: BuildingID,
+    output_dir: Path,
+    output_file: Path,
+    load_curve_type: str,
+    aggregate_time_step: str,
+) -> None:
     """Process a SwitchBox Analysis upgrade load curve."""
     # Load SB analysis upgrades data json file
     sb_analysis_upgrades = _get_SB_analysis_upgrades()
@@ -1489,7 +1564,7 @@ def _process_SB_upgrade_load_curve(bldg_id: BuildingID, output_dir: Path, output
     first_upgrade_component_filename = (
         output_dir
         / bldg_id.get_release_name()
-        / "load_curve_15min"
+        / load_curve_type
         / f"state={bldg_id.state}"
         / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"{str(bldg_id.bldg_id)!s}-{int(first_upgrade_component)!s}.parquet"
@@ -1503,7 +1578,7 @@ def _process_SB_upgrade_load_curve(bldg_id: BuildingID, output_dir: Path, output
         component_filename = (
             output_dir
             / bldg_id.get_release_name()
-            / "load_curve_15min"
+            / load_curve_type
             / f"state={bldg_id.state}"
             / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
             / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id_component.upgrade_id)!s}.parquet"
@@ -1568,6 +1643,15 @@ def _process_SB_upgrade_load_curve(bldg_id: BuildingID, output_dir: Path, output
 
     # Add total load curve columns for SB upgrade scenarios
     SB_upgrade_load_curve_df = _add_SB_upgrade_load_curve_total_columns(SB_upgrade_load_curve_df)
+
+    if (
+        load_curve_type == "load_curve_hourly"
+        or load_curve_type == "load_curve_daily"
+        or load_curve_type == "load_curve_monthly"
+    ):
+        SB_upgrade_load_curve_df = _process_aggregate_load_curve(
+            SB_upgrade_load_curve_df, aggregate_time_step, bldg_id.release_year
+        )
 
     # Save the final SB upgrade load curve dataframe to a parquet file
     SB_upgrade_load_curve_df.write_parquet(output_file)
