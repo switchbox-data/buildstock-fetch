@@ -106,6 +106,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["network"]
 
 [tool.ruff]
 target-version = "py39"
@@ -173,6 +174,7 @@ preview = true
 
 [tool.pyright]
 reportUnknownLambdaType = false
+pythonVersion = "3.12"
 
 exclude = [".venv", "tests"]
 venv = ".venv"

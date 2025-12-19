@@ -2,7 +2,7 @@ import json
 from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple, TypedDict
+from typing import Any, NamedTuple, TypedDict
 
 import typedload
 from typing_extensions import Self, Unpack, final, override
@@ -59,6 +59,9 @@ class BuildstockReleaseDefinitionRaw:
     available_data: frozenset[FileType]
     weather_map_available_states: frozenset[USStateCode] = field(default_factory=frozenset)
     trip_schedule_states: frozenset[USStateCode] = field(default_factory=frozenset)
+
+
+BuildstockReleasesRaw = dict[ReleaseKey, BuildstockReleaseDefinitionRaw]
 
 
 class UpgradeDescriptionsRaw(TypedDict):
@@ -148,7 +151,7 @@ class BuildstockReleases:
         filepath = filepath or Path(BUILDSTOCK_RELEASES_FILE)
         content = filepath.read_text()
         json_ = json.loads(content)  # pyright: ignore[reportAny]
-        releases_dict = typedload.load(json_, dict[ReleaseKey, BuildstockReleaseDefinitionRaw])
+        releases_dict = typedload.load(json_, BuildstockReleasesRaw)
 
         upgrades_filepath = upgrades_filepath or Path(UPGRADES_LOOKUP_FILE)
         upgrades_content = upgrades_filepath.read_text()

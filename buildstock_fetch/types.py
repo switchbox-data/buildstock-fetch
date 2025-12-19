@@ -2,37 +2,86 @@ from typing import Any, Literal, NewType, TypeAlias, get_args
 
 from typing_extensions import TypeIs
 
-__all__ = [
-    "ReleaseYear",
-    "ResCom",
-    "Weather",
-]
-
-
-ReleaseKey = Literal[
-    "com_2021_amy2018_1",
-    "com_2021_tmy3_1",
+ReleaseKeyResY2021 = Literal[
     "res_2021_amy2018_1",
     "res_2021_tmy3_1",
+]
+
+ReleaseKeyComY2021 = Literal[
+    "com_2021_amy2018_1",
+    "com_2021_tmy3_1",
+]
+
+ReleaseKeyY2021 = Literal[
+    ReleaseKeyResY2021,
+    ReleaseKeyComY2021,
+]
+
+ReleaseKeyResY2022 = Literal[
     "res_2022_amy2012_1",
     "res_2022_amy2012_1.1",
     "res_2022_amy2018_1",
     "res_2022_amy2018_1.1",
     "res_2022_tmy3_1",
     "res_2022_tmy3_1.1",
+]
+
+ReleaseKeyY2022 = ReleaseKeyResY2022
+
+ReleaseKeyComY2023 = Literal[
     "com_2023_amy2018_1",
     "com_2023_amy2018_2",
-    "com_2024_amy2018_1",
-    "com_2024_amy2018_2",
+]
+
+ReleaseKeyY2023 = ReleaseKeyComY2023
+
+ReleaseKeyResY2024 = Literal[
     "res_2024_amy2018_2",
     "res_2024_tmy3_1",
     "res_2024_tmy3_2",
+]
+
+ReleaseKeyComY2024 = Literal[
+    "com_2024_amy2018_1",
+    "com_2024_amy2018_2",
+]
+
+ReleaseKeyY2024 = Literal[ReleaseKeyResY2024, ReleaseKeyComY2024]
+
+ReleaseKeyResY2025 = Literal[
+    "res_2025_amy2012_1",
+    "res_2025_amy2018_1",
+]
+
+ReleaseKeyComY2025 = Literal[
     "com_2025_amy2012_2",
     "com_2025_amy2018_1",
     "com_2025_amy2018_2",
     "com_2025_amy2018_3",
-    "res_2025_amy2012_1",
-    "res_2025_amy2018_1",
+]
+
+ReleaseKeyY2025 = Literal[
+    ReleaseKeyResY2025,
+    ReleaseKeyComY2025,
+]
+
+ReleaseKeyRes = Literal[
+    ReleaseKeyResY2021,
+    ReleaseKeyY2022,
+    ReleaseKeyResY2024,
+    ReleaseKeyResY2025,
+]
+
+ReleaseKeyCom = Literal[
+    ReleaseKeyComY2021,
+    ReleaseKeyY2023,
+    ReleaseKeyComY2024,
+    ReleaseKeyComY2025,
+]
+
+ReleaseKey = Literal[
+    ReleaseKeyRes,
+    ReleaseKeyCom,
 ]
 
 UpgradeID = NewType("UpgradeID", str)
