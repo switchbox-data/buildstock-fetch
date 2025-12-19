@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, get_args
 
 import boto3
 import polars as pl
@@ -33,7 +33,7 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-from buildstock_fetch.types import ReleaseYear, ResCom, Weather
+from buildstock_fetch.types import LoadCurveFuelType, ReleaseYear, ResCom, Weather
 
 from .building import BuildingID
 from .constants import LOAD_CURVE_COLUMN_AGGREGATION, METADATA_DIR, SB_ANALYSIS_UPGRADES_FILE
@@ -1566,8 +1566,50 @@ def _process_SB_upgrade_load_curve(bldg_id: BuildingID, output_dir: Path, output
         os.remove(component_filename)
         gc.collect()
 
+    # Add total load curve columns for SB upgrade scenarios
+    SB_upgrade_load_curve_df = _add_SB_upgrade_load_curve_total_columns(SB_upgrade_load_curve_df)
+
     # Save the final SB upgrade load curve dataframe to a parquet file
     SB_upgrade_load_curve_df.write_parquet(output_file)
+
+
+def _add_SB_upgrade_load_curve_total_columns(SB_upgrade_load_curve_df: pl.DataFrame) -> pl.DataFrame:
+    """Add total load curve columns for SB upgrade scenarios."""
+    # Add total load curve columns for each fuel type
+    for fuel_type in get_args(LoadCurveFuelType):
+        # Extract all columns that start with the fuel type
+        fuel_type_consumption_columns = [
+            col
+            for col in SB_upgrade_load_curve_df.columns
+            if col.startswith(f"out.{fuel_type}") and "consumption" in col and "consumption_intensity" not in col
+        ]
+        fuel_type_consumption_intensity_columns = [
+            col
+            for col in SB_upgrade_load_curve_df.columns
+            if col.startswith(f"out.{fuel_type}") and "consumption_intensity" in col
+        ]
+
+        # Skip if no columns found for this fuel type
+        if not fuel_type_consumption_columns and not fuel_type_consumption_intensity_columns:
+            continue
+
+        # Create expressions for the total columns
+        expressions = []
+        if fuel_type_consumption_columns:
+            expressions.append(
+                pl.sum_horizontal(fuel_type_consumption_columns).alias(f"out.{fuel_type}.total.energy_consumption")
+            )
+        if fuel_type_consumption_intensity_columns:
+            expressions.append(
+                pl.sum_horizontal(fuel_type_consumption_intensity_columns).alias(
+                    f"out.{fuel_type}.total.energy_consumption_intensity"
+                )
+            )
+
+        # Add the total fuel type columns to the dataframe
+        SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.with_columns(expressions)
+
+    return SB_upgrade_load_curve_df
 
 
 def _download_aggregate_load_curves_parallel(

@@ -2,11 +2,7 @@ from typing import Any, Literal, NewType, TypeAlias, get_args
 
 from typing_extensions import TypeIs
 
-__all__ = [
-    "ReleaseYear",
-    "ResCom",
-    "Weather",
-]
+__all__ = ["LoadCurveFuelType", "ReleaseYear", "ResCom", "Weather"]
 
 
 ReleaseKey = Literal[
@@ -107,6 +103,8 @@ USStateCode = Literal[
     "WI",
     "WY",
 ]
+
+LoadCurveFuelType = Literal["electricity", "natural_gas", "fuel_oil", "propane"]
 
 
 def is_valid_state_code(value: Any) -> TypeIs[USStateCode]:  # pyright: ignore[reportAny, reportExplicitAny]
