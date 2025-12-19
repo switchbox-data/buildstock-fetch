@@ -13,7 +13,7 @@
         "ghcr.io/devcontainers/features/aws-cli:1": {}
     },
 
-    "initializeCommand": "mkdir -p ${localEnv:HOME}/.aws",  // Container won't start if .aws dir is missing
+    "initializeCommand": "mkdir -p ${localEnv:HOME}/.aws && (chown 1000:1000 ${localEnv:HOME}/.aws 2>/dev/null || true)",  // Container won't start if .aws dir is missing, ensure host owner is same as container owner
     "mounts": [
         "source=${localEnv:HOME}/.aws,target=/home/vscode/.aws,type=bind,consistency=cached"
     ],
