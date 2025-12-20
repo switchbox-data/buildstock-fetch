@@ -1567,83 +1567,6 @@ def _process_SB_upgrade_load_curve(
     )
     SB_upgrade_load_curve_df = pl.read_parquet(first_upgrade_component_filename).select("timestamp")
 
-    """
-    # See which upgrades make up which components (e.g. for upgrade 17, HVAC comes from 1 and appliances from 11)
-    hvac_heating_upgrade_id = sb_analysis_upgrade_data["HVAC_heating"][bldg_id.upgrade_id]
-    hvac_cooling_upgrade_id = sb_analysis_upgrade_data["HVAC_cooling"][bldg_id.upgrade_id]
-    appliances_upgrade_id = sb_analysis_upgrade_data["appliances"][bldg_id.upgrade_id]
-    hot_water_upgrade_id = sb_analysis_upgrade_data["hot_water"][bldg_id.upgrade_id]
-    # Update each upgrade component's load curve to the final SB upgrade load curve dataframe.
-    for upgrade_component in upgrade_components:
-        # See which component this upgrade makes up
-        bldg_id_component = bldg_id.copy(upgrade_id=upgrade_component)
-        component_filename = (
-            output_dir
-            / bldg_id.get_release_name()
-            / load_curve_type
-            / f"state={bldg_id.state}"
-            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-            / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id_component.upgrade_id)!s}.parquet"
-        )
-        if bldg_id_component.upgrade_id in hvac_heating_upgrade_id:
-            # Extract field_name values where functional_group is "HVAC_heating"
-            HVAC_heating_column_names = (
-                sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == "HVAC_heating")
-                .select("field_name")
-                .to_series()
-                .to_list()
-            )
-            # Read the load curve for this component and add to the final SB upgrade load curve dataframe
-            component_load_curve_df = pl.read_parquet(component_filename).select([
-                "timestamp",
-                *HVAC_heating_column_names,
-            ])
-            SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.join(component_load_curve_df, on="timestamp")
-        elif bldg_id_component.upgrade_id in hvac_cooling_upgrade_id:
-            # Extract field_name values where functional_group is "HVAC_cooling"
-            HVAC_cooling_column_names = (
-                sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == "HVAC_cooling")
-                .select("field_name")
-                .to_series()
-                .to_list()
-            )
-            # Read the load curve for this component and add to the final SB upgrade load curve dataframe
-            component_load_curve_df = pl.read_parquet(component_filename).select([
-                "timestamp",
-                *HVAC_cooling_column_names,
-            ])
-            SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.join(component_load_curve_df, on="timestamp")
-        elif bldg_id_component.upgrade_id in appliances_upgrade_id:
-            # Extract field_name values where functional_group is "Appliances"
-            appliances_column_names = (
-                sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == "Appliances")
-                .select("field_name")
-                .to_series()
-                .to_list()
-            )
-            # Read the load curve for this component and add to the final SB upgrade load curve dataframe
-            component_load_curve_df = pl.read_parquet(component_filename).select([
-                "timestamp",
-                *appliances_column_names,
-            ])
-            SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.join(component_load_curve_df, on="timestamp")
-        elif bldg_id_component.upgrade_id in hot_water_upgrade_id:
-            # Extract field_name values where functional_group is "Hot water"
-            hot_water_column_names = (
-                sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == "Hot water")
-                .select("field_name")
-                .to_series()
-                .to_list()
-            )
-            # Read the load curve for this component and add to the final SB upgrade load curve dataframe
-            component_load_curve_df = pl.read_parquet(component_filename).select(["timestamp", *hot_water_column_names])
-            SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.join(component_load_curve_df, on="timestamp")
-
-        # Delete the component load curve dataframe
-        os.remove(component_filename)
-        gc.collect()
-        """
-
     # Save component file names to delete later
     component_file_names_to_delete = []
 
@@ -1679,11 +1602,12 @@ def _process_SB_upgrade_load_curve(
         # Delete the component load curve dataframe
         component_file_names_to_delete.append(component_filename)
 
-    component_file_names_to_delete = {str(path) for path in component_file_names_to_delete}
+    # Convert to set of strings for deletion
+    component_file_names_to_delete_set = {str(path) for path in component_file_names_to_delete}
 
     # Delete the component load curve dataframes
-    for component_filename in component_file_names_to_delete:
-        os.remove(component_filename)
+    for component_filename_str in component_file_names_to_delete_set:
+        os.remove(component_filename_str)
     gc.collect()
 
     # Add total load curve columns for SB upgrade scenarios
