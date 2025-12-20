@@ -33,7 +33,7 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-from buildstock_fetch.types import LoadCurveFuelType, ReleaseYear, ResCom, Weather
+from buildstock_fetch.types import FunctionalGroup, LoadCurveFuelType, ReleaseYear, ResCom, Weather
 
 from .building import BuildingID
 from .constants import LOAD_CURVE_COLUMN_AGGREGATION, METADATA_DIR, SB_ANALYSIS_UPGRADES_FILE
@@ -1553,11 +1553,6 @@ def _process_SB_upgrade_load_curve(
         return
     sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
     upgrade_components = sb_analysis_upgrade_data["upgrade_components"][bldg_id.upgrade_id]
-    # See which upgrades make up which components (e.g. for upgrade 17, HVAC comes from 1 and appliances from 11)
-    hvac_heating_upgrade_id = sb_analysis_upgrade_data["HVAC_heating"][bldg_id.upgrade_id]
-    hvac_cooling_upgrade_id = sb_analysis_upgrade_data["HVAC_cooling"][bldg_id.upgrade_id]
-    appliances_upgrade_id = sb_analysis_upgrade_data["appliances"][bldg_id.upgrade_id]
-    hot_water_upgrade_id = sb_analysis_upgrade_data["hot_water"][bldg_id.upgrade_id]
 
     # Initialize the final SB upgrade load curve dataframe. Load the timestamp from the first upgrade component.
     SB_upgrade_load_curve_df = pl.DataFrame()
@@ -1572,6 +1567,12 @@ def _process_SB_upgrade_load_curve(
     )
     SB_upgrade_load_curve_df = pl.read_parquet(first_upgrade_component_filename).select("timestamp")
 
+    """
+    # See which upgrades make up which components (e.g. for upgrade 17, HVAC comes from 1 and appliances from 11)
+    hvac_heating_upgrade_id = sb_analysis_upgrade_data["HVAC_heating"][bldg_id.upgrade_id]
+    hvac_cooling_upgrade_id = sb_analysis_upgrade_data["HVAC_cooling"][bldg_id.upgrade_id]
+    appliances_upgrade_id = sb_analysis_upgrade_data["appliances"][bldg_id.upgrade_id]
+    hot_water_upgrade_id = sb_analysis_upgrade_data["hot_water"][bldg_id.upgrade_id]
     # Update each upgrade component's load curve to the final SB upgrade load curve dataframe.
     for upgrade_component in upgrade_components:
         # See which component this upgrade makes up
@@ -1641,6 +1642,49 @@ def _process_SB_upgrade_load_curve(
         # Delete the component load curve dataframe
         os.remove(component_filename)
         gc.collect()
+        """
+
+    # Save component file names to delete later
+    component_file_names_to_delete = []
+
+    for functional_group in get_args(FunctionalGroup):
+        if functional_group in ["total", "net"]:
+            continue
+        if functional_group not in sb_analysis_upgrade_data:
+            continue
+        functional_group_upgrade_id = sb_analysis_upgrade_data[functional_group][bldg_id.upgrade_id]
+        functional_group_column_names = (
+            sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == functional_group)
+            .select("field_name")
+            .to_series()
+            .to_list()
+        )
+        if not functional_group_column_names:
+            continue
+        bldg_id_component = bldg_id.copy(upgrade_id=functional_group_upgrade_id)
+        component_filename = (
+            output_dir
+            / bldg_id.get_release_name()
+            / load_curve_type
+            / f"state={bldg_id.state}"
+            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+            / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id_component.upgrade_id)!s}.parquet"
+        )
+        # Read the load curve for this component and add to the final SB upgrade load curve dataframe
+        component_load_curve_df = pl.read_parquet(component_filename).select([
+            "timestamp",
+            *functional_group_column_names,
+        ])
+        SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.join(component_load_curve_df, on="timestamp")
+        # Delete the component load curve dataframe
+        component_file_names_to_delete.append(component_filename)
+
+    component_file_names_to_delete = {str(path) for path in component_file_names_to_delete}
+
+    # Delete the component load curve dataframes
+    for component_filename in component_file_names_to_delete:
+        os.remove(component_filename)
+    gc.collect()
 
     # Add total load curve columns for SB upgrade scenarios
     SB_upgrade_load_curve_df = _add_SB_upgrade_load_curve_total_columns(SB_upgrade_load_curve_df)
@@ -1666,12 +1710,15 @@ def _add_SB_upgrade_load_curve_total_columns(SB_upgrade_load_curve_df: pl.DataFr
         fuel_type_consumption_columns = [
             col
             for col in SB_upgrade_load_curve_df.columns
-            if col.startswith(f"out.{fuel_type}") and "consumption" in col and "consumption_intensity" not in col
+            if col.startswith(f"out.{fuel_type}")
+            and "consumption" in col
+            and "consumption_intensity" not in col
+            and "savings" not in col
         ]
         fuel_type_consumption_intensity_columns = [
             col
             for col in SB_upgrade_load_curve_df.columns
-            if col.startswith(f"out.{fuel_type}") and "consumption_intensity" in col
+            if col.startswith(f"out.{fuel_type}") and "consumption_intensity" in col and "savings" not in col
         ]
 
         # Skip if no columns found for this fuel type
