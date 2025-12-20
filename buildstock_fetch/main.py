@@ -850,6 +850,7 @@ def download_aggregate_time_step_load_curve_with_progress(
         message = f"Unknown aggregate time step: {aggregate_time_step}"
         raise ValueError(message)
 
+    # Special case for SwitchBox Analysis upgrades
     if bldg_id.is_SB_upgrade():
         output_file = _download_aggregate_load_curve_components_SB_upgrade(
             bldg_id, output_dir, progress, task_id, aggregate_time_step, load_curve_dir
