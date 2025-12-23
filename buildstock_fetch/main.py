@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Optional, Union, get_args
+from typing import Any, Optional, Union, cast, get_args
 
 import boto3
 import polars as pl
@@ -33,7 +33,7 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-from buildstock_fetch.types import FunctionalGroup, LoadCurveFuelType, ReleaseYear, ResCom, Weather
+from buildstock_fetch.types import FileType, FunctionalGroup, LoadCurveFuelType, ReleaseYear, ResCom, Weather
 
 from .building import BuildingID
 from .constants import LOAD_CURVE_COLUMN_AGGREGATION, METADATA_DIR, SB_ANALYSIS_UPGRADES_FILE
@@ -64,21 +64,31 @@ def _get_SB_analysis_upgrades() -> dict[str, Any] | None:
 
 
 # Module-level cache for SB analysis upgrades column map
-_SB_ANALYSIS_UPGRADES_COLUMN_MAP_CACHE: pl.DataFrame | None = None
+_SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE: pl.DataFrame | None = None
 
 
-def _get_SB_analysis_upgrades_load_curve_column_map(release_year: ReleaseYear) -> pl.DataFrame:
+def _get_SB_analysis_upgrades_column_map(release_year: ReleaseYear, file_type: FileType) -> pl.DataFrame:
     """Load SB analysis upgrades column map once and cache it for subsequent calls."""
-    global _SB_ANALYSIS_UPGRADES_COLUMN_MAP_CACHE
-    if release_year == "2024":
-        SB_ANALYSIS_UPGRADES_COLUMN_MAP_FILE = LOAD_CURVE_COLUMN_AGGREGATION.joinpath(
-            "data_dictionary_2024_load_curve_labeled.csv"
-        )
-    else:
-        msg = f"Release year {release_year} not supported"
-        raise ValueError(msg)
-    _SB_ANALYSIS_UPGRADES_COLUMN_MAP_CACHE = pl.read_csv(SB_ANALYSIS_UPGRADES_COLUMN_MAP_FILE)
-    return _SB_ANALYSIS_UPGRADES_COLUMN_MAP_CACHE
+    global _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE
+    if _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE is None:
+        if release_year == "2024":
+            if (
+                file_type == "load_curve_15min"
+                or file_type == "load_curve_hourly"
+                or file_type == "load_curve_daily"
+                or file_type == "load_curve_monthly"
+            ):
+                column_map_file = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("data_dictionary_2024_load_curve_labeled.csv")
+                _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE = pl.read_csv(column_map_file)
+            else:
+                return pl.DataFrame()
+        else:
+            msg = f"Release year {release_year} not supported"
+            raise ValueError(msg)
+
+    if _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE is None:
+        return pl.DataFrame()
+    return _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE
 
 
 @dataclass
@@ -855,8 +865,8 @@ def download_aggregate_time_step_load_curve_with_progress(
         output_file = _download_aggregate_load_curve_components_SB_upgrade(
             bldg_id, output_dir, progress, task_id, aggregate_time_step, load_curve_dir
         )
-        load_curve_type = load_curve_dir
-        _process_SB_upgrade_load_curve(bldg_id, output_dir, output_file, load_curve_type, aggregate_time_step)
+        file_type: FileType = cast(FileType, load_curve_dir)
+        _process_SB_upgrade_load_curve(bldg_id, output_dir, output_file, file_type, aggregate_time_step)
         return output_file
 
     # Regular upgrade case
@@ -1501,9 +1511,9 @@ def _process_download_future_15min(
         downloaded_paths.append(output_file)
         # Special case for SwitchBox Analysis upgrades
         if bldg_id.is_SB_upgrade():
-            load_curve_type = "load_curve_15min"
+            file_type: FileType = "load_curve_15min"
             aggregate_time_step = "15min"
-            _process_SB_upgrade_load_curve(bldg_id, output_dir, output_file, load_curve_type, aggregate_time_step)
+            _process_SB_upgrade_load_curve(bldg_id, output_dir, output_file, file_type, aggregate_time_step)
     except No15minLoadCurveError:
         output_file = (
             output_dir
@@ -1533,8 +1543,8 @@ def _process_SB_upgrade_load_curve(
     bldg_id: BuildingID,
     output_dir: Path,
     output_file: Path,
-    load_curve_type: str,
-    aggregate_time_step: str,
+    file_type: FileType,
+    aggregate_time_step: str | None = None,
 ) -> None:
     """Process a SwitchBox Analysis upgrade load curve."""
     # Load SB analysis upgrades data json file
@@ -1543,8 +1553,8 @@ def _process_SB_upgrade_load_curve(
         msg = "SB analysis upgrades data not available"
         raise ValueError(msg)
     # Load SB analysis upgrades column map csv file (maps which columns are HVAC and which are appliances)
-    sb_analysis_upgrades_column_map = _get_SB_analysis_upgrades_load_curve_column_map(bldg_id.release_year)
-    if sb_analysis_upgrades_column_map is None:
+    sb_analysis_upgrades_column_map = _get_SB_analysis_upgrades_column_map(bldg_id.release_year, file_type)
+    if sb_analysis_upgrades_column_map.is_empty():
         msg = "SB analysis upgrades column map not available"
         raise ValueError(msg)
     # Extract out this specific release's data
@@ -1560,7 +1570,7 @@ def _process_SB_upgrade_load_curve(
     first_upgrade_component_filename = (
         output_dir
         / bldg_id.get_release_name()
-        / load_curve_type
+        / file_type
         / f"state={bldg_id.state}"
         / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
         / f"{str(bldg_id.bldg_id)!s}-{int(first_upgrade_component)!s}.parquet"
@@ -1588,7 +1598,7 @@ def _process_SB_upgrade_load_curve(
         component_filename = (
             output_dir
             / bldg_id.get_release_name()
-            / load_curve_type
+            / file_type
             / f"state={bldg_id.state}"
             / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
             / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id_component.upgrade_id)!s}.parquet"
@@ -1614,10 +1624,8 @@ def _process_SB_upgrade_load_curve(
     SB_upgrade_load_curve_df = _add_SB_upgrade_load_curve_total_columns(SB_upgrade_load_curve_df)
 
     if (
-        load_curve_type == "load_curve_hourly"
-        or load_curve_type == "load_curve_daily"
-        or load_curve_type == "load_curve_monthly"
-    ):
+        file_type == "load_curve_hourly" or file_type == "load_curve_daily" or file_type == "load_curve_monthly"
+    ) and aggregate_time_step is not None:
         SB_upgrade_load_curve_df = _process_aggregate_load_curve(
             SB_upgrade_load_curve_df, aggregate_time_step, bldg_id.release_year
         )
