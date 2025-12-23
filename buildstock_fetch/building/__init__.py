@@ -3,13 +3,13 @@ from dataclasses import asdict, dataclass
 
 import polars as pl
 
-from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, WEATHER_FILE_DIR
+from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, SB_ANALYSIS_UPGRADES_FILE, WEATHER_FILE_DIR
 from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
 from .annualcurve import get_annual_load_curve_url
 from .annualcurvefilename import get_annual_load_curve_filename
 from .buildingdataurl import get_building_data_url
-from .get15minurl import get_15min_load_curve_url
+from .get15minurl import get_15min_load_curve_url, get_SB_upgrade_load_component_bldg_ids
 from .metadataurl import get_metadata_url
 from .weatherurl import build_weather_url
 
@@ -76,6 +76,9 @@ class BuildingID:
 
     def get_15min_load_curve_url(self) -> str | None:
         return get_15min_load_curve_url(self)
+
+    def get_SB_upgrade_load_component_bldg_ids(self) -> list["BuildingID"] | None:
+        return get_SB_upgrade_load_component_bldg_ids(self)
 
     def get_aggregate_load_curve_url(self) -> str | None:
         """Generate the S3 download URL for this building. The url is the same as the 15-minute load curve url."""
@@ -154,3 +157,24 @@ class BuildingID:
     def to_json(self) -> str:
         """Convert the building ID object to a JSON string."""
         return json.dumps(asdict(self))
+
+    def is_SB_upgrade(self) -> bool:
+        """Check if the upgrade is a SB upgrade."""
+        with open(SB_ANALYSIS_UPGRADES_FILE) as f:
+            sb_analysis_upgrades = json.load(f)
+        release_name = self.get_release_name()
+        if release_name not in sb_analysis_upgrades:
+            return False
+        sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
+        return self.upgrade_id in sb_analysis_upgrade_data["upgrade_ids"]
+
+    def copy(self, upgrade_id: str | None = None) -> "BuildingID":
+        return BuildingID(
+            bldg_id=self.bldg_id,
+            release_number=self.release_number,
+            release_year=self.release_year,
+            res_com=self.res_com,
+            weather=self.weather,
+            upgrade_id=upgrade_id if upgrade_id is not None else self.upgrade_id,
+            state=self.state,
+        )

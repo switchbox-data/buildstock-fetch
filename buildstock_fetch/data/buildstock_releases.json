@@ -419,46 +419,6 @@
       "metadata"
     ]
   },
-  "res_2024_amy2018_2": {
-    "release_year": "2024",
-    "res_com": "resstock",
-    "weather": "amy2018",
-    "release_number": "2",
-    "upgrade_ids": [
-      "0",
-      "1",
-      "2",
-      "3",
-      "4",
-      "5",
-      "6",
-      "7",
-      "8",
-      "9",
-      "10",
-      "11",
-      "12",
-      "13",
-      "14",
-      "15",
-      "16"
-    ],
-    "available_data": [
-      "load_curve_daily",
-      "load_curve_monthly",
-      "load_curve_annual",
-      "hpxml",
-      "load_curve_15min",
-      "schedule",
-      "weather",
-      "load_curve_hourly",
-      "metadata",
-      "trip_schedules"
-    ],
-    "trip_schedule_states": [
-      "NY"
-    ]
-  },
   "res_2024_tmy3_1": {
     "release_year": "2024",
     "res_com": "resstock",
@@ -731,46 +691,6 @@
       "load_curve_annual",
       "metadata",
       "weather"
-    ]
-  },
-  "res_2024_tmy3_2": {
-    "release_year": "2024",
-    "res_com": "resstock",
-    "weather": "tmy3",
-    "release_number": "2",
-    "upgrade_ids": [
-      "0",
-      "1",
-      "2",
-      "3",
-      "4",
-      "5",
-      "6",
-      "7",
-      "8",
-      "9",
-      "10",
-      "11",
-      "12",
-      "13",
-      "14",
-      "15",
-      "16"
-    ],
-    "available_data": [
-      "load_curve_daily",
-      "load_curve_monthly",
-      "load_curve_annual",
-      "hpxml",
-      "load_curve_15min",
-      "schedule",
-      "weather",
-      "load_curve_hourly",
-      "metadata",
-      "trip_schedules"
-    ],
-    "trip_schedule_states": [
-      "NY"
     ]
   },
   "com_2025_amy2012_2": {
@@ -1179,6 +1099,98 @@
       "load_curve_annual",
       "metadata",
       "hpxml"
+    ]
+  },
+  "res_2024_amy2018_2": {
+    "release_year": "2024",
+    "res_com": "resstock",
+    "weather": "amy2018",
+    "release_number": "2",
+    "upgrade_ids": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "18",
+      "19",
+      "20",
+      "21",
+      "22"
+    ],
+    "available_data": [
+      "load_curve_hourly",
+      "metadata",
+      "load_curve_15min",
+      "load_curve_monthly",
+      "schedule",
+      "load_curve_annual",
+      "load_curve_daily",
+      "weather",
+      "hpxml",
+      "trip_schedules"
+    ],
+    "trip_schedule_states": [
+      "NY"
+    ]
+  },
+  "res_2024_tmy3_2": {
+    "release_year": "2024",
+    "res_com": "resstock",
+    "weather": "tmy3",
+    "release_number": "2",
+    "upgrade_ids": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "18",
+      "19",
+      "20",
+      "21",
+      "22"
+    ],
+    "available_data": [
+      "load_curve_hourly",
+      "metadata",
+      "load_curve_15min",
+      "load_curve_monthly",
+      "schedule",
+      "load_curve_annual",
+      "load_curve_daily",
+      "weather",
+      "hpxml",
+      "trip_schedules"
+    ],
+    "trip_schedule_states": [
+      "NY"
     ]
   }
 }

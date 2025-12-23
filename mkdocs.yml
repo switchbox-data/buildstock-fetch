@@ -11,6 +11,7 @@ nav:
   - Home: index.md
   - Modules: modules.md
   - Usage: usage.md
+  - Enhancements: enhancements.md
 
 plugins:
   - search
