@@ -144,7 +144,7 @@ class BuildstockReleases:
     releases: frozenset[BuildstockRelease]
 
     def __iter__(self) -> Iterator[BuildstockRelease]:
-        yield from self.releases
+        yield from sorted(self.releases, key=lambda _: _.key)
 
     @classmethod
     def load(cls, filepath: Path | None = None, upgrades_filepath: Path | None = None) -> Self:
@@ -190,7 +190,7 @@ class BuildstockReleases:
     def __len__(self) -> int:
         return len(self.releases)
 
-    def __getitem__(self, key: str) -> BuildstockRelease:
+    def __getitem__(self, key: ReleaseKey) -> BuildstockRelease:
         return next(_ for _ in self.releases if _.key == key)
 
     @property

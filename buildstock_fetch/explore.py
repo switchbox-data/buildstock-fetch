@@ -33,14 +33,12 @@ T = TypeVar("T")
 
 @dataclass(frozen=True)
 class DownloadedDataInfo:
-    file_path: Path
     base_path: Path
     filename: str
-    release_key: ReleaseKey
+    release: BuildstockRelease
     file_type: FileType
     state: USStateCode
     upgrade: UpgradeID
-    releases: BuildstockReleases = RELEASES
 
     @classmethod
     def from_file_path(cls, path: Path, releases: BuildstockReleases = RELEASES) -> Self:
@@ -54,23 +52,32 @@ class DownloadedDataInfo:
         upgrade = normalize_upgrade_id(cast(str, groups["upgrade_id"]))
         state = normalize_state_code(cast(str, groups["state"]))
         file_type = normalize_file_type(cast(str, groups["file_type"]))
-        release_key = normalize_release_key(cast(str, groups["release_key"]))
+        release = releases[normalize_release_key(cast(str, groups["release_key"]))]
         base_path = Path(cast(str, groups["base_path"]))
 
         return cls(
-            file_path=path,
             base_path=base_path,
             filename=filename,
-            release_key=release_key,
             file_type=file_type,
             state=state,
             upgrade=upgrade,
-            releases=releases,
+            release=release,
         )
 
     @property
-    def release(self) -> BuildstockRelease:
-        return self.releases[self.release_key]
+    def file_path(self) -> Path:
+        return (
+            self.base_path
+            / self.release.key
+            / self.file_type
+            / f"state={self.state}"
+            / f"upgrade={self.upgrade.zfill(2)}"
+            / self.filename
+        )
+
+    @property
+    def release_key(self) -> ReleaseKey:
+        return self.release.key
 
     def match(  # noqa: C901
         self,

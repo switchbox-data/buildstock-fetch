@@ -157,6 +157,127 @@ USStateCode = Literal[
     "WY",
 ]
 
+ReleaseKeyAmy2012 = Literal[
+    "res_2022_amy2012_1",
+    "res_2022_amy2012_1.1",
+    "com_2025_amy2012_2",
+]
+
+ReleaseKeyAmy2018 = Literal[
+    "res_2021_amy2018_1",
+    "com_2021_amy2018_1",
+    "res_2022_amy2018_1",
+    "res_2022_amy2018_1.1",
+    "com_2023_amy2018_1",
+    "com_2023_amy2018_2",
+    "res_2024_amy2018_2",
+    "com_2024_amy2018_1",
+    "com_2024_amy2018_2",
+    "res_2025_amy2012_1",
+    "res_2025_amy2018_1",
+    "com_2025_amy2018_1",
+    "com_2025_amy2018_2",
+    "com_2025_amy2018_3",
+]
+
+ReleaseKeyTMY3 = Literal[
+    "res_2021_tmy3_1",
+    "com_2021_tmy3_1",
+    "res_2022_tmy3_1",
+    "res_2022_tmy3_1.1",
+    "res_2024_tmy3_1",
+    "res_2024_tmy3_2",
+]
+
+ReleaseKeyV1 = Literal[
+    "res_2021_amy2018_1",
+    "res_2021_tmy3_1",
+    "com_2021_amy2018_1",
+    "com_2021_tmy3_1",
+    "res_2022_amy2012_1",
+    "res_2022_amy2018_1",
+    "res_2022_tmy3_1",
+    "com_2023_amy2018_1",
+    "res_2024_tmy3_1",
+    "com_2024_amy2018_1",
+    "res_2025_amy2012_1",
+    "res_2025_amy2018_1",
+    "com_2025_amy2018_1",
+]
+
+ReleaseKeyV1_1 = Literal[
+    "res_2022_amy2012_1.1",
+    "res_2022_amy2018_1.1",
+    "res_2022_tmy3_1.1",
+]
+
+ReleaseKeyV2 = Literal[
+    "com_2023_amy2018_2",
+    "res_2024_amy2018_2",
+    "res_2024_tmy3_2",
+    "com_2024_amy2018_2",
+    "com_2025_amy2012_2",
+    "com_2025_amy2018_2",
+]
+
+ReleaseKeyV3 = Literal["com_2025_amy2018_3",]
+
+
+def is_year_2021(release_key: ReleaseKey) -> TypeIs[ReleaseKeyY2021]:
+    return "_2021_" in release_key
+
+
+def is_year_2022(release_key: ReleaseKey) -> TypeIs[ReleaseKeyY2022]:
+    return "_2022_" in release_key
+
+
+def is_year_2023(release_key: ReleaseKey) -> TypeIs[ReleaseKeyY2023]:
+    return "_2023_" in release_key
+
+
+def is_year_2024(release_key: ReleaseKey) -> TypeIs[ReleaseKeyY2024]:
+    return "_2024_" in release_key
+
+
+def is_year_2025(release_key: ReleaseKey) -> TypeIs[ReleaseKeyY2025]:
+    return "_2025_" in release_key
+
+
+def is_amy2012(release_key: ReleaseKey) -> TypeIs[ReleaseKeyAmy2012]:
+    return "amy2012" in release_key
+
+
+def is_amy2018(release_key: ReleaseKey) -> TypeIs[ReleaseKeyAmy2018]:
+    return "amy2018" in release_key
+
+
+def is_tmy3(release_key: ReleaseKey) -> TypeIs[ReleaseKeyTMY3]:
+    return "tmy3" in release_key
+
+
+def is_version_1(release_key: ReleaseKey) -> TypeIs[ReleaseKeyV1]:
+    return release_key.endswith("_1")
+
+
+def is_version_1_1(release_key: ReleaseKey) -> TypeIs[ReleaseKeyV1_1]:
+    return release_key.endswith("_1.1")
+
+
+def is_version_2(release_key: ReleaseKey) -> TypeIs[ReleaseKeyV2]:
+    return release_key.endswith("_2")
+
+
+def is_version_3(release_key: ReleaseKey) -> TypeIs[ReleaseKeyV3]:
+    return release_key.endswith("_3")
+
+
+def is_resstock(release_key: ReleaseKey) -> TypeIs[ReleaseKeyRes]:
+    return release_key.startswith("res_")
+
+
+def is_comstock(release_key: ReleaseKey) -> TypeIs[ReleaseKeyCom]:
+    return release_key.startswith("com_")
+
 
 def is_valid_state_code(value: Any) -> TypeIs[USStateCode]:  # pyright: ignore[reportAny, reportExplicitAny]
     if not isinstance(value, str):

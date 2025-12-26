@@ -5,7 +5,7 @@ description = "This library simplifies downloading building characteristics and 
 authors = [{ name = "Switchbox", email = "hello@switch.box" }]
 readme = "README.md"
 keywords = ['python']
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.12,<4.0"
 classifiers = [
   "Intended Audience :: Developers",
   "Programming Language :: Python",
@@ -27,6 +27,9 @@ dependencies = [
   "botocore>=1.33.0",
   "pyarrow>=14.0.1",
   "typedload>=2.39",
+  "asyncio>=4.0.0",
+  "httpx>=0.28.1",
+  "aiofiles>=25.1.0",
 ]
 
 [project.urls]
@@ -109,7 +112,7 @@ pythonpath = ["."]
 markers = ["network"]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 120
 fix = true
 
@@ -174,7 +177,7 @@ preview = true
 
 [tool.pyright]
 reportUnknownLambdaType = false
-pythonVersion = "3.12"
+pythonVersion = "3.13"
 
 exclude = [".venv", "tests"]
 venv = ".venv"
@@ -212,4 +215,6 @@ per_rule_ignores.DEP002 = [
 per_rule_ignores.DEP003 = ["typing_extensions"]
 
 [dependency-groups]
-dev = []
+dev = [
+    "pytest-recording>=0.13.4",
+]
