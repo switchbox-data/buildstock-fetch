@@ -1,5 +1,6 @@
 docs/source
 /data/
+tests/data/
 
 # From https://raw.githubusercontent.com/github/gitignore/main/Python.gitignore
 
@@ -146,6 +147,7 @@ cython_debug/
 
 # Test output directories
 **/test_output/
+tests/outputs/
 
 # EV data
 utils/ev_data/inputs/*.csv
