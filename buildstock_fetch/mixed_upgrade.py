@@ -271,3 +271,227 @@ class MixedUpgradeScenario:
 
         if missing_upgrades:
             raise ScenarioDataNotFoundError(file_type, missing_upgrades)
+
+    def _read_data_for_scenario(self, file_type: FileType, years: list[int] | None = None):
+        """Internal method to read data across all upgrades and years in the scenario.
+
+        This method uses several optimizations:
+        1. Reuses self.baseline_reader instead of creating new BuildStockRead instances
+        2. Builds mapping as LazyFrame directly (not materialized DataFrame)
+        3. Filters buildings early in the pipeline
+
+        Args:
+            file_type: Type of data to read (e.g., 'metadata', 'load_curve_15min').
+            years: List of year indices to include, or None for all years.
+
+        Returns:
+            LazyFrame with columns: bldg_id, upgrade, year, ...(original columns)
+        """
+        import polars as pl
+
+        # Validate years and data availability
+        validated_years = self._validate_years(years)
+        self._validate_data_availability(file_type)
+
+        # Determine which upgrades we need to read
+        required_upgrades = {normalize_upgrade_id(str(uid)) for uid in self.scenario.keys()}
+        required_upgrades.add("0")  # Always need baseline
+
+        # Read all required upgrades at once using baseline_reader (optimization: reuse reader)
+        all_upgrade_data = self.baseline_reader.read_parquets(
+            file_type, upgrades=list(required_upgrades)
+        )
+
+        # Filter to only sampled buildings (optimization: filter early)
+        all_upgrade_data = all_upgrade_data.filter(pl.col("bldg_id").is_in(self.sampled_bldgs))
+
+        # Build mapping as LazyFrame directly (optimization: lazy construction)
+        # Create tuples of (bldg_id, year, upgrade_id) for the join
+        mapping_rows: list[tuple[int, int, int]] = []
+        for year_idx in validated_years:
+            year_allocation = self.materialized_scenario[year_idx]
+            for bldg_id, upgrade_id in year_allocation.items():
+                mapping_rows.append((bldg_id, year_idx, upgrade_id))
+
+        # Create LazyFrame from mapping (stays lazy until final collect)
+        mapping_lf = pl.LazyFrame(
+            {
+                "bldg_id": [row[0] for row in mapping_rows],
+                "year": [row[1] for row in mapping_rows],
+                "upgrade_id": [row[2] for row in mapping_rows],
+            }
+        )
+
+        # Join data with year assignments
+        # The data has 'upgrade' column, which we'll join with mapping's 'upgrade_id'
+        result = all_upgrade_data.join(
+            mapping_lf,
+            left_on=["bldg_id", "upgrade"],
+            right_on=["bldg_id", "upgrade_id"],
+            how="inner",
+        )
+
+        # Rename 'upgrade' to 'upgrade_id' for consistency
+        result = result.rename({"upgrade": "upgrade_id"})
+
+        return result
+
+    def read_metadata(self, years: list[int] | None = None):
+        """Read metadata for specified years in the scenario.
+
+        Returns a LazyFrame containing metadata for all buildings and years in the
+        scenario. Each row represents one building in one year.
+
+        Args:
+            years: List of year indices to include (0-indexed), or None for all years.
+                Example: [0, 1, 2] or None
+
+        Returns:
+            A Polars LazyFrame with columns:
+                - bldg_id: Building ID (from sampled baseline)
+                - upgrade_id: Upgrade ID for this building in this year (0 or scenario upgrade)
+                - year: Year index (0-indexed)
+                - ...: Original metadata columns (e.g., in.state, in.vintage, etc.)
+
+        Raises:
+            ValueError: If any year index is out of range.
+            ScenarioDataNotFoundError: If metadata for scenario upgrades is not on disk.
+
+        Example:
+            >>> # Read metadata for all years
+            >>> metadata = mus.read_metadata()
+            >>> df = metadata.collect()
+            >>>
+            >>> # Read metadata for specific years
+            >>> metadata_early = mus.read_metadata(years=[0, 1])
+        """
+        return self._read_data_for_scenario("metadata", years)
+
+    def read_load_curve_15min(self, years: list[int] | None = None):
+        """Read 15-minute load curve data for specified years in the scenario.
+
+        Args:
+            years: List of year indices to include, or None for all years.
+
+        Returns:
+            A Polars LazyFrame with columns:
+                - bldg_id: Building ID
+                - upgrade_id: Upgrade ID
+                - year: Year index
+                - timestamp: Timestamp of the load data
+                - ...: Energy columns (e.g., out.electricity.total.energy_consumption)
+
+        Raises:
+            ValueError: If any year index is out of range.
+            ScenarioDataNotFoundError: If load curve data for scenario upgrades is not on disk.
+        """
+        return self._read_data_for_scenario("load_curve_15min", years)
+
+    def read_load_curve_hourly(self, years: list[int] | None = None):
+        """Read hourly load curve data for specified years in the scenario.
+
+        Args:
+            years: List of year indices to include, or None for all years.
+
+        Returns:
+            A Polars LazyFrame with columns:
+                - bldg_id: Building ID
+                - upgrade_id: Upgrade ID
+                - year: Year index
+                - timestamp: Timestamp of the load data
+                - ...: Energy columns
+
+        Raises:
+            ValueError: If any year index is out of range.
+            ScenarioDataNotFoundError: If load curve data for scenario upgrades is not on disk.
+        """
+        return self._read_data_for_scenario("load_curve_hourly", years)
+
+    def read_load_curve_daily(self, years: list[int] | None = None):
+        """Read daily load curve data for specified years in the scenario.
+
+        Args:
+            years: List of year indices to include, or None for all years.
+
+        Returns:
+            A Polars LazyFrame with columns:
+                - bldg_id: Building ID
+                - upgrade_id: Upgrade ID
+                - year: Year index
+                - timestamp: Timestamp of the load data
+                - ...: Energy columns
+
+        Raises:
+            ValueError: If any year index is out of range.
+            ScenarioDataNotFoundError: If load curve data for scenario upgrades is not on disk.
+        """
+        return self._read_data_for_scenario("load_curve_daily", years)
+
+    def read_load_curve_annual(self, years: list[int] | None = None):
+        """Read annual load curve data for specified years in the scenario.
+
+        Args:
+            years: List of year indices to include, or None for all years.
+
+        Returns:
+            A Polars LazyFrame with columns:
+                - bldg_id: Building ID
+                - upgrade_id: Upgrade ID
+                - year: Year index
+                - ...: Annual energy totals
+
+        Raises:
+            ValueError: If any year index is out of range.
+            ScenarioDataNotFoundError: If load curve data for scenario upgrades is not on disk.
+        """
+        return self._read_data_for_scenario("load_curve_annual", years)
+
+    def export_scenario_to_cairo(self, output_path: str | Path) -> None:
+        """Export scenario to CAIRO-compatible CSV format.
+
+        Creates a CSV file with one row per building and one column per year.
+        Each cell contains the upgrade ID for that building in that year.
+
+        This method uses vectorized operations for efficient export.
+
+        Args:
+            output_path: Path where the CSV file should be written.
+
+        Output format:
+            bldg_id,year_0,year_1,year_2
+            405821,0,0,0
+            612547,0,4,4
+            789234,0,0,8
+
+        Raises:
+            ScenarioDataNotFoundError: If data for scenario upgrades is not on disk.
+
+        Example:
+            >>> mus.export_scenario_to_cairo("./scenario.csv")
+            Exported scenario for 1000 buildings across 3 years to ./scenario.csv
+        """
+        import polars as pl
+
+        # Validate that all scenario data exists
+        self._validate_data_availability("metadata")
+
+        # Build DataFrame using vectorized column construction (optimization)
+        # This is more efficient than building row-by-row
+        sorted_bldg_ids = sorted(self.sampled_bldgs)
+
+        # Create the DataFrame with bldg_id column and all year columns at once
+        df = pl.DataFrame(
+            {
+                "bldg_id": sorted_bldg_ids,
+                **{
+                    f"year_{year_idx}": [self.materialized_scenario[year_idx][bid] for bid in sorted_bldg_ids]
+                    for year_idx in range(self.num_years)
+                },
+            }
+        )
+
+        # Write to CSV
+        output_path = Path(output_path)
+        df.write_csv(output_path)
+
+        print(f"Exported scenario for {len(self.sampled_bldgs)} buildings across {self.num_years} years to {output_path}")
