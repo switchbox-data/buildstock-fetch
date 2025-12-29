@@ -189,7 +189,7 @@ def _extract_metadata_columns_to_keep(metadata_file: Path) -> list[str]:
 
     columns_to_keep = []
     for col in schema:
-        if any(keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index"]) or col.startswith("in."):
+        if any(keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index", "weight"]) or col.startswith("in."):
             columns_to_keep.append(col)
     return columns_to_keep
 
