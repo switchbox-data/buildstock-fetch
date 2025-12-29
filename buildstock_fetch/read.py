@@ -182,8 +182,17 @@ class BuildStockRead:
         metadata_files = self.downloaded_data.filter(file_type="metadata", suffix=".parquet")
         if not metadata_files:
             raise MetadataNotFoundError(self.release, self.states)
-        first_metadata_file = min(metadata_files, key=lambda _: int(_.upgrade))
-        df = pl.scan_parquet(first_metadata_file.file_path).select("bldg_id").collect()
+
+        # Get unique states and find minimum upgrade per state
+        # This ensures sampling from all states when multiple states are requested
+        states = {f.state for f in metadata_files}
+        files_to_read = []
+        for state in states:
+            state_files = [f for f in metadata_files if f.state == state]
+            min_upgrade = min(state_files, key=lambda f: int(f.upgrade)).upgrade
+            files_to_read.extend([f for f in state_files if f.upgrade == min_upgrade])
+
+        df = pl.scan_parquet([f.file_path for f in files_to_read]).select("bldg_id").collect()
         all_building_ids = cast(list[int], df["bldg_id"].unique().to_list())
 
         if self.sample_n > len(all_building_ids):
