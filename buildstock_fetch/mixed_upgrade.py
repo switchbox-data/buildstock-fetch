@@ -275,17 +275,17 @@ class MixedUpgradeScenario:
     def _read_data_for_scenario(self, file_type: FileType, years: list[int] | None = None):
         """Internal method to read data across all upgrades and years in the scenario.
 
-        This method uses several optimizations:
-        1. Reuses self.baseline_reader instead of creating new BuildStockRead instances
-        2. Builds mapping as LazyFrame directly (not materialized DataFrame)
-        3. Filters buildings early in the pipeline
+        Implements incremental reading optimization (max 2N reads):
+        - Year 0: Read all buildings from upgrade 0
+        - Year 1+: Only read NEW buildings that transitioned to non-zero upgrades
+        - Reuse baseline (upgrade 0) data for buildings that haven't transitioned
 
         Args:
             file_type: Type of data to read (e.g., 'metadata', 'load_curve_15min').
             years: List of year indices to include, or None for all years.
 
         Returns:
-            LazyFrame with columns: bldg_id, upgrade, year, ...(original columns)
+            LazyFrame with columns: bldg_id, upgrade_id, year, ...(original columns)
         """
         import polars as pl
 
@@ -293,47 +293,68 @@ class MixedUpgradeScenario:
         validated_years = self._validate_years(years)
         self._validate_data_availability(file_type)
 
-        # Determine which upgrades we need to read
-        required_upgrades = {normalize_upgrade_id(str(uid)) for uid in self.scenario.keys()}
-        required_upgrades.add("0")  # Always need baseline
+        # Track which buildings have been read from each upgrade
+        read_cache: dict[int, pl.LazyFrame] = {}  # {upgrade_id: data}
+        buildings_read_per_upgrade: dict[int, set[int]] = {}  # {upgrade_id: {bldg_ids}}
 
-        # Read all required upgrades at once using baseline_reader (optimization: reuse reader)
-        all_upgrade_data = self.baseline_reader.read_parquets(
-            file_type, upgrades=list(required_upgrades)
-        )
+        # Collect results for each year
+        all_year_dfs: list[pl.LazyFrame] = []
 
-        # Filter to only sampled buildings (optimization: filter early)
-        all_upgrade_data = all_upgrade_data.filter(pl.col("bldg_id").is_in(self.sampled_bldgs))
-
-        # Build mapping as LazyFrame directly (optimization: lazy construction)
-        # Create tuples of (bldg_id, year, upgrade_id) for the join
-        mapping_rows: list[tuple[int, int, int]] = []
         for year_idx in validated_years:
             year_allocation = self.materialized_scenario[year_idx]
+
+            # Group buildings by upgrade for this year
+            upgrade_to_buildings: dict[int, list[int]] = {}
             for bldg_id, upgrade_id in year_allocation.items():
-                mapping_rows.append((bldg_id, year_idx, upgrade_id))
+                if upgrade_id not in upgrade_to_buildings:
+                    upgrade_to_buildings[upgrade_id] = []
+                upgrade_to_buildings[upgrade_id].append(bldg_id)
 
-        # Create LazyFrame from mapping (stays lazy until final collect)
-        mapping_lf = pl.LazyFrame(
-            {
-                "bldg_id": [row[0] for row in mapping_rows],
-                "year": [row[1] for row in mapping_rows],
-                "upgrade_id": [row[2] for row in mapping_rows],
-            }
-        )
+            # For each upgrade, only read NEW buildings
+            year_dfs: list[pl.LazyFrame] = []
+            for upgrade_id, building_ids in upgrade_to_buildings.items():
+                # Initialize tracking for this upgrade if needed
+                if upgrade_id not in buildings_read_per_upgrade:
+                    buildings_read_per_upgrade[upgrade_id] = set()
 
-        # Join data with year assignments
-        # The data has 'upgrade' column, which we'll join with mapping's 'upgrade_id'
-        result = all_upgrade_data.join(
-            mapping_lf,
-            left_on=["bldg_id", "upgrade"],
-            right_on=["bldg_id", "upgrade_id"],
-            how="inner",
-        )
+                # Determine which buildings are NEW (not yet read for this upgrade)
+                new_buildings = [b for b in building_ids if b not in buildings_read_per_upgrade[upgrade_id]]
 
-        # Rename 'upgrade' to 'upgrade_id' for consistency
-        result = result.rename({"upgrade": "upgrade_id"})
+                # Read new buildings if any
+                if new_buildings:
+                    new_data = self.baseline_reader.read_parquets(file_type, upgrades=str(upgrade_id))
+                    new_data = new_data.filter(pl.col("bldg_id").is_in(new_buildings))
 
+                    # Add upgrade_id column
+                    if file_type == "metadata":
+                        new_data = new_data.rename({"upgrade": "upgrade_id"})
+                    else:
+                        new_data = new_data.with_columns(pl.lit(upgrade_id).alias("upgrade_id"))
+
+                    # Add to cache
+                    if upgrade_id in read_cache:
+                        read_cache[upgrade_id] = pl.concat([read_cache[upgrade_id], new_data], how="vertical_relaxed")
+                    else:
+                        read_cache[upgrade_id] = new_data
+
+                    # Mark as read
+                    buildings_read_per_upgrade[upgrade_id].update(new_buildings)
+
+                # Get data for all buildings in this upgrade for this year (from cache)
+                year_upgrade_data = read_cache[upgrade_id].filter(pl.col("bldg_id").is_in(building_ids))
+                year_upgrade_data = year_upgrade_data.with_columns(pl.lit(year_idx).alias("year"))
+                year_dfs.append(year_upgrade_data)
+
+            # Concatenate all upgrades for this year
+            if year_dfs:
+                year_df = pl.concat(year_dfs, how="vertical_relaxed")
+                all_year_dfs.append(year_df)
+
+        # Concatenate all years
+        if not all_year_dfs:
+            return pl.LazyFrame({"bldg_id": [], "upgrade_id": [], "year": []})
+
+        result = pl.concat(all_year_dfs, how="vertical_relaxed")
         return result
 
     def read_metadata(self, years: list[int] | None = None):
