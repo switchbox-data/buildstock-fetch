@@ -204,25 +204,42 @@ class BuildStockRead:
 
         return frozenset(self.random.sample(all_building_ids, self.sample_n))
 
-    def read_metadata(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("metadata", upgrades)
+    def read_metadata(
+        self, upgrades: str | Collection[str] | None = None, building_ids: Collection[int] | None = None
+    ) -> pl.LazyFrame:
+        return self.read_parquets("metadata", upgrades, building_ids)
 
-    def read_load_curve_15min(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("load_curve_15min", upgrades)
+    def read_load_curve_15min(
+        self, upgrades: str | Collection[str] | None = None, building_ids: Collection[int] | None = None
+    ) -> pl.LazyFrame:
+        return self.read_parquets("load_curve_15min", upgrades, building_ids)
 
-    def read_load_curve_hourly(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("load_curve_hourly", upgrades)
+    def read_load_curve_hourly(
+        self, upgrades: str | Collection[str] | None = None, building_ids: Collection[int] | None = None
+    ) -> pl.LazyFrame:
+        return self.read_parquets("load_curve_hourly", upgrades, building_ids)
 
-    def read_load_curve_daily(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("load_curve_daily", upgrades)
+    def read_load_curve_daily(
+        self, upgrades: str | Collection[str] | None = None, building_ids: Collection[int] | None = None
+    ) -> pl.LazyFrame:
+        return self.read_parquets("load_curve_daily", upgrades, building_ids)
 
-    def read_load_curve_monthly(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("load_curve_monthly", upgrades)
+    def read_load_curve_monthly(
+        self, upgrades: str | Collection[str] | None = None, building_ids: Collection[int] | None = None
+    ) -> pl.LazyFrame:
+        return self.read_parquets("load_curve_monthly", upgrades, building_ids)
 
-    def read_load_curve_annual(self, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
-        return self.read_parquets("load_curve_annual", upgrades)
+    def read_load_curve_annual(
+        self, upgrades: str | Collection[str] | None = None, building_ids: Collection[int] | None = None
+    ) -> pl.LazyFrame:
+        return self.read_parquets("load_curve_annual", upgrades, building_ids)
 
-    def read_parquets(self, file_type: FileType, upgrades: str | Collection[str] | None = None) -> pl.LazyFrame:
+    def read_parquets(
+        self,
+        file_type: FileType,
+        upgrades: str | Collection[str] | None = None,
+        building_ids: Collection[int] | None = None,
+    ) -> pl.LazyFrame:
         if "metadata" not in self.release.file_types:
             raise FileTypeNotAvailableError(self.release, file_type)
 
@@ -231,6 +248,11 @@ class BuildStockRead:
         files = self.downloaded_data.filter(file_type=file_type, suffix=".parquet", upgrade=upgrades)
         lf = pl.scan_parquet([_.file_path for _ in files])
         lf = self._apply_sampling_filter(lf)
+
+        # Apply building_ids filter if specified
+        if building_ids is not None:
+            lf = lf.filter(pl.col("bldg_id").is_in(building_ids))
+
         return lf
 
     def _validate_upgrades(
