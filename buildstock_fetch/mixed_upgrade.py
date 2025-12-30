@@ -11,8 +11,6 @@ from collections.abc import Collection
 from functools import cached_property
 from pathlib import Path
 from random import Random
-from typing import TYPE_CHECKING
-
 from typing_extensions import final, override
 
 from buildstock_fetch.explore import DownloadedData, filter_downloads
@@ -27,9 +25,6 @@ from buildstock_fetch.types import (
     is_valid_state_code,
     normalize_upgrade_id,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 @final
@@ -100,19 +95,17 @@ class MixedUpgradeScenario:
         random: Random | int | None = None,
         scenario: dict[int, list[float]] | None = None,
     ) -> None:
-        # Validate and store scenario
         if scenario is None:
             raise ValueError("scenario parameter is required for MixedUpgradeScenario")
 
         validate_scenario(scenario)
         self.scenario = scenario
+        self._upgrade_ids = tuple(scenario)
         self.num_years = len(next(iter(scenario.values())))
 
-        # Store parameters
         self.data_path = Path(data_path)
         self.release = release if isinstance(release, BuildstockRelease) else BuildstockReleases.load()[release]
 
-        # Normalize states
         if states is None:
             self.states: list[USStateCode] | None = None
         elif is_valid_state_code(states):
@@ -120,18 +113,11 @@ class MixedUpgradeScenario:
         else:
             self.states = list(states)
 
-        # Set up random generator
-        if random is None:
-            self.random = Random()
-        elif isinstance(random, Random):
-            self.random = random
-        else:
-            self.random = Random(random)
+        self.random = random if isinstance(random, Random) else Random(random)
 
         self.sample_n = sample_n
 
-        # Create internal BuildStockRead for baseline (upgrade 0)
-        # This handles all the state detection, validation, and sampling
+        # Baseline reader handles state detection and optional sampling.
         self.baseline_reader = BuildStockRead(
             data_path=data_path,
             release=self.release,
@@ -140,11 +126,11 @@ class MixedUpgradeScenario:
             random=self.random,
         )
 
-        # Get the actual sampled building IDs from baseline reader
-        if self.baseline_reader.sampled_buildings is not None:
-            self.sampled_bldgs: frozenset[int] = self.baseline_reader.sampled_buildings
+        sampled = self.baseline_reader.sampled_buildings
+        if sampled is not None:
+            self.sampled_bldgs: frozenset[int] = sampled
         else:
-            # No sampling - get all buildings from metadata
+            # No sampling: fall back to full baseline bldg_id list.
             metadata_files = self.downloaded_data.filter(file_type="metadata", suffix=".parquet", upgrade="0")
             if not metadata_files:
                 raise DataNotFoundError(
@@ -159,7 +145,6 @@ class MixedUpgradeScenario:
         if not self.sampled_bldgs:
             raise ValueError("No buildings available for sampling. Please check that metadata exists.")
 
-        # Log what we did
         num_upgrades = len(scenario)
         print(f"Sampled {len(self.sampled_bldgs)} buildings from baseline (upgrade 0)")
         print(f"Materialized {self.num_years} years of adoption across {num_upgrades} upgrades")
@@ -176,57 +161,41 @@ class MixedUpgradeScenario:
         )
 
     @cached_property
+    def _allocation_plan(self) -> tuple[list[int], dict[int, list[int]]]:
+        bldgs = list(self.sampled_bldgs)
+        self.random.shuffle(bldgs)
+        allocations = {uid: [] for uid in self._upgrade_ids}
+        next_idx = 0
+        total = len(bldgs)
+
+        for year_idx in range(self.num_years):
+            for uid in self._upgrade_ids:
+                target = int(self.scenario[uid][year_idx] * total)
+                new = target - len(allocations[uid])
+                if new > 0:
+                    # Assign contiguous slices once; yearly targets take prefixes.
+                    end = next_idx + new
+                    allocations[uid].extend(bldgs[next_idx:end])
+                    next_idx = end
+
+        return bldgs, allocations
+
+    @property
     def materialized_scenario(self) -> dict[int, dict[int, int]]:
-        """Materialize building allocations for all years in the scenario.
-
-        This is cached to avoid recomputing the same allocation multiple times.
-
-        Returns:
-            Dict mapping year index to dict of {bldg_id: upgrade_id}.
-            Example: {0: {100: 0, 101: 0}, 1: {100: 4, 101: 0}}
-        """
-        # Shuffle building IDs deterministically using the Random instance
-        shuffled_bldgs = list(self.sampled_bldgs)
-        self.random.shuffle(shuffled_bldgs)
-
-        # Track which buildings have been allocated to upgrades
-        allocated_bldgs: dict[int, int] = {}  # {bldg_id: upgrade_id}
-
-        # Materialize each year
+        """Materialize building allocations for all years in the scenario."""
+        bldgs, allocations = self._allocation_plan
+        total = len(bldgs)
         materialized: dict[int, dict[int, int]] = {}
 
         for year_idx in range(self.num_years):
-            year_allocation: dict[int, int] = {}
-
-            # Start with all allocated buildings from previous years (monotonicity)
-            year_allocation.update(allocated_bldgs)
-
-            # For each upgrade, allocate new adopters
-            for upgrade_id, fractions in self.scenario.items():
-                target_fraction = fractions[year_idx]
-                target_count = int(target_fraction * len(shuffled_bldgs))
-
-                # Count how many buildings are already in this upgrade
-                current_count = sum(1 for uid in allocated_bldgs.values() if uid == upgrade_id)
-
-                # Allocate additional buildings if needed
-                new_adopters_needed = target_count - current_count
-
-                if new_adopters_needed > 0:
-                    # Find unallocated buildings
-                    unallocated = [bid for bid in shuffled_bldgs if bid not in allocated_bldgs]
-
-                    # Allocate next N unallocated buildings
-                    for bldg_id in unallocated[:new_adopters_needed]:
-                        allocated_bldgs[bldg_id] = upgrade_id
-                        year_allocation[bldg_id] = upgrade_id
-
-            # Buildings not allocated to any upgrade remain in baseline (upgrade 0)
-            for bldg_id in shuffled_bldgs:
-                if bldg_id not in year_allocation:
-                    year_allocation[bldg_id] = 0
-
-            materialized[year_idx] = year_allocation
+            # Start from baseline, then overlay upgrades for this year.
+            year_map = dict.fromkeys(bldgs, 0)
+            for uid in self._upgrade_ids:
+                target = int(self.scenario[uid][year_idx] * total)
+                if target:
+                    for bldg_id in allocations[uid][:target]:
+                        year_map[bldg_id] = uid
+            materialized[year_idx] = year_map
 
         return materialized
 
@@ -260,102 +229,58 @@ class MixedUpgradeScenario:
         Raises:
             ScenarioDataNotFoundError: If data for any scenario upgrade is missing.
         """
-        # Get all upgrade IDs in the scenario (plus baseline 0)
-        required_upgrades = {normalize_upgrade_id(str(uid)) for uid in self.scenario.keys()}
-        required_upgrades.add("0")  # Always need baseline
-
-        # Check which upgrades are available on disk using DownloadedData
-        available_upgrades = self.downloaded_data.filter(file_type=file_type).upgrades()
-
-        missing_upgrades = required_upgrades - available_upgrades
-
+        required_upgrades = {normalize_upgrade_id(str(uid)) for uid in self._upgrade_ids} | {"0"}
+        missing_upgrades = required_upgrades - self.downloaded_data.filter(file_type=file_type).upgrades()
         if missing_upgrades:
             raise ScenarioDataNotFoundError(file_type, missing_upgrades)
 
     def _read_data_for_scenario(self, file_type: FileType, years: list[int] | None = None):
-        """Internal method to read data across all upgrades and years in the scenario.
-
-        Implements incremental reading optimization (max 2N reads):
-        - Year 0: Read all buildings from upgrade 0
-        - Year 1+: Only read NEW buildings that transitioned to non-zero upgrades
-        - Reuse baseline (upgrade 0) data for buildings that haven't transitioned
-
-        Args:
-            file_type: Type of data to read (e.g., 'metadata', 'load_curve_15min').
-            years: List of year indices to include, or None for all years.
-
-        Returns:
-            LazyFrame with columns: bldg_id, upgrade_id, year, ...(original columns)
-        """
+        """Read data across upgrades and years without full materialization."""
         import polars as pl
 
-        # Validate years and data availability
-        validated_years = self._validate_years(years)
+        years = sorted(self._validate_years(years))
         self._validate_data_availability(file_type)
+        # Build order + per-upgrade adopter lists once; slice per year.
+        bldgs, allocations = self._allocation_plan
+        total = len(bldgs)
 
-        # Track which buildings have been read from each upgrade
-        read_cache: dict[int, pl.LazyFrame] = {}  # {upgrade_id: data}
-        buildings_read_per_upgrade: dict[int, set[int]] = {}  # {upgrade_id: {bldg_ids}}
+        def read_for(upgrade_id: int, bldg_ids: Collection[int], year_idx: int):
+            if not bldg_ids:
+                return None
+            lf = self.baseline_reader.read_parquets(
+                file_type, upgrades=str(upgrade_id), building_ids=bldg_ids
+            )
+            if file_type == "metadata":
+                lf = lf.rename({"upgrade": "upgrade_id"})
+            else:
+                lf = lf.with_columns(pl.lit(upgrade_id).alias("upgrade_id"))
+            return lf.with_columns(pl.lit(year_idx).alias("year"))
 
-        # Collect results for each year
         all_year_dfs: list[pl.LazyFrame] = []
-
-        for year_idx in validated_years:
-            year_allocation = self.materialized_scenario[year_idx]
-
-            # Group buildings by upgrade for this year
-            upgrade_to_buildings: dict[int, list[int]] = {}
-            for bldg_id, upgrade_id in year_allocation.items():
-                if upgrade_id not in upgrade_to_buildings:
-                    upgrade_to_buildings[upgrade_id] = []
-                upgrade_to_buildings[upgrade_id].append(bldg_id)
-
-            # For each upgrade, only read NEW buildings
+        for year_idx in years:
+            # Read upgrades first, then baseline remainder for the year.
             year_dfs: list[pl.LazyFrame] = []
-            for upgrade_id, building_ids in upgrade_to_buildings.items():
-                # Initialize tracking for this upgrade if needed
-                if upgrade_id not in buildings_read_per_upgrade:
-                    buildings_read_per_upgrade[upgrade_id] = set()
+            total_adopted = 0
 
-                # Determine which buildings are NEW (not yet read for this upgrade)
-                new_buildings = [b for b in building_ids if b not in buildings_read_per_upgrade[upgrade_id]]
+            for uid in self._upgrade_ids:
+                target = int(self.scenario[uid][year_idx] * total)
+                total_adopted += target
+                lf = read_for(uid, allocations[uid][:target], year_idx)
+                if lf is not None:
+                    year_dfs.append(lf)
 
-                # Read new buildings if any
-                if new_buildings:
-                    new_data = self.baseline_reader.read_parquets(file_type, upgrades=str(upgrade_id))
-                    new_data = new_data.filter(pl.col("bldg_id").is_in(new_buildings))
+            # Baseline = remaining buildings after all upgrade allocations.
+            lf = read_for(0, bldgs[total_adopted:], year_idx)
+            if lf is not None:
+                year_dfs.append(lf)
 
-                    # Add upgrade_id column
-                    if file_type == "metadata":
-                        new_data = new_data.rename({"upgrade": "upgrade_id"})
-                    else:
-                        new_data = new_data.with_columns(pl.lit(upgrade_id).alias("upgrade_id"))
-
-                    # Add to cache
-                    if upgrade_id in read_cache:
-                        read_cache[upgrade_id] = pl.concat([read_cache[upgrade_id], new_data], how="vertical_relaxed")
-                    else:
-                        read_cache[upgrade_id] = new_data
-
-                    # Mark as read
-                    buildings_read_per_upgrade[upgrade_id].update(new_buildings)
-
-                # Get data for all buildings in this upgrade for this year (from cache)
-                year_upgrade_data = read_cache[upgrade_id].filter(pl.col("bldg_id").is_in(building_ids))
-                year_upgrade_data = year_upgrade_data.with_columns(pl.lit(year_idx).alias("year"))
-                year_dfs.append(year_upgrade_data)
-
-            # Concatenate all upgrades for this year
             if year_dfs:
-                year_df = pl.concat(year_dfs, how="vertical_relaxed")
-                all_year_dfs.append(year_df)
+                all_year_dfs.append(pl.concat(year_dfs, how="vertical_relaxed"))
 
-        # Concatenate all years
         if not all_year_dfs:
             return pl.LazyFrame({"bldg_id": [], "upgrade_id": [], "year": []})
 
-        result = pl.concat(all_year_dfs, how="vertical_relaxed")
-        return result
+        return pl.concat(all_year_dfs, how="vertical_relaxed")
 
     def read_metadata(self, years: list[int] | None = None):
         """Read metadata for specified years in the scenario.
@@ -473,8 +398,6 @@ class MixedUpgradeScenario:
         Creates a CSV file with one row per building and one column per year.
         Each cell contains the upgrade ID for that building in that year.
 
-        This method uses vectorized operations for efficient export.
-
         Args:
             output_path: Path where the CSV file should be written.
 
@@ -493,25 +416,24 @@ class MixedUpgradeScenario:
         """
         import polars as pl
 
-        # Validate that all scenario data exists
         self._validate_data_availability("metadata")
-
-        # Build DataFrame using vectorized column construction (optimization)
-        # This is more efficient than building row-by-row
+        bldgs, allocations = self._allocation_plan
         sorted_bldg_ids = sorted(self.sampled_bldgs)
+        # Index once for stable, low-overhead column fills.
+        idx = {bid: i for i, bid in enumerate(sorted_bldg_ids)}
+        total = len(bldgs)
 
-        # Create the DataFrame with bldg_id column and all year columns at once
-        df = pl.DataFrame(
-            {
-                "bldg_id": sorted_bldg_ids,
-                **{
-                    f"year_{year_idx}": [self.materialized_scenario[year_idx][bid] for bid in sorted_bldg_ids]
-                    for year_idx in range(self.num_years)
-                },
-            }
-        )
+        year_cols = {f"year_{year_idx}": [0] * len(sorted_bldg_ids) for year_idx in range(self.num_years)}
+        for year_idx in range(self.num_years):
+            col = year_cols[f"year_{year_idx}"]
+            # Fill each year column from the precomputed adopter slices.
+            for uid in self._upgrade_ids:
+                target = int(self.scenario[uid][year_idx] * total)
+                if target:
+                    for bldg_id in allocations[uid][:target]:
+                        col[idx[bldg_id]] = uid
 
-        # Write to CSV
+        df = pl.DataFrame({"bldg_id": sorted_bldg_ids, **year_cols})
         output_path = Path(output_path)
         df.write_csv(output_path)
 
