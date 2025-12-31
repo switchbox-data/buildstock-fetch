@@ -7,7 +7,8 @@ upgrades over time.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+import logging
+from collections.abc import Collection, Iterable
 from functools import cached_property
 from pathlib import Path
 from random import Random
@@ -116,6 +117,7 @@ class MixedUpgradeScenario:
         self.random = random if isinstance(random, Random) else Random(random)
 
         self.sample_n = sample_n
+        self._available_bldg_ids_cache: dict[str, dict[int, frozenset[int]]] = {}
 
         # Baseline reader handles state detection and optional sampling.
         self.baseline_reader = BuildStockRead(
@@ -234,21 +236,80 @@ class MixedUpgradeScenario:
         if missing_upgrades:
             raise ScenarioDataNotFoundError(file_type, missing_upgrades)
 
+    def _available_bldg_ids_by_upgrade(self, file_type: FileType) -> dict[int, frozenset[int]]:
+        per_building_types = {
+            "load_curve_15min",
+            "load_curve_hourly",
+            "load_curve_daily",
+            "load_curve_monthly",
+            "load_curve_annual",
+        }
+        if file_type not in per_building_types:
+            return {}
+        cached = self._available_bldg_ids_cache.get(file_type)
+        if cached is not None:
+            return cached
+
+        needed_upgrades = {0, *self._upgrade_ids}
+        available: dict[int, set[int]] = {uid: set() for uid in needed_upgrades}
+        for info in self.downloaded_data.filter(file_type=file_type):
+            try:
+                upgrade_id = int(info.upgrade)
+                bldg_id = int(info.filename.split("-", 1)[0])
+            except (TypeError, ValueError):
+                continue
+            if upgrade_id in available:
+                available[upgrade_id].add(bldg_id)
+
+        cached = {uid: frozenset(ids) for uid, ids in available.items()}
+        self._available_bldg_ids_cache[file_type] = cached
+        return cached
+
+    def _warn_on_missing_ids(
+        self,
+        file_type: FileType,
+        upgrade_id: int,
+        year_idx: int,
+        requested_ids: list[int],
+        available_ids: frozenset[int],
+        sample_size: int = 10,
+    ) -> None:
+        if not requested_ids or not available_ids:
+            return
+        missing = [bldg_id for bldg_id in requested_ids if bldg_id not in available_ids]
+        if not missing:
+            return
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "Missing %s files for upgrade %s in year_idx %s: %s of %s requested IDs not found%s",
+            file_type,
+            upgrade_id,
+            year_idx,
+            len(missing),
+            len(requested_ids),
+            f" (example IDs: {missing[:sample_size]})" if sample_size else "",
+        )
+
     def _read_data_for_scenario(self, file_type: FileType, years: list[int] | None = None):
         """Read data across upgrades and years without full materialization."""
         import polars as pl
 
         years = sorted(self._validate_years(years))
         self._validate_data_availability(file_type)
+        available_ids_by_upgrade = self._available_bldg_ids_by_upgrade(file_type)
         # Build order + per-upgrade adopter lists once; slice per year.
         bldgs, allocations = self._allocation_plan
         total = len(bldgs)
 
-        def read_for(upgrade_id: int, bldg_ids: Collection[int], year_idx: int):
-            if not bldg_ids:
+        def read_for(upgrade_id: int, bldg_ids: Iterable[int], year_idx: int):
+            bldg_ids_list = list(bldg_ids)
+            if not bldg_ids_list:
                 return None
+            if available_ids_by_upgrade:
+                available_ids = available_ids_by_upgrade.get(upgrade_id, frozenset())
+                self._warn_on_missing_ids(file_type, upgrade_id, year_idx, bldg_ids_list, available_ids)
             lf = self.baseline_reader.read_parquets(
-                file_type, upgrades=str(upgrade_id), building_ids=bldg_ids
+                file_type, upgrades=str(upgrade_id), building_ids=bldg_ids_list
             )
             if file_type == "metadata":
                 lf = lf.rename({"upgrade": "upgrade_id"})
