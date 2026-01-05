@@ -1,24 +1,65 @@
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from . import BuildingID
 
+from buildstock_fetch.constants import SB_ANALYSIS_UPGRADES_FILE
 
-def get_metadata_url(building: "BuildingID") -> str | None:
+# Module-level cache for SB analysis upgrades data
+_SB_ANALYSIS_UPGRADES_CACHE: dict[str, Any] | None = None
+
+
+def _get_SB_analysis_upgrades() -> dict[str, Any] | None:
+    """Load SB analysis upgrades data once and cache it for subsequent calls."""
+    global _SB_ANALYSIS_UPGRADES_CACHE
+    if _SB_ANALYSIS_UPGRADES_CACHE is None:
+        with open(SB_ANALYSIS_UPGRADES_FILE) as f:
+            _SB_ANALYSIS_UPGRADES_CACHE = json.load(f)
+    return _SB_ANALYSIS_UPGRADES_CACHE
+
+
+def get_metadata_url(building: "BuildingID") -> str | list[str] | None:
     """Generate the S3 download URL for this building."""
 
     if not building._validate_requested_file_type_availability("metadata"):
         return None
+    # SB created upgrade scenarios
+    if building.is_SB_upgrade():
+        return _get_metadata_url_SB_upgrade(building)
+    # Regular release upgrades by year
     if building.release_year == "2021":
         return _get_metadata_url_2021(building)
     if building.release_year == "2022" or building.release_year == "2023":
         return _get_metadata_url_2022_2023(building)
-
     if building.release_year == "2024":
         return _get_metadata_url_2024(building)
     if building.release_year == "2025":
         return _get_metadata_url_2025(building)
     return None
+
+
+def _get_metadata_url_SB_upgrade(building: "BuildingID") -> list[str]:
+    """Get metadata URL for SB upgrades."""
+    sb_analysis_upgrades = _get_SB_analysis_upgrades()
+    if sb_analysis_upgrades is None:
+        msg = "SB analysis upgrades data not available"
+        raise ValueError(msg)
+    release_name = building.get_release_name()
+    sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
+    upgrade_components = sb_analysis_upgrade_data["upgrade_components"][building.upgrade_id]
+    metadata_urls: list[str] = []
+    for component_id in upgrade_components:
+        component_building = building.copy(upgrade_id=component_id)
+        component_metadata_url = component_building.get_metadata_url()
+        if component_metadata_url is None:
+            msg = f"Metadata URL not available for {component_building.get_release_name()}, upgrade {component_building.upgrade_id}"
+            raise ValueError(msg)
+        if isinstance(component_metadata_url, list):
+            metadata_urls.extend(component_metadata_url)
+        else:
+            metadata_urls.append(component_metadata_url)
+    return metadata_urls
 
 
 def _get_metadata_url_2021(building: "BuildingID") -> str:

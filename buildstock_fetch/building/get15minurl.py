@@ -1,7 +1,4 @@
-import json
 from typing import TYPE_CHECKING
-
-from buildstock_fetch.constants import SB_ANALYSIS_UPGRADES_FILE
 
 if TYPE_CHECKING:
     from . import BuildingID
@@ -50,17 +47,3 @@ def get_15min_load_curve_url(building: "BuildingID") -> str | None:
         )
     else:
         return None
-
-
-def get_SB_upgrade_load_component_bldg_ids(building: "BuildingID") -> list["BuildingID"] | None:
-    with open(SB_ANALYSIS_UPGRADES_FILE) as f:
-        sb_analysis_upgrades = json.load(f)
-    release_name = building.get_release_name()
-    if release_name not in sb_analysis_upgrades:
-        return None
-    sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
-    upgrade_components = sb_analysis_upgrade_data["upgrade_components"][building.upgrade_id]
-    bldg_id_component_list = []
-    for component_id in upgrade_components:
-        bldg_id_component_list.append(building.copy(upgrade_id=component_id))
-    return bldg_id_component_list

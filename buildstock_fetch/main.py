@@ -123,9 +123,19 @@ def _validate_release_name(release_name: str) -> bool:
     return release_name in valid_release_names
 
 
-def _resolve_unique_metadata_urls(bldg_ids: list[BuildingID]) -> list[str | None]:
+def _resolve_unique_metadata_urls(bldg_ids: list[BuildingID]) -> list[str]:
     """Resolve the unique metadata URLs for a list of building IDs."""
-    return list({bldg_id.get_metadata_url() for bldg_id in bldg_ids})
+    unique_metadata_urls: list[str] = []
+    for bldg_id in bldg_ids:
+        metadata_url = bldg_id.get_metadata_url()
+        if metadata_url is None:
+            continue
+        if isinstance(metadata_url, list):
+            unique_metadata_urls.extend(metadata_url)
+        else:
+            unique_metadata_urls.append(metadata_url)
+    unique_metadata_urls = list(set(unique_metadata_urls))
+    return unique_metadata_urls
 
 
 def fetch_bldg_ids(
@@ -866,7 +876,7 @@ def download_aggregate_time_step_load_curve_with_progress(
             bldg_id, output_dir, progress, task_id, aggregate_time_step, load_curve_dir
         )
         file_type: FileType = cast(FileType, load_curve_dir)
-        _process_SB_upgrade_load_curve(bldg_id, output_dir, output_file, file_type, aggregate_time_step)
+        _process_SB_upgrade_scenario(bldg_id, output_dir, output_file, file_type, aggregate_time_step)
         return output_file
 
     # Regular upgrade case
@@ -1111,6 +1121,22 @@ def _process_download_results(
         console.print(f"[red]Download failed for bldg_id {bldg_id}: {e}[/red]")
 
 
+def _add_metadata_url_to_grouping(
+    output_file: Path,
+    metadata_url: str | list[str] | None,
+    output_file_to_download_url: dict[Path, list[str]],
+) -> None:
+    """Add metadata URL(s) to the download URL grouping dictionary."""
+    if metadata_url is None:
+        return
+    if output_file not in output_file_to_download_url:
+        output_file_to_download_url[output_file] = []
+    if isinstance(metadata_url, list):
+        output_file_to_download_url[output_file].extend(metadata_url)
+    elif metadata_url not in output_file_to_download_url[output_file]:
+        output_file_to_download_url[output_file].append(metadata_url)
+
+
 def _group_bldg_ids_by_output_file(
     bldg_ids: list[BuildingID], output_dir: Path, failed_downloads: list[str]
 ) -> tuple[dict[Path, list[BuildingID]], dict[Path, list[str]]]:
@@ -1123,32 +1149,51 @@ def _group_bldg_ids_by_output_file(
     output_file_to_download_url: dict[Path, list[str]] = {}
 
     for bldg_id in bldg_ids:
-        output_file = (
-            output_dir
-            / bldg_id.get_release_name()
-            / "metadata"
-            / f"state={bldg_id.state}"
-            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-            / "metadata.parquet"
-        )
-        download_url = bldg_id.get_metadata_url()
-        if download_url is None:
-            failed_downloads.append(str(output_file))
-            continue
-        if output_file not in output_file_to_bldg_ids:
-            output_file_to_bldg_ids[output_file] = []
-        output_file_to_bldg_ids[output_file].append(bldg_id)
+        if bldg_id.is_SB_upgrade():
+            component_bldg_ids = bldg_id.get_SB_upgrade_load_component_bldg_ids()
+            if component_bldg_ids is None:
+                failed_downloads.append(str(bldg_id.bldg_id))
+                continue
+            for component_bldg_id in component_bldg_ids:
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "metadata"
+                    / f"state={bldg_id.state}"
+                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                    / f"upgrade{str(int(component_bldg_id.upgrade_id)).zfill(2)}.parquet"
+                )
+                if output_file not in output_file_to_bldg_ids:
+                    output_file_to_bldg_ids[output_file] = []
+                output_file_to_bldg_ids[output_file].append(bldg_id)
 
-        if output_file not in output_file_to_download_url:
-            output_file_to_download_url[output_file] = []
-        if download_url not in output_file_to_download_url[output_file]:
-            output_file_to_download_url[output_file].append(download_url)
+                component_metadata_url = component_bldg_id.get_metadata_url()
+                _add_metadata_url_to_grouping(output_file, component_metadata_url, output_file_to_download_url)
+        else:
+            output_file = (
+                output_dir
+                / bldg_id.get_release_name()
+                / "metadata"
+                / f"state={bldg_id.state}"
+                / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                / "metadata.parquet"
+            )
+            download_url = bldg_id.get_metadata_url()
+            if download_url is None:
+                failed_downloads.append(str(output_file))
+                continue
+            if output_file not in output_file_to_bldg_ids:
+                output_file_to_bldg_ids[output_file] = []
+            output_file_to_bldg_ids[output_file].append(bldg_id)
+            _add_metadata_url_to_grouping(output_file, download_url, output_file_to_download_url)
 
     return output_file_to_bldg_ids, output_file_to_download_url
 
 
 def _create_metadata_progress_tasks(
-    output_file_to_bldg_ids: dict[Path, list[BuildingID]], progress: Progress
+    output_file_to_bldg_ids: dict[Path, list[BuildingID]],
+    output_file_to_download_url: dict[Path, list[str]],
+    progress: Progress,
 ) -> dict[Path, TaskID]:
     """Create progress tasks for metadata downloads.
 
@@ -1162,7 +1207,7 @@ def _create_metadata_progress_tasks(
         upgrade = bldg_id.upgrade_id
         release_name = bldg_id.get_release_name()
         metadata_task = progress.add_task(
-            f"[yellow]Downloading metadata: {release_name} - (upgrade {upgrade}) - {state}",
+            f"[yellow](metadata) Identifying rows to download: {release_name} - (upgrade {upgrade}) - {state}",
             total=0,  # Will be updated when we get the file size
         )
         output_file_to_metadata_task[output_file] = metadata_task
@@ -1181,8 +1226,9 @@ def _check_missing_bldg_ids(bldg_ids: list[BuildingID], found_bldg_ids: list[int
     Returns:
         True if all bldg_ids were found, False otherwise.
     """
+    requested_bldg_ids = {bldg_id.bldg_id for bldg_id in bldg_ids}
     for found_bldg_id in found_bldg_ids:
-        if found_bldg_id not in {bldg_id.bldg_id for bldg_id in bldg_ids}:
+        if found_bldg_id not in requested_bldg_ids:
             release_name = bldg_ids[0].get_release_name()
             state = bldg_ids[0].state
             upgrade = bldg_ids[0].upgrade_id
@@ -1207,30 +1253,66 @@ def _download_metadata_with_progress(
     output_file_to_bldg_ids, output_file_to_download_url = _group_bldg_ids_by_output_file(
         bldg_ids, output_dir, failed_downloads
     )
-    output_file_to_metadata_task = _create_metadata_progress_tasks(output_file_to_bldg_ids, progress)
+    print("TESTING 0 : bldg_ids", bldg_ids)
+    print(output_file_to_download_url)
+    print(output_file_to_bldg_ids)
 
-    for output_file, bldg_ids in output_file_to_bldg_ids.items():
+    output_file_to_metadata_task = _create_metadata_progress_tasks(
+        output_file_to_bldg_ids, output_file_to_download_url, progress
+    )
+
+    for output_file, file_grouped_bldg_ids in output_file_to_bldg_ids.items():
         try:
             download_urls = output_file_to_download_url[output_file]
             found_bldg_ids: list[int] = []
             _download_with_progress_metadata(
                 download_urls,
-                bldg_ids,
+                file_grouped_bldg_ids,
                 output_file,
                 progress,
                 output_file_to_metadata_task[output_file],
                 found_bldg_ids,
             )
-            if not _check_missing_bldg_ids(bldg_ids, found_bldg_ids, console):
+            if not _check_missing_bldg_ids(file_grouped_bldg_ids, found_bldg_ids, console):
                 failed_downloads.append(str(output_file))
+                continue
+            if file_grouped_bldg_ids[0].is_SB_upgrade():
                 continue
             downloaded_paths.append(output_file)
         except Exception as e:
             failed_downloads.append(str(output_file))
-            for bldg_id in bldg_ids:
+            for bldg_id in file_grouped_bldg_ids:
                 console.print(f"[red]Download failed for metadata {bldg_id.bldg_id}: {e}[/red]")
 
+    for bldg_id in bldg_ids:
+        print("TESTING 3: bldg_id", bldg_id)
+        if bldg_id.is_SB_upgrade():
+            output_file = (
+                output_dir
+                / bldg_id.get_release_name()
+                / "metadata"
+                / f"state={bldg_id.state}"
+                / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                / f"upgrade{str(int(bldg_id.upgrade_id)).zfill(2)}.parquet"
+            )
+            _process_SB_upgrade_metadata(bldg_id, output_file, downloaded_paths, console)
     return downloaded_paths, failed_downloads
+
+
+def _process_SB_upgrade_metadata(
+    bldg_id: BuildingID, output_file: Path, downloaded_paths: list[Path], console: Console
+) -> None:
+    """Process SB upgrade metadata."""
+    print("TESTING 2")
+    print(output_file)
+
+    ## TODO: Proces SB upgrade metadata for the given bldg_id
+
+    sb_analysis_upgrades = _get_SB_analysis_upgrades()
+    if sb_analysis_upgrades is None:
+        msg = "SB analysis upgrades data not available"
+        raise ValueError(msg)
+    downloaded_paths.append(output_file)
 
 
 def download_weather_file_with_progress(
@@ -1513,7 +1595,7 @@ def _process_download_future_15min(
         if bldg_id.is_SB_upgrade():
             file_type: FileType = "load_curve_15min"
             aggregate_time_step = "15min"
-            _process_SB_upgrade_load_curve(bldg_id, output_dir, output_file, file_type, aggregate_time_step)
+            _process_SB_upgrade_scenario(bldg_id, output_dir, output_file, file_type, aggregate_time_step)
     except No15minLoadCurveError:
         output_file = (
             output_dir
@@ -1539,7 +1621,7 @@ def _process_download_future_15min(
         console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
-def _process_SB_upgrade_load_curve(
+def _process_SB_upgrade_scenario(
     bldg_id: BuildingID,
     output_dir: Path,
     output_file: Path,
@@ -1567,13 +1649,14 @@ def _process_SB_upgrade_load_curve(
     # Initialize the final SB upgrade load curve dataframe. Load the timestamp from the first upgrade component.
     SB_upgrade_load_curve_df = pl.DataFrame()
     first_upgrade_component = upgrade_components[0]
+    first_upgrade_component_bldg_id = bldg_id.copy(upgrade_id=first_upgrade_component)
     first_upgrade_component_filename = (
         output_dir
         / bldg_id.get_release_name()
         / file_type
         / f"state={bldg_id.state}"
         / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / f"{str(bldg_id.bldg_id)!s}-{int(first_upgrade_component)!s}.parquet"
+        / first_upgrade_component_bldg_id.get_output_filename(file_type)
     )
     SB_upgrade_load_curve_df = pl.read_parquet(first_upgrade_component_filename).select("timestamp")
 
@@ -1601,7 +1684,7 @@ def _process_SB_upgrade_load_curve(
             / file_type
             / f"state={bldg_id.state}"
             / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-            / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id_component.upgrade_id)!s}.parquet"
+            / bldg_id_component.get_output_filename(file_type)
         )
         # Read the load curve for this component and add to the final SB upgrade load curve dataframe
         component_load_curve_df = pl.read_parquet(component_filename).select([
