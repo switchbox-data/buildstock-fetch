@@ -54,41 +54,53 @@ from .exception import (
 _SB_ANALYSIS_UPGRADES_CACHE: dict[str, Any] | None = None
 
 
-def _get_SB_analysis_upgrades() -> dict[str, Any] | None:
+def _get_SB_analysis_upgrades() -> dict[str, Any]:
     """Load SB analysis upgrades data once and cache it for subsequent calls."""
     global _SB_ANALYSIS_UPGRADES_CACHE
     if _SB_ANALYSIS_UPGRADES_CACHE is None:
         with open(SB_ANALYSIS_UPGRADES_FILE) as f:
             _SB_ANALYSIS_UPGRADES_CACHE = json.load(f)
+    if _SB_ANALYSIS_UPGRADES_CACHE is None:
+        msg = "SB analysis upgrades data not available"
+        raise ValueError(msg)
     return _SB_ANALYSIS_UPGRADES_CACHE
 
 
 # Module-level cache for SB analysis upgrades column map
 _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE: pl.DataFrame | None = None
+_SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE: pl.DataFrame | None = None
 
 
 def _get_SB_analysis_upgrades_column_map(release_year: ReleaseYear, file_type: FileType) -> pl.DataFrame:
     """Load SB analysis upgrades column map once and cache it for subsequent calls."""
-    global _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE
-    if _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE is None:
-        if release_year == "2024":
-            if (
-                file_type == "load_curve_15min"
-                or file_type == "load_curve_hourly"
-                or file_type == "load_curve_daily"
-                or file_type == "load_curve_monthly"
-            ):
+    global _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE, _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE
+
+    if release_year == "2024":
+        if (
+            file_type == "load_curve_15min"
+            or file_type == "load_curve_hourly"
+            or file_type == "load_curve_daily"
+            or file_type == "load_curve_monthly"
+        ):
+            if _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE is None:
                 column_map_file = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("data_dictionary_2024_load_curve_labeled.csv")
                 _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE = pl.read_csv(column_map_file)
-            else:
-                return pl.DataFrame()
-        else:
-            msg = f"Release year {release_year} not supported"
-            raise ValueError(msg)
-
-    if _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE is None:
-        return pl.DataFrame()
-    return _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE
+                if _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE.is_empty():
+                    msg = "SB analysis upgrades load curve column map not available"
+                    raise ValueError(msg)
+            return _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE
+        elif file_type == "metadata":
+            if _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE is None:
+                column_map_file = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("data_dictionary_2024_metadata_labeled.csv")
+                _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE = pl.read_csv(column_map_file)
+                if _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE.is_empty():
+                    msg = "SB analysis upgrades metadata column map not available"
+                    raise ValueError(msg)
+            return _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE
+    else:
+        msg = f"Release year {release_year} not supported"
+        raise ValueError(msg)
+    return pl.DataFrame()
 
 
 @dataclass
@@ -283,6 +295,13 @@ def _download_with_progress_metadata(
 ) -> int:
     """Download a metadata file with progress tracking, filtering for only requested bldg_ids from S3."""
 
+    # Extract release info for progress messages
+    first_bldg_id = bldg_ids[0]
+    release_name = first_bldg_id.get_release_name()
+    upgrade = first_bldg_id.upgrade_id
+    state = first_bldg_id.state
+    progress_suffix = f"{release_name} - (upgrade {upgrade}) - {state}"
+
     # Get the list of bldg_ids we need to filter for, sorted for optimization
     requested_bldg_ids_set = {bldg_id.bldg_id for bldg_id in bldg_ids}
     requested_bldg_ids = sorted(requested_bldg_ids_set)
@@ -294,6 +313,7 @@ def _download_with_progress_metadata(
 
     for url in urls:
         s3_path = _convert_url_to_s3_path(url)
+        progress.update(task_id, description=f"[yellow](metadata) Connecting to S3: {progress_suffix}")
 
         try:
             # Get total file size from S3
@@ -303,6 +323,7 @@ def _download_with_progress_metadata(
             s3_key = s3_path_parts[1] if len(s3_path_parts) > 1 else ""
 
             # Use boto3 to get file size (HEAD request)
+            progress.update(task_id, description=f"[yellow](metadata) Getting file size: {progress_suffix}")
             s3_client = boto3.client("s3", config=Config(signature_version=UNSIGNED))
             try:
                 response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
@@ -319,6 +340,9 @@ def _download_with_progress_metadata(
             try:
                 # Open file as stream using PyArrow filesystem
                 # Polars will read parquet metadata and use predicate pushdown to filter efficiently
+                progress.update(
+                    task_id, description=f"[yellow](metadata) Reading and filtering data from S3: {progress_suffix}"
+                )
                 with s3_filesystem.open_input_file(s3_file_path) as s3_file:
                     # Read only metadata (footer)
                     parquet_file = pq.ParquetFile(s3_file)
@@ -344,7 +368,11 @@ def _download_with_progress_metadata(
                     )
                     found_bldg_ids.extend(df["bldg_id"].to_list())
                     selected_rows = len(df)
-                    progress.update(task_id, total=total_file_size * (selected_rows / total_rows))
+                    progress.update(
+                        task_id,
+                        total=total_file_size * (selected_rows / total_rows),
+                        description=f"[yellow](metadata) Writing filtered data: {progress_suffix}",
+                    )
             except Exception:
                 traceback.print_exc()
                 raise
@@ -374,10 +402,14 @@ def _download_with_progress_metadata(
                 task_id,
                 completed=downloaded_size,
                 total=downloaded_size,
+                description=f"[green](metadata) Download complete: {progress_suffix}",
             )
             gc.collect()
         except Exception:
             # Fallback to old method (download entire file using requests) if S3 filtering fails
+            progress.update(
+                task_id, description=f"[yellow](metadata) Falling back to full file download: {progress_suffix}"
+            )
             return _download_with_progress_metadata_fallback(url, output_file, progress, task_id)
         else:
             # Return successfully if no exception occurred
@@ -1250,12 +1282,14 @@ def _download_metadata_with_progress(
     console: Console,
 ) -> tuple[list[Path], list[str]]:
     """Download metadata file with progress tracking."""
+    # Output file here refers to the final metadata file that will be created.
+    # If the metadata file has multiple counties making up a single final metdata file,
+    # it will have one output file and multiple download URL's.
+    # If the upgrade is SB upgrade that has multiple components making up a single final upgrade,
+    # there will be multiple output files, one for each component.
     output_file_to_bldg_ids, output_file_to_download_url = _group_bldg_ids_by_output_file(
         bldg_ids, output_dir, failed_downloads
     )
-    print("TESTING 0 : bldg_ids", bldg_ids)
-    print(output_file_to_download_url)
-    print(output_file_to_bldg_ids)
 
     output_file_to_metadata_task = _create_metadata_progress_tasks(
         output_file_to_bldg_ids, output_file_to_download_url, progress
@@ -1276,6 +1310,9 @@ def _download_metadata_with_progress(
             if not _check_missing_bldg_ids(file_grouped_bldg_ids, found_bldg_ids, console):
                 failed_downloads.append(str(output_file))
                 continue
+            # If the upgrade is an SB upgrade, there will be multiple output files,
+            # one for each component. We therefore do not add each of these to
+            # "successful downloads" list. This is done later.
             if file_grouped_bldg_ids[0].is_SB_upgrade():
                 continue
             downloaded_paths.append(output_file)
@@ -1285,34 +1322,20 @@ def _download_metadata_with_progress(
                 console.print(f"[red]Download failed for metadata {bldg_id.bldg_id}: {e}[/red]")
 
     for bldg_id in bldg_ids:
-        print("TESTING 3: bldg_id", bldg_id)
         if bldg_id.is_SB_upgrade():
+            # If the upgrade is an SB upgrade, there will be multiple output files.
+            # Only here do we add the final metadata file to the "successful downloads" list.
             output_file = (
                 output_dir
                 / bldg_id.get_release_name()
                 / "metadata"
                 / f"state={bldg_id.state}"
                 / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-                / f"upgrade{str(int(bldg_id.upgrade_id)).zfill(2)}.parquet"
+                / bldg_id.get_output_filename("metadata")
             )
-            _process_SB_upgrade_metadata(bldg_id, output_file, downloaded_paths, console)
+            downloaded_paths.append(output_file)
+            _process_SB_upgrade_scenario(bldg_id, output_dir, output_file, "metadata", None)
     return downloaded_paths, failed_downloads
-
-
-def _process_SB_upgrade_metadata(
-    bldg_id: BuildingID, output_file: Path, downloaded_paths: list[Path], console: Console
-) -> None:
-    """Process SB upgrade metadata."""
-    print("TESTING 2")
-    print(output_file)
-
-    ## TODO: Proces SB upgrade metadata for the given bldg_id
-
-    sb_analysis_upgrades = _get_SB_analysis_upgrades()
-    if sb_analysis_upgrades is None:
-        msg = "SB analysis upgrades data not available"
-        raise ValueError(msg)
-    downloaded_paths.append(output_file)
 
 
 def download_weather_file_with_progress(
@@ -1631,43 +1654,33 @@ def _process_SB_upgrade_scenario(
     """Process a SwitchBox Analysis upgrade load curve."""
     # Load SB analysis upgrades data json file
     sb_analysis_upgrades = _get_SB_analysis_upgrades()
-    if sb_analysis_upgrades is None:
-        msg = "SB analysis upgrades data not available"
-        raise ValueError(msg)
     # Load SB analysis upgrades column map csv file (maps which columns are HVAC and which are appliances)
     sb_analysis_upgrades_column_map = _get_SB_analysis_upgrades_column_map(bldg_id.release_year, file_type)
-    if sb_analysis_upgrades_column_map.is_empty():
-        msg = "SB analysis upgrades column map not available"
-        raise ValueError(msg)
     # Extract out this specific release's data
     release_name = bldg_id.get_release_name()
     if release_name not in sb_analysis_upgrades:
-        return
+        msg = f"Release name {release_name} not found in SB analysis upgrades data"
+        raise ValueError(msg)
     sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
     upgrade_components = sb_analysis_upgrade_data["upgrade_components"][bldg_id.upgrade_id]
 
     # Initialize the final SB upgrade load curve dataframe. Load the timestamp from the first upgrade component.
-    SB_upgrade_load_curve_df = pl.DataFrame()
+    SB_upgrade_df = pl.DataFrame()
     first_upgrade_component = upgrade_components[0]
     first_upgrade_component_bldg_id = bldg_id.copy(upgrade_id=first_upgrade_component)
-    first_upgrade_component_filename = (
-        output_dir
-        / bldg_id.get_release_name()
-        / file_type
-        / f"state={bldg_id.state}"
-        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / first_upgrade_component_bldg_id.get_output_filename(file_type)
+    first_upgrade_component_filename = _get_SB_upgrade_component_filename(
+        bldg_id, first_upgrade_component_bldg_id, output_dir, file_type
     )
-    SB_upgrade_load_curve_df = pl.read_parquet(first_upgrade_component_filename).select("timestamp")
+    SB_upgrade_df = _initialize_SB_upgrade_dataframe(first_upgrade_component_filename, file_type)
 
     # Save component file names to delete later
     component_file_names_to_delete = []
 
     for functional_group in get_args(FunctionalGroup):
-        if functional_group in ["total", "net"]:
+        if functional_group in ["total", "net"] or functional_group not in sb_analysis_upgrade_data:
             continue
-        if functional_group not in sb_analysis_upgrade_data:
-            continue
+        # Each functional group comes from a different upgrade
+        # There are also column names associated with each functional group
         functional_group_upgrade_id = sb_analysis_upgrade_data[functional_group][bldg_id.upgrade_id]
         functional_group_column_names = (
             sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == functional_group)
@@ -1678,21 +1691,23 @@ def _process_SB_upgrade_scenario(
         if not functional_group_column_names:
             continue
         bldg_id_component = bldg_id.copy(upgrade_id=functional_group_upgrade_id)
-        component_filename = (
-            output_dir
-            / bldg_id.get_release_name()
-            / file_type
-            / f"state={bldg_id.state}"
-            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-            / bldg_id_component.get_output_filename(file_type)
+        component_filename = _get_SB_upgrade_component_filename(bldg_id, bldg_id_component, output_dir, file_type)
+        # Read the file for this component and add to the final SB upgrade dataframe
+        join_column_name, columns_to_select = _get_SB_upgrade_component_columns(
+            file_type, functional_group_column_names
         )
-        # Read the load curve for this component and add to the final SB upgrade load curve dataframe
-        component_load_curve_df = pl.read_parquet(component_filename).select([
-            "timestamp",
-            *functional_group_column_names,
-        ])
-        SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.join(component_load_curve_df, on="timestamp")
-        # Delete the component load curve dataframe
+
+        # Get available columns from the parquet file and filter to only select existing columns
+        available_columns = set(pl.scan_parquet(component_filename).collect_schema().names())
+        columns_to_select_filtered = [col for col in columns_to_select if col in available_columns]
+
+        # Ensure join column exists, otherwise skip this component
+        if join_column_name not in columns_to_select_filtered:
+            continue
+
+        component_df = pl.read_parquet(component_filename).select(columns_to_select_filtered)
+        SB_upgrade_df = SB_upgrade_df.join(component_df, on=join_column_name)
+        # Add component file name to list of files to delete
         component_file_names_to_delete.append(component_filename)
 
     # Convert to set of strings for deletion
@@ -1703,18 +1718,80 @@ def _process_SB_upgrade_scenario(
         os.remove(component_filename_str)
     gc.collect()
 
-    # Add total load curve columns for SB upgrade scenarios
-    SB_upgrade_load_curve_df = _add_SB_upgrade_load_curve_total_columns(SB_upgrade_load_curve_df)
+    if (
+        file_type == "load_curve_15min"
+        or file_type == "load_curve_hourly"
+        or file_type == "load_curve_daily"
+        or file_type == "load_curve_monthly"
+    ):
+        # Add total load curve columns for SB upgrade scenarios
+        SB_upgrade_df = _add_SB_upgrade_load_curve_total_columns(SB_upgrade_df)
 
     if (
         file_type == "load_curve_hourly" or file_type == "load_curve_daily" or file_type == "load_curve_monthly"
     ) and aggregate_time_step is not None:
-        SB_upgrade_load_curve_df = _process_aggregate_load_curve(
-            SB_upgrade_load_curve_df, aggregate_time_step, bldg_id.release_year
-        )
+        SB_upgrade_df = _process_aggregate_load_curve(SB_upgrade_df, aggregate_time_step, bldg_id.release_year)
 
     # Save the final SB upgrade load curve dataframe to a parquet file
-    SB_upgrade_load_curve_df.write_parquet(output_file)
+    SB_upgrade_df.write_parquet(output_file)
+
+
+def _get_SB_upgrade_component_filename(
+    final_bldg_id: BuildingID, component_bldg_id: BuildingID, output_dir: Path, file_type: FileType
+) -> Path:
+    if file_type == "metadata" or (
+        file_type == "load_curve_15min"
+        or file_type == "load_curve_hourly"
+        or file_type == "load_curve_daily"
+        or file_type == "load_curve_monthly"
+    ):
+        return (
+            output_dir
+            / final_bldg_id.get_release_name()
+            / file_type
+            / f"state={final_bldg_id.state}"
+            / f"upgrade={str(int(final_bldg_id.upgrade_id)).zfill(2)}"
+            / f"upgrade{str(int(component_bldg_id.upgrade_id)).zfill(2)}.parquet"
+        )
+    else:
+        msg = f"File type {file_type} not supported"
+        raise ValueError(msg)
+
+
+def _initialize_SB_upgrade_dataframe(first_upgrade_component_filename: Path, file_type: FileType) -> pl.DataFrame:
+    SB_upgrade_df = pl.DataFrame()
+    if file_type == "metadata":
+        SB_upgrade_df = pl.read_parquet(first_upgrade_component_filename).select("bldg_id")
+    elif (
+        file_type == "load_curve_15min"
+        or file_type == "load_curve_hourly"
+        or file_type == "load_curve_daily"
+        or file_type == "load_curve_monthly"
+    ):
+        SB_upgrade_df = pl.read_parquet(first_upgrade_component_filename).select("timestamp")
+    else:
+        msg = f"File type {file_type} not supported"
+        raise ValueError(msg)
+    return SB_upgrade_df
+
+
+def _get_SB_upgrade_component_columns(
+    file_type: FileType, functional_group_column_names: list[str]
+) -> tuple[str, list[str]]:
+    if file_type == "metadata":
+        join_column_name = "bldg_id"
+        return join_column_name, [join_column_name, *functional_group_column_names]
+    elif (
+        file_type == "load_curve_15min"
+        or file_type == "load_curve_hourly"
+        or file_type == "load_curve_daily"
+        or file_type == "load_curve_monthly"
+    ):
+        join_column_name = "timestamp"
+        return join_column_name, [join_column_name, *functional_group_column_names]
+    else:
+        msg = f"File type {file_type} not supported"
+        raise ValueError(msg)
 
 
 def _add_SB_upgrade_load_curve_total_columns(SB_upgrade_load_curve_df: pl.DataFrame) -> pl.DataFrame:
