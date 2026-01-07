@@ -783,7 +783,7 @@ def download_15min_load_curve_with_progress(
 
     # Special case for SwitchBox Analysis upgrades
     if bldg_id.is_SB_upgrade():
-        bldg_id_component_list = bldg_id.get_SB_upgrade_load_component_bldg_ids()
+        bldg_id_component_list = bldg_id.get_SB_upgrade_component_bldg_ids()
         if bldg_id_component_list is None:
             message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
             raise No15minLoadCurveError(message)
@@ -976,7 +976,7 @@ def _download_aggregate_load_curve_components_SB_upgrade(
     aggregate_time_step: str,
     load_curve_dir: str,
 ) -> Path:
-    bldg_id_component_list = bldg_id.get_SB_upgrade_load_component_bldg_ids()
+    bldg_id_component_list = bldg_id.get_SB_upgrade_component_bldg_ids()
     if bldg_id_component_list is None:
         message = f"{aggregate_time_step} load profile timeseries is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
         raise NoAggregateLoadCurveError(message)
@@ -1182,7 +1182,7 @@ def _group_bldg_ids_by_output_file(
 
     for bldg_id in bldg_ids:
         if bldg_id.is_SB_upgrade():
-            component_bldg_ids = bldg_id.get_SB_upgrade_load_component_bldg_ids()
+            component_bldg_ids = bldg_id.get_SB_upgrade_component_bldg_ids()
             if component_bldg_ids is None:
                 failed_downloads.append(str(bldg_id.bldg_id))
                 continue
@@ -1934,6 +1934,9 @@ def download_annual_load_curve_with_progress(
     Returns:
         Path to the downloaded file.
     """
+    if bldg_id.is_SB_upgrade():
+        return download_annual_load_curve_SB_upgrade(bldg_id, output_dir, progress, task_id)
+
     download_url = bldg_id.get_annual_load_curve_url()
     if download_url is None:
         message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
@@ -1969,6 +1972,70 @@ def download_annual_load_curve_with_progress(
             file.write(response.content)
 
     return output_file
+
+
+def download_annual_load_curve_SB_upgrade(
+    bldg_id: BuildingID, output_dir: Path, progress: Optional[Progress] = None, task_id: Optional[TaskID] = None
+) -> Path:
+    """Download the annual load curve for a given building with progress tracking."""
+
+    output_filename = bldg_id.get_annual_load_curve_filename()
+    if output_filename is None:
+        message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
+        raise NoAnnualLoadCurveError(message)
+    output_file = (
+        output_dir
+        / bldg_id.get_release_name()
+        / "load_curve_annual"
+        / f"state={bldg_id.state}"
+        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+        / output_filename
+    )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    component_output_files = download_annual_load_curve_SB_upgrade_components(bldg_id, output_dir, progress, task_id)
+    print(component_output_files)
+
+    return output_file
+
+
+def download_annual_load_curve_SB_upgrade_components(
+    bldg_id: BuildingID, output_dir: Path, progress: Optional[Progress] = None, task_id: Optional[TaskID] = None
+) -> list[Path]:
+    """Download the annual load curve for the components of a given building with progress tracking."""
+    component_bldg_ids = bldg_id.get_SB_upgrade_component_bldg_ids()
+    if component_bldg_ids is None:
+        message = f"Annual load curve is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
+        raise NoAnnualLoadCurveError(message)
+    component_output_files = []
+    for component_bldg_id in component_bldg_ids:
+        component_output_filename = component_bldg_id.get_annual_load_curve_filename()
+        if component_output_filename is None:
+            message = f"Annual load curve is not available for {component_bldg_id.get_release_name()}, upgrade {component_bldg_id.upgrade_id}"
+            raise NoAnnualLoadCurveError(message)
+        component_output_file = (
+            output_dir
+            / bldg_id.get_release_name()
+            / "load_curve_annual"
+            / f"state={bldg_id.state}"
+            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+            / component_output_filename
+        )
+        download_url = component_bldg_id.get_annual_load_curve_url()
+        if download_url is None:
+            message = f"Annual load curve is not available for {component_bldg_id.get_release_name()}, upgrade {component_bldg_id.upgrade_id}"
+            raise NoAnnualLoadCurveError(message)
+        # Download the annual load curve for the component
+        if progress and task_id is not None:
+            _download_with_progress(download_url, component_output_file, progress, task_id)
+            component_output_files.append(component_output_file)
+        else:
+            response = requests.get(download_url, timeout=30, verify=True)
+            response.raise_for_status()
+            with open(component_output_file, "wb") as file:
+                file.write(response.content)
+            component_output_files.append(component_output_file)
+    return component_output_files
 
 
 def _download_annual_load_curves_parallel(

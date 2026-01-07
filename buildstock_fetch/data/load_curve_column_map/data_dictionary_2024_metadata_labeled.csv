@@ -337,5 +337,5 @@ out.bills.fuel_oil.usd,utility
 out.bills.natural_gas.usd,utility
 out.bills.propane.usd,utility
 out.energy_burden.percentage,utility
-metadata_index,metadata
+metadata_index,
 bldg_id,metadata

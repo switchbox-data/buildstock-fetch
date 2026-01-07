@@ -91,7 +91,7 @@ class BuildingID:
     def get_15min_load_curve_url(self) -> str | None:
         return get_15min_load_curve_url(self)
 
-    def get_SB_upgrade_load_component_bldg_ids(self) -> list["BuildingID"] | None:
+    def get_SB_upgrade_component_bldg_ids(self) -> list["BuildingID"] | None:
         with open(SB_ANALYSIS_UPGRADES_FILE) as f:
             sb_analysis_upgrades = json.load(f)
         release_name = self.get_release_name()
