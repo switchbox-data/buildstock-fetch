@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import urljoin
 
-import aiofiles.tempfile
 import polars as pl
 from httpx import AsyncClient
 

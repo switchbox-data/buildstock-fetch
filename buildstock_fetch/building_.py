@@ -126,11 +126,38 @@ class Building:
                 )
             case BuildstockRelease(year="2025", product="resstock"):
                 return (
-                    f"{self.base_path}/metadata_and_annual_results/by_state/full/parquet"
+                    f"{self.base_path}/metadata_and_annual_results/by_state/full/parquet/"
                     f"state={self.state}/{self.state}_upgrade{self.upgrade}.parquet"
                 )
             case _:
                 raise NotImplementedError()
+
+    @property
+    def energy_models_path(self) -> str:
+        obj = RELEASES[self.release]
+        if "hpxml" not in obj.file_types:
+            raise UnavailableFileTypeError(self, "hpxml")
+        if "schedule" not in obj.file_types:
+            raise UnavailableFileTypeError(self, "hpxml")
+
+        bldg_str = f"bldg{str(self.id).zfill(7)}"
+        upgrade_str = f"up{self.upgrade.zfill(2)}"
+        filename_str = f"{bldg_str}-{upgrade_str}"
+
+        match obj:
+            case BuildstockRelease(year="2022"):
+                return f"{self.base_path}/building_energy_models/upgrade={self.upgrade}/{filename_str}.zip"
+            case BuildstockRelease(year="2024"):
+                return (
+                    f"{self.base_path}/model_and_schedule_files"
+                    f"/building_energy_models/upgrade={self.upgrade}/{filename_str}.zip"
+                )
+            case BuildstockRelease(year="2025"):
+                upgrade_str_ = self.upgrade if self.release == "res_2025_amy2018_1" else upgrade_str
+                extension = "zip" if obj.product == "resstock" else "osm.gz"
+                return f"{self.base_path}/building_energy_models/upgrade={upgrade_str_}/{filename_str}.{extension}"
+            case _:
+                raise ValueError(self.release)
 
     @property
     def base_path(self) -> str:
@@ -156,6 +183,10 @@ class Building:
             case "load_curve_annual":
                 url = self.load_curve_annual_path.replace("_baseline_", "_upgrade00_")
                 filename = url.split("/")[-1]
+            case "hpxml":
+                filename = f"{str(self.id).zfill(7)}-up{self.upgrade.zfill(2)}.xml"
+            case "schedule":
+                filename = f"{str(self.id).zfill(7)}-up{self.upgrade.zfill(2)}_schedule.csv"
             case _:
                 raise NotImplementedError()
 

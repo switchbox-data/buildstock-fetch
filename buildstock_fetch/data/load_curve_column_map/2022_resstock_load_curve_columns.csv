@@ -1,5 +1,4 @@
 name,Aggregate_function
-timestamp,first
 out.electricity.ceiling_fan.energy_consumption,sum
 out.electricity.ceiling_fan.energy_consumption_intensity,sum
 out.electricity.clothes_dryer.energy_consumption,sum
