@@ -1,19 +1,22 @@
+import asyncio
 import importlib.metadata
+import logging
 import pprint
 import re
 from pathlib import Path
 from typing import Annotated, NamedTuple, cast, get_args
 
 import questionary
+from rich.logging import RichHandler
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from typing_extensions import Never
 
-from buildstock_fetch.building import BuildingID
-from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
-from buildstock_fetch.releases import BuildstockReleases
+from buildstock_fetch.building_ import Building
+from buildstock_fetch.main_new import download_and_process_all, list_buildings
+from buildstock_fetch.releases import RELEASES, BuildstockReleases
 from buildstock_fetch.types import (
     FileType,
     ReleaseVersion,
@@ -56,7 +59,7 @@ def _show_app_version(value: bool) -> None:
 class BuildingsGroup(NamedTuple):
     state: USStateCode
     upgrade_id: UpgradeID
-    buildings: list[BuildingID]
+    buildings: list[Building]
 
 
 @app.command()
@@ -108,9 +111,11 @@ def main(  # noqa: C901
         ),
     ] = None,
     threads: Annotated[
-        int, typer.Option("--threads", "-t", help="Number of files to download at the same time", min=1, max=50)
+        int, typer.Option("--threads", "-t", help="Number of files to download at the same time", min=1, max=100)
     ] = 15,
 ) -> None:
+    logging.basicConfig(level=logging.ERROR, handlers=[RichHandler()])
+
     states = _parse_and_validate_states(states_raw) if states_raw else None
     file_types = _parse_and_validate_file_types(file_types_raw) if file_types_raw else None
     upgrade_ids = _parse_and_validate_upgrade_ids(upgrade_id_raw) if upgrade_id_raw else None
@@ -178,18 +183,19 @@ def main(  # noqa: C901
 
     building_groups = fetch_building_groups(inputs_final)
     if sample is not None:
-        buildings: set[BuildingID] = set()
+        buildings: set[Building] = set()
         for group in building_groups:
             buildings |= set(group.buildings[: -1 if sample == "all" else sample])
     else:
         buildings = get_buildings_sample(building_groups)
 
-    _unused = fetch_bldg_data(
-        list(buildings),
-        tuple(inputs_final.file_types),
-        inputs_final.output_directory,
-        max_workers=threads,
-        weather_states=[state for state in inputs_final.states if state in release.weather_map_available_states],
+    _ = asyncio.run(
+        download_and_process_all(
+            inputs_final.output_directory,
+            buildings,
+            inputs_final.file_types,
+            max_concurrent_downloads=threads,
+        )
     )
 
 
@@ -368,7 +374,7 @@ def verify_inputs(inputs: InputsFinal) -> bool:
     return bool(result)
 
 
-def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[BuildingID]:
+def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[Building]:
     total_buildings = sum(len(_.buildings) for _ in building_groups)
     console.print(f"\nThere are {total_buildings} files for this release")
     for group in building_groups:
@@ -385,7 +391,7 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[BuildingI
     if not choice:
         cancel()
 
-    result: set[BuildingID] = set()
+    result: set[Building] = set()
     if choice == "Download all files":
         for group in building_groups:
             result |= set(group.buildings)
@@ -457,16 +463,15 @@ def display_download_parameters(inputs: InputsFinal) -> None:
 
 
 def fetch_building_groups(inputs: InputsFinal) -> list[BuildingsGroup]:
+    release = RELEASES.filter_one(**inputs.as_filter())
     return [
         BuildingsGroup(
             state,
-            upgrade_id,
-            fetch_bldg_ids(
-                inputs.product, inputs.release_year, inputs.weather_file, inputs.release_version, state, str(upgrade_id)
-            ),
+            upgrade,
+            list_buildings(release.key, state, upgrade),
         )
         for state in sorted(inputs.states)
-        for upgrade_id in sorted(inputs.upgrade_ids)
+        for upgrade in sorted(inputs.upgrade_ids)
     ]
 
 

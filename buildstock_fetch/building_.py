@@ -2,10 +2,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import final, override
 
-from buildstock_fetch.constants import METADATA_DIR
+from buildstock_fetch.constants import METADATA_DIR, WEATHER_FILE_DIR
 from buildstock_fetch.releases import RELEASES, BuildstockRelease
 from buildstock_fetch.types import FileType, ReleaseKey, ReleaseVersion, ReleaseYear, USStateCode, UpgradeID, Weather
 import polars as pl
+
+
+_weather_map_df: pl.DataFrame | None = None
 
 
 @final
@@ -170,7 +173,71 @@ class Building:
     def county(self) -> str:
         if self.cached_county is not None:
             return self.cached_county
-        raise
+        raise RuntimeError()
+
+    @property
+    def weather_path(self) -> str | None:  # noqa: C901
+        obj = RELEASES[self.release]
+        name = self.weather_station_name
+        if name is None:
+            return None
+
+        match obj:
+            case BuildstockRelease(year="2021", weather="tmy3"):
+                return f"{self.base_path}/weather/{obj.weather}/{name}_tmy3.csv"
+            case BuildstockRelease(year="2021", weather="amy2018"):
+                return f"{self.base_path}/weather/{obj.weather}/{name}_2018.csv"
+            case BuildstockRelease(year="2021", weather="amy2012"):
+                return f"{self.base_path}/weather/{obj.weather}/{name}_2012.csv"
+
+            case BuildstockRelease(year="2022", weather="tmy3"):
+                return f"{self.base_path}/weather/state={self.state}/{name}_TMY3.csv"
+            case BuildstockRelease(year="2022", weather="amy2018"):
+                return f"{self.base_path}/weather/state={self.state}/{name}_2018.csv"
+            case BuildstockRelease(year="2022", weather="amy2012"):
+                return f"{self.base_path}/weather/state={self.state}/{name}_2012.csv"
+
+            case BuildstockRelease(year="2023", weather="tmy3"):
+                return f"{self.base_path}/weather/{obj.weather}/{name}_TMY3.csv"
+            case BuildstockRelease(year="2023", weather="amy2018"):
+                return f"{self.base_path}/weather/{obj.weather}/{name}_2018.csv"
+            case BuildstockRelease(year="2023", weather="amy2012"):
+                return f"{self.base_path}weather/{obj.weather}/{name}_2012.csv"
+
+            case BuildstockRelease(year="2024", product="comstock", weather="amy2018"):
+                return f"{self.base_path}/weather/{obj.weather}/{name}_2018.csv"
+            case BuildstockRelease(year="2024", weather="tmy3"):
+                return f"{self.base_path}/weather/state={self.state}/{name}_TMY3.csv"
+            case BuildstockRelease(year="2024", weather="amy2018"):
+                return f"{self.base_path}/weather/state={self.state}/{name}_2018.csv"
+            case BuildstockRelease(year="2024", weather="amy2012"):
+                return f"{self.base_path}/weather/state={self.state}/{name}_2012.csv"
+
+            case BuildstockRelease(year="2025", weather="tmy3"):
+                return f"{self.base_path}/weather/{obj.weather}/{name}_TMY3.csv"
+            case BuildstockRelease(year="2025", weather="amy2018"):
+                return f"{self.base_path}/weather/{obj.weather}/{name}_2018.csv"
+            case BuildstockRelease(year="2025", weather="amy2012"):
+                return f"{self.base_path}/weather/{obj.weather}/{name}_2012.csv"
+
+            case _:
+                return None
+
+    @property
+    def weather_station_name(self) -> str | None:
+        release_obj = RELEASES[self.release]
+        weather_map_df = get_weather_station_map()
+        weather_station_map = weather_map_df.filter(
+            (pl.col("product") == release_obj.product)
+            & (pl.col("release_year") == release_obj.year)
+            & (pl.col("weather_file") == release_obj.weather)
+            & (pl.col("release_version") == release_obj.version)
+            & (pl.col("bldg_id") == self.id)
+        )
+        if weather_station_map.height > 0:
+            weather_station_name = weather_station_map.select("weather_station_name").item()  # pyright: ignore[reportAny]
+            return str(weather_station_name) if weather_station_name is not None else None  # pyright: ignore[reportAny]
+        return None
 
     def file_path(self, file_type: FileType) -> Path:
         url: str
@@ -189,7 +256,23 @@ class Building:
                 filename = f"{str(self.id).zfill(7)}-up{self.upgrade.zfill(2)}_schedule.csv"
             case "trip_schedules":
                 return Path(self.release) / file_type / f"state={self.state}" / "trip_schedules.parquet"
-            case _:
-                raise NotImplementedError()
+            case "weather":
+                weather_station_name = self.weather_station_name
+                if weather_station_name is None:
+                    raise ValueError(self)
+                return (
+                    Path(self.release)
+                    / file_type
+                    / f"state={self.state}"
+                    / f"upgrade={self.upgrade.zfill(2)}"
+                    / f"{weather_station_name}.csv"
+                )
 
         return Path(self.release) / file_type / f"state={self.state}" / f"upgrade={self.upgrade.zfill(2)}" / filename
+
+
+def get_weather_station_map() -> pl.DataFrame:
+    global _weather_map_df
+    if _weather_map_df is None:
+        _weather_map_df = pl.read_parquet(WEATHER_FILE_DIR)
+    return _weather_map_df

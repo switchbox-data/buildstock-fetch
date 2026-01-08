@@ -16,7 +16,9 @@ from .shared import DownloadAndProcessProgress, groupby_sorted
 from .types import ReleaseKey, USStateCode
 
 
-async def download_and_process_trip_schedules_batch(client: S3Client, buildings: Collection[Building]) -> list[Path]:
+async def download_and_process_trip_schedules_batch(
+    target_folder: Path, client: S3Client, buildings: Collection[Building]
+) -> list[Path]:
     grouped = cast(
         dict[ReleaseKey, dict[USStateCode, list[Building]]],
         {
@@ -50,7 +52,7 @@ async def download_and_process_trip_schedules_batch(client: S3Client, buildings:
     )
 
     tasks = [
-        _download_and_process(client, [k for k, _ in s3_keys], grouped[release][state], progress)
+        _download_and_process(target_folder, client, [k for k, _ in s3_keys], grouped[release][state], progress)
         for release, state, s3_keys in parquet_files
         if s3_keys
     ]
@@ -60,6 +62,7 @@ async def download_and_process_trip_schedules_batch(client: S3Client, buildings:
 
 
 async def _download_and_process(
+    target_folder: Path,
     client: S3Client,
     s3_keys: list[str],
     buildings: Collection[Building],
@@ -80,16 +83,19 @@ async def _download_and_process(
         progress.on_processing_started()
 
         paths = [Path(cast(str, f.name)) for f in tempfiles]
-        processing_result = await _async_process(paths, buildings)
+        processing_result = await _async_process(target_folder, paths, buildings)
         progress.on_processing_finished()
     return processing_result
 
 
-async def _async_process(parquet_filenames: Collection[Path], buildings: Collection[Building]) -> Path:
-    return await asyncio.to_thread(_process, parquet_filenames, buildings)
+async def _async_process(
+    target_folder: Path, parquet_filenames: Collection[Path], buildings: Collection[Building]
+) -> Path:
+    return await asyncio.to_thread(_process, target_folder, parquet_filenames, buildings)
 
 
 def _process(
+    target_folder: Path,
     parquet_filenames: Collection[Path],
     buildings: Collection[Building],
 ) -> Path:
@@ -101,7 +107,7 @@ def _process(
     expected_output_filenames = {_.file_path("trip_schedules") for _ in buildings}
     if len(expected_output_filenames) != 1:
         raise RuntimeError()
-    output_filename = next(iter(expected_output_filenames))
+    output_filename = target_folder / next(iter(expected_output_filenames))
 
     if output_filename.exists():
         old_lf = pl.scan_parquet(output_filename)

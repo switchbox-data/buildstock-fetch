@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 import shutil
 import tempfile
 import zipfile
@@ -14,20 +15,24 @@ from .building_ import Building
 from .constants import OEDI_WEB_URL
 from .shared import DownloadAndProcessProgress, download, estimate_download_size
 
-_ENERGY_MODEL_FILE_TYPE = Literal["hpxml", "schedule"]
+ENERGY_MODEL_FILE_TYPE = Literal["hpxml", "schedule"]
 
 
 async def download_and_process_energy_models_batch(
     target_folder: Path,
     client: AsyncClient,
-    file_types: Collection[_ENERGY_MODEL_FILE_TYPE],
+    file_types: Collection[ENERGY_MODEL_FILE_TYPE],
     buildings: Collection[Building],
 ) -> list[Path]:
     if not buildings:
         return []
     sample_size = min(len(buildings), 100)
     sample_download_size = await estimate_download_size(
-        client, [urljoin(OEDI_WEB_URL, building.energy_models_path) for building in buildings]
+        client,
+        [
+            urljoin(OEDI_WEB_URL, building.energy_models_path)
+            for building in random.sample(list(buildings), sample_size)
+        ],
     )
     estimated_download_size = (sample_download_size / sample_size) * len(buildings)
     progress = DownloadAndProcessProgress(
@@ -55,7 +60,7 @@ async def download_and_process_energy_models_batch(
 async def _download_and_process_energy_models_for_building(
     target_folder: Path,
     client: AsyncClient,
-    file_types: Collection[_ENERGY_MODEL_FILE_TYPE],
+    file_types: Collection[ENERGY_MODEL_FILE_TYPE],
     building: Building,
     progress: DownloadAndProcessProgress,
 ) -> list[Path]:
@@ -79,7 +84,7 @@ async def _download_and_process_energy_models_for_building(
 async def _process_energy_models(
     zip_file_path: Path,
     target_folder: Path,
-    file_types: Collection[_ENERGY_MODEL_FILE_TYPE],
+    file_types: Collection[ENERGY_MODEL_FILE_TYPE],
     building: Building,
 ) -> list[Path]:
     result: list[Path] = []
