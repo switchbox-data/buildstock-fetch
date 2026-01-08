@@ -187,6 +187,8 @@ class Building:
                 filename = f"{str(self.id).zfill(7)}-up{self.upgrade.zfill(2)}.xml"
             case "schedule":
                 filename = f"{str(self.id).zfill(7)}-up{self.upgrade.zfill(2)}_schedule.csv"
+            case "trip_schedules":
+                return Path(self.release) / file_type / f"state={self.state}" / "trip_schedules.parquet"
             case _:
                 raise NotImplementedError()
 

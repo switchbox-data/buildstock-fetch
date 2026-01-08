@@ -1,20 +1,18 @@
 import asyncio
-from collections.abc import Collection
 import logging
-from pathlib import Path
 import shutil
-from tempfile import tempdir
 import tempfile
+import zipfile
+from collections.abc import Collection
+from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import urljoin
-import zipfile
 
 from httpx import AsyncClient
 
-from buildstock_fetch.building_ import Building
-from buildstock_fetch.constants import OEDI_WEB_URL
-from buildstock_fetch.progress import DownloadAndProcessProgress, download, estimate_download_size
-
+from .building_ import Building
+from .constants import OEDI_WEB_URL
+from .shared import DownloadAndProcessProgress, download, estimate_download_size
 
 _ENERGY_MODEL_FILE_TYPE = Literal["hpxml", "schedule"]
 
@@ -24,9 +22,9 @@ async def download_and_process_energy_models_batch(
     client: AsyncClient,
     file_types: Collection[_ENERGY_MODEL_FILE_TYPE],
     buildings: Collection[Building],
-):
+) -> list[Path]:
     if not buildings:
-        return cast(list[BaseException | Building], [])
+        return []
     sample_size = min(len(buildings), 100)
     sample_download_size = await estimate_download_size(
         client, [urljoin(OEDI_WEB_URL, building.energy_models_path) for building in buildings]
@@ -48,7 +46,10 @@ async def download_and_process_energy_models_batch(
         for building in buildings
     ]
     with progress.live():
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        nested = await asyncio.gather(*tasks, return_exceptions=True)
+    for e in (_ for _ in nested if isinstance(_, BaseException)):
+        logging.getLogger(__name__).exception("Error: %s", e)
+    return [_ for n in nested if not isinstance(n, BaseException) for _ in n]
 
 
 async def _download_and_process_energy_models_for_building(
@@ -57,7 +58,7 @@ async def _download_and_process_energy_models_for_building(
     file_types: Collection[_ENERGY_MODEL_FILE_TYPE],
     building: Building,
     progress: DownloadAndProcessProgress,
-) -> Building:
+) -> list[Path]:
     url = urljoin(OEDI_WEB_URL, building.energy_models_path)
     async with download(client, url, progress) as f:
         progress.on_processing_started()
@@ -80,7 +81,8 @@ async def _process_energy_models(
     target_folder: Path,
     file_types: Collection[_ENERGY_MODEL_FILE_TYPE],
     building: Building,
-):
+) -> list[Path]:
+    result: list[Path] = []
     with zipfile.ZipFile(zip_file_path, "r") as zip_ref, tempfile.TemporaryDirectory() as td_str:
         td = Path(td_str)
         zip_file_contents = zip_ref.namelist()
@@ -94,6 +96,8 @@ async def _process_energy_models(
                 target_file = target_folder / building.file_path("hpxml")
                 target_file.parent.mkdir(exist_ok=True, parents=True)
                 _ = shutil.move(from_path, target_file)
+                result.append(target_file)
+
         if "schedule" in file_types:
             csv_file = next((_ for _ in zip_file_contents if _.endswith(".csv")), None)
             if not csv_file:
@@ -104,4 +108,5 @@ async def _process_energy_models(
                 target_file.parent.mkdir(exist_ok=True, parents=True)
                 _ = zip_ref.extract(csv_file, td)
                 _ = shutil.move(from_path, target_file)
-    return building
+                result.append(target_file)
+    return result

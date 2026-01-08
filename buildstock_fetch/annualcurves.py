@@ -1,7 +1,7 @@
 import asyncio
+import logging
 import tempfile
 from collections.abc import Collection
-from itertools import groupby
 from pathlib import Path
 from typing import cast
 from urllib.parse import urljoin
@@ -9,10 +9,9 @@ from urllib.parse import urljoin
 import polars as pl
 from httpx import AsyncClient
 
-from buildstock_fetch.progress import DownloadAndProcessProgress, download, estimate_download_size
-
 from .building_ import Building
 from .constants import OEDI_WEB_URL
+from .shared import DownloadAndProcessProgress, download, estimate_download_size, groupby_sorted
 
 
 async def download_and_process_annual_results(
@@ -23,12 +22,13 @@ async def download_and_process_annual_results(
     grouped = {
         urljoin(OEDI_WEB_URL, oedi_annualcurve_path): {
             local_annualcurve_path: list(buildings_with_local_annualcurve_path)
-            for local_annualcurve_path, buildings_with_local_annualcurve_path in groupby(
+            for local_annualcurve_path, buildings_with_local_annualcurve_path in groupby_sorted(
                 buildings_with_annualcurve_path, lambda _: _.file_path("load_curve_annual")
             )
         }
-        for oedi_annualcurve_path, buildings_with_annualcurve_path in groupby(
-            buildings, lambda _: _.load_curve_annual_path
+        for oedi_annualcurve_path, buildings_with_annualcurve_path in groupby_sorted(
+            buildings,
+            lambda _: _.load_curve_annual_path,
         )
     }
     download_size = await estimate_download_size(client, grouped.keys())
@@ -38,7 +38,10 @@ async def download_and_process_annual_results(
             _download_and_process_annual_results(target_folder, client, oedi_url, partitions, progress)
             for oedi_url, partitions in grouped.items()
         ]
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        nested = await asyncio.gather(*tasks, return_exceptions=True)
+    for e in (_ for _ in nested if isinstance(_, BaseException)):
+        logging.getLogger(__name__).exception("Error: %s", e)
+    return [_ for n in nested if not isinstance(n, BaseException) for _ in n]
 
 
 async def _download_and_process_annual_results(

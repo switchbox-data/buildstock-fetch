@@ -13,7 +13,7 @@ from httpx import AsyncClient
 
 from .building_ import Building
 from .constants import LOAD_CURVE_COLUMN_AGGREGATION, OEDI_WEB_URL
-from .progress import DownloadAndProcessProgress, download, estimate_download_size
+from .shared import DownloadAndProcessProgress, download, estimate_download_size
 from .types import ReleaseKey
 
 AGGREGATION_RULES_CACHE: dict[ReleaseKey, list[pl.Expr]] = {}
@@ -32,7 +32,7 @@ LoadCurve = Literal[LoadCurveAggregate, "load_curve_15min"]
 
 async def download_and_process_load_curves_batch(
     target_folder: Path, client: AsyncClient, curves: Collection[LoadCurve], buildings: Sequence[Building]
-):
+) -> list[Path]:
     if not buildings:
         return []
     sample_size = min(len(buildings), 100)
@@ -49,7 +49,11 @@ async def download_and_process_load_curves_batch(
         for building in buildings
     ]
     with progress.live():
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        nested = await asyncio.gather(*tasks, return_exceptions=True)
+    exceptions = (_ for _ in nested if isinstance(_, BaseException))
+    for e in exceptions:
+        logging.getLogger(__name__).exception("Error: %s", e)
+    return [_ for n in nested if not isinstance(n, BaseException) for _ in n]
 
 
 sem = asyncio.Semaphore(50)
@@ -61,7 +65,7 @@ async def _download_and_process_load_curves_for_building(
     curves: Collection[LoadCurve],
     building: Building,
     progress: DownloadAndProcessProgress,
-):
+) -> list[Path]:
     url = urljoin(OEDI_WEB_URL, building.load_curve_15min_path)
     async with download(client, url, progress) as f:
         file_path = Path(cast(str, f.name))
@@ -80,17 +84,19 @@ async def _download_and_process_load_curves_for_building(
 
 async def _async_process_load_curve_aggregate(
     target_folder: Path, file_path: Path, aggregate: LoadCurve, building: Building
-):
+) -> Path:
     async with process_semaphore:
-        await asyncio.to_thread(_process_load_curve_aggregate, target_folder, file_path, aggregate, building)
+        return await asyncio.to_thread(_process_load_curve_aggregate, target_folder, file_path, aggregate, building)
 
 
-def _process_load_curve_aggregate(target_folder: Path, file_path: Path, aggregate: LoadCurve, building: Building):
+def _process_load_curve_aggregate(
+    target_folder: Path, file_path: Path, aggregate: LoadCurve, building: Building
+) -> Path:
     target_path = target_folder / building.file_path(aggregate)
     target_path.parent.mkdir(exist_ok=True, parents=True)
     if aggregate == "load_curve_15min":
         _ = shutil.copy2(file_path, target_path)
-        return
+        return target_path
     aggregation_rules = _load_aggregation_rules(building.release)
     lf = pl.scan_parquet(file_path)
     lf = lf.with_columns(pl.col("timestamp").cast(pl.Datetime))
@@ -107,7 +113,7 @@ def _process_load_curve_aggregate(target_folder: Path, file_path: Path, aggregat
 
     lf = lf.group_by(grouping_key).agg(aggregation_rules)
     lf = lf.sort("timestamp").drop(grouping_key)
-    logging.getLogger(__name__).info(f"Sinking to {str(target_path)}")
+    logging.getLogger(__name__).info("Sinking to %s", target_path)
 
     # Add time aggregation columns
 
@@ -132,6 +138,7 @@ def _process_load_curve_aggregate(target_folder: Path, file_path: Path, aggregat
             ])
 
     lf.sink_parquet(target_path)
+    return target_path
 
 
 def _load_aggregation_rules(release: ReleaseKey) -> list[pl.Expr]:

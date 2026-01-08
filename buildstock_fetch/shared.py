@@ -1,8 +1,9 @@
 import asyncio
-from collections.abc import AsyncGenerator, Collection
+import logging
+from collections.abc import AsyncGenerator, Callable, Collection, Iterable, Iterator
 from contextlib import asynccontextmanager
-from statistics import mean
-from typing import cast, final
+from itertools import groupby
+from typing import TypeVar, cast, final
 
 import aiofiles
 from aiofiles.threadpool.binary import AsyncBufferedReader
@@ -21,6 +22,7 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
+from useful_types import SupportsRichComparisonT
 
 download_semaphore = asyncio.Semaphore(100)
 
@@ -128,3 +130,12 @@ async def download(
                 progress.on_chunk_downloaded(written)
         await f.close()
         yield f
+
+
+T = TypeVar("T", covariant=True)
+
+
+def groupby_sorted(
+    iterable: Iterable[T], key: Callable[[T], SupportsRichComparisonT]
+) -> Iterator[tuple[SupportsRichComparisonT, Iterator[T]]]:
+    return groupby(sorted(iterable, key=key), key=key)

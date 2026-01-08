@@ -1,20 +1,18 @@
 import asyncio
-import random
+import logging
 import tempfile
 from collections.abc import Collection
-from itertools import groupby
 from pathlib import Path
 from typing import cast
 from urllib.parse import urljoin
 
-import aiofiles.tempfile
 import polars as pl
 from httpx import AsyncClient
 
 from buildstock_fetch.constants import OEDI_WEB_URL
 
 from .building_ import Building
-from .progress import DownloadAndProcessProgress, estimate_download_size, download
+from .shared import DownloadAndProcessProgress, download, estimate_download_size, groupby_sorted
 
 process_semaphore = asyncio.Semaphore(1)
 main_semaphore = asyncio.Semaphore(200)
@@ -26,11 +24,11 @@ async def download_and_process_metadata_batch(
     grouped = {
         urljoin(OEDI_WEB_URL, oedi_metadata_path): {
             local_metadata_path: list(buildings_with_local_metadata_path)
-            for local_metadata_path, buildings_with_local_metadata_path in groupby(
+            for local_metadata_path, buildings_with_local_metadata_path in groupby_sorted(
                 buildings_with_metadata_path, lambda _: _.file_path("metadata")
             )
         }
-        for oedi_metadata_path, buildings_with_metadata_path in groupby(buildings, lambda _: _.metadata_path)
+        for oedi_metadata_path, buildings_with_metadata_path in groupby_sorted(buildings, lambda _: _.metadata_path)
     }
 
     download_size = await estimate_download_size(client, grouped.keys())
@@ -41,7 +39,11 @@ async def download_and_process_metadata_batch(
             _download_and_process_metadata(target_folder, client, oedi_metadata_url, partitions, progress)
             for oedi_metadata_url, partitions in grouped.items()
         ]
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        nested = await asyncio.gather(*tasks, return_exceptions=True)
+        exceptions: list[BaseException] = [n for n in nested if isinstance(n, BaseException)]
+        for exception in exceptions:
+            logging.getLogger(__name__).exception("error: ", exception)
+        return [_ for n in nested if not isinstance(n, BaseException) for _ in n]
 
 
 async def _download_and_process_metadata(
