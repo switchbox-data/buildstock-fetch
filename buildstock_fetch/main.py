@@ -89,9 +89,11 @@ def _get_SB_analysis_upgrades_column_map(release_year: ReleaseYear, file_type: F
                     msg = "SB analysis upgrades load curve column map not available"
                     raise ValueError(msg)
             return _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE
-        elif file_type == "metadata":
+        elif file_type == "metadata" or file_type == "load_curve_annual":
             if _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE is None:
-                column_map_file = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("data_dictionary_2024_metadata_labeled.csv")
+                column_map_file = LOAD_CURVE_COLUMN_AGGREGATION.joinpath(
+                    "data_dictionary_2024_metadata_and_annual_labeled.csv"
+                )
                 _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE = pl.read_csv(column_map_file)
                 if _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE.is_empty():
                     msg = "SB analysis upgrades metadata column map not available"
@@ -240,17 +242,6 @@ def _download_with_progress(url: str, output_file: Path, progress: Progress, tas
                     progress.update(task_id, completed=downloaded_size)
 
     return downloaded_size
-
-
-def _extract_metadata_columns_to_keep(metadata_file: Path) -> list[str]:
-    """Extract metadata columns from a schema."""
-    schema = pl.scan_parquet(metadata_file).collect_schema()
-
-    columns_to_keep = []
-    for col in schema:
-        if any(keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index"]) or col.startswith("in."):
-            columns_to_keep.append(col)
-    return columns_to_keep
 
 
 def _convert_url_to_s3_path(url: str) -> str:
@@ -800,7 +791,7 @@ def download_15min_load_curve_with_progress(
                 / "load_curve_15min"
                 / f"state={bldg_id.state}"
                 / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-                / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id_component.upgrade_id)!s}.parquet"
+                / bldg_id_component.get_output_filename("load_curve_15min")
             )
             output_file_component.parent.mkdir(parents=True, exist_ok=True)
 
@@ -976,6 +967,7 @@ def _download_aggregate_load_curve_components_SB_upgrade(
     aggregate_time_step: str,
     load_curve_dir: str,
 ) -> Path:
+    file_type: FileType = cast(FileType, load_curve_dir)
     bldg_id_component_list = bldg_id.get_SB_upgrade_component_bldg_ids()
     if bldg_id_component_list is None:
         message = f"{aggregate_time_step} load profile timeseries is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
@@ -993,7 +985,7 @@ def _download_aggregate_load_curve_components_SB_upgrade(
             / load_curve_dir
             / f"state={bldg_id.state}"
             / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-            / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id_component.upgrade_id)!s}.parquet"
+            / bldg_id_component.get_output_filename(file_type)
         )
         output_file_component.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1011,7 +1003,7 @@ def _download_aggregate_load_curve_components_SB_upgrade(
         / load_curve_dir
         / f"state={bldg_id.state}"
         / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / f"{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        / bldg_id.get_output_filename(file_type)
     )
     return output_file
 
@@ -1169,7 +1161,7 @@ def _add_metadata_url_to_grouping(
         output_file_to_download_url[output_file].append(metadata_url)
 
 
-def _group_bldg_ids_by_output_file(
+def _group_bldg_ids_by_output_file_metadata(
     bldg_ids: list[BuildingID], output_dir: Path, failed_downloads: list[str]
 ) -> tuple[dict[Path, list[BuildingID]], dict[Path, list[str]]]:
     """Group bldg_ids by their output file paths and collect download URLs.
@@ -1287,7 +1279,7 @@ def _download_metadata_with_progress(
     # it will have one output file and multiple download URL's.
     # If the upgrade is SB upgrade that has multiple components making up a single final upgrade,
     # there will be multiple output files, one for each component.
-    output_file_to_bldg_ids, output_file_to_download_url = _group_bldg_ids_by_output_file(
+    output_file_to_bldg_ids, output_file_to_download_url = _group_bldg_ids_by_output_file_metadata(
         bldg_ids, output_dir, failed_downloads
     )
 
@@ -1455,7 +1447,7 @@ def _download_15min_load_curves_parallel(
 
 
 def _create_batch_progress_tasks(
-    bldg_ids: list[BuildingID], aggregate_time_step: str, progress: Progress, console: Console
+    bldg_ids: list[BuildingID], aggregate_time_step: str, progress_suffix: str, progress: Progress, console: Console
 ) -> dict[int, TaskID]:
     """Create progress tasks for batch processing."""
     num_batches = 20
@@ -1479,7 +1471,7 @@ def _create_batch_progress_tasks(
         console.print(f"[blue]Batch {i + 1}/{num_batches}: {batch_count} buildings[/blue]")
 
         task_id = progress.add_task(
-            f"[magenta]Batch {i + 1}/{num_batches} ({aggregate_time_step})",
+            f"[magenta]Batch {i + 1}/{num_batches} ({progress_suffix})",
             total=batch_count,  # Set total to the number of buildings in this batch
         )
         load_curve_tasks[i] = task_id
@@ -1520,12 +1512,14 @@ def _create_batch_progress_tasks_15min(
     return load_curve_tasks
 
 
-def _create_individual_progress_tasks(bldg_ids: list[BuildingID], progress: Progress) -> dict[int, TaskID]:
+def _create_individual_progress_tasks(
+    bldg_ids: list[BuildingID], progress_suffix: str, progress: Progress
+) -> dict[int, TaskID]:
     """Create progress tasks for individual building processing."""
     load_curve_tasks = {}
     for i, bldg_id in enumerate(bldg_ids):
         task_id = progress.add_task(
-            f"[magenta]Load curve {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
+            f"[magenta]{progress_suffix} - Building {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
             total=0,  # Will be updated when we get the file size
         )
         load_curve_tasks[i] = task_id
@@ -1736,10 +1730,41 @@ def _process_SB_upgrade_scenario(
     SB_upgrade_df.write_parquet(output_file)
 
 
+def _get_required_component_files_for_SB_upgrade(
+    bldg_id: BuildingID, output_dir: Path, file_type: FileType
+) -> list[Path]:
+    """Get all required component file paths for an SB upgrade scenario."""
+    sb_analysis_upgrades = _get_SB_analysis_upgrades()
+    release_name = bldg_id.get_release_name()
+    if release_name not in sb_analysis_upgrades:
+        return []
+
+    sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
+    upgrade_components = sb_analysis_upgrade_data["upgrade_components"][bldg_id.upgrade_id]
+
+    required_files: list[Path] = []
+
+    for upgrade_id in upgrade_components:
+        component_bldg_id = bldg_id.copy(upgrade_id=upgrade_id)
+        component_filename = _get_SB_upgrade_component_filename(bldg_id, component_bldg_id, output_dir, file_type)
+        required_files.append(component_filename)
+
+    return required_files
+
+
 def _get_SB_upgrade_component_filename(
     final_bldg_id: BuildingID, component_bldg_id: BuildingID, output_dir: Path, file_type: FileType
 ) -> Path:
-    if file_type == "metadata" or (
+    if file_type == "metadata":
+        return (
+            output_dir
+            / final_bldg_id.get_release_name()
+            / file_type
+            / f"state={final_bldg_id.state}"
+            / f"upgrade={str(int(final_bldg_id.upgrade_id)).zfill(2)}"
+            / f"upgrade{str(int(component_bldg_id.upgrade_id)).zfill(2)}.parquet"
+        )
+    elif (
         file_type == "load_curve_15min"
         or file_type == "load_curve_hourly"
         or file_type == "load_curve_daily"
@@ -1751,7 +1776,20 @@ def _get_SB_upgrade_component_filename(
             / file_type
             / f"state={final_bldg_id.state}"
             / f"upgrade={str(int(final_bldg_id.upgrade_id)).zfill(2)}"
-            / f"upgrade{str(int(component_bldg_id.upgrade_id)).zfill(2)}.parquet"
+            / component_bldg_id.get_output_filename(file_type)
+        )
+    elif file_type == "load_curve_annual":
+        component_output_filename = component_bldg_id.get_annual_load_curve_filename()
+        if component_output_filename is None:
+            msg = f"Annual load curve filename is not available for {component_bldg_id.get_release_name()}, upgrade {component_bldg_id.upgrade_id}"
+            raise ValueError(msg)
+        return (
+            output_dir
+            / final_bldg_id.get_release_name()
+            / file_type
+            / f"state={final_bldg_id.state}"
+            / f"upgrade={str(int(final_bldg_id.upgrade_id)).zfill(2)}"
+            / component_output_filename
         )
     else:
         msg = f"File type {file_type} not supported"
@@ -1760,7 +1798,7 @@ def _get_SB_upgrade_component_filename(
 
 def _initialize_SB_upgrade_dataframe(first_upgrade_component_filename: Path, file_type: FileType) -> pl.DataFrame:
     SB_upgrade_df = pl.DataFrame()
-    if file_type == "metadata":
+    if file_type == "metadata" or file_type == "load_curve_annual":
         SB_upgrade_df = pl.read_parquet(first_upgrade_component_filename).select("bldg_id")
     elif (
         file_type == "load_curve_15min"
@@ -1778,7 +1816,7 @@ def _initialize_SB_upgrade_dataframe(first_upgrade_component_filename: Path, fil
 def _get_SB_upgrade_component_columns(
     file_type: FileType, functional_group_column_names: list[str]
 ) -> tuple[str, list[str]]:
-    if file_type == "metadata":
+    if file_type == "metadata" or file_type == "load_curve_annual":
         join_column_name = "bldg_id"
         return join_column_name, [join_column_name, *functional_group_column_names]
     elif (
@@ -1848,11 +1886,15 @@ def _download_aggregate_load_curves_parallel(
 ) -> None:
     """Download aggregate load curves in parallel with progress tracking."""
 
+    progress_suffix = f"{bldg_ids[0].get_release_name()} - (load_curve_{aggregate_time_step}) - {bldg_ids[0].state}"
+
     # Create progress tasks based on dataset size
     if len(bldg_ids) > 500:
-        load_curve_tasks = _create_batch_progress_tasks(bldg_ids, aggregate_time_step, progress, console)
+        load_curve_tasks = _create_batch_progress_tasks(
+            bldg_ids, aggregate_time_step, progress_suffix, progress, console
+        )
     else:
-        load_curve_tasks = _create_individual_progress_tasks(bldg_ids, progress)
+        load_curve_tasks = _create_individual_progress_tasks(bldg_ids, progress_suffix, progress)
 
     # Create download functions
     def download_aggregate_with_task_id(
@@ -1899,6 +1941,8 @@ def _download_aggregate_load_curves_parallel(
         # Process completed futures
         for future in concurrent.futures.as_completed(future_to_bldg):
             bldg_id = future_to_bldg[future]
+            print("TEST 3")
+            print(bldg_id)
             _process_download_future(
                 future, bldg_id, output_dir, aggregate_time_step, downloaded_paths, failed_downloads, console
             )
@@ -1920,56 +1964,214 @@ def _download_metadata(
     _filter_metadata_requested_bldg_ids(bldg_ids, output_dir, downloaded_paths)
 
 
-def download_annual_load_curve_with_progress(
-    bldg_id: BuildingID, output_dir: Path, progress: Optional[Progress] = None, task_id: Optional[TaskID] = None
-) -> Path:
-    """Download the annual load curve for a given building with progress tracking.
+def _download_with_progress_annual_load_curve(
+    urls: list[str],
+    bldg_ids: list[BuildingID],
+    output_file: Path,
+    progress: Progress,
+    task_id: TaskID,
+    found_bldg_ids: list[int],
+) -> int:
+    """Download annual load curve files with progress tracking, filtering for only requested bldg_ids from S3."""
 
-    Args:
-        bldg_id: A BuildingID object to download annual load curve for.
-        output_dir: Directory to save the downloaded annual load curve.
-        progress: Optional Rich progress object for tracking download progress.
-        task_id: Optional task ID for progress tracking.
+    # Extract release info for progress messages
+    first_bldg_id = bldg_ids[0]
+    release_name = first_bldg_id.get_release_name()
+    upgrade = first_bldg_id.upgrade_id
+    state = first_bldg_id.state
+    progress_suffix = f"{release_name} - (upgrade {upgrade}) - {state}"
 
-    Returns:
-        Path to the downloaded file.
-    """
-    if bldg_id.is_SB_upgrade():
-        return download_annual_load_curve_SB_upgrade(bldg_id, output_dir, progress, task_id)
+    # Get the list of bldg_ids we need to filter for, sorted for optimization
+    requested_bldg_ids_set = {bldg_id.bldg_id for bldg_id in bldg_ids}
+    requested_bldg_ids = sorted(requested_bldg_ids_set)
 
-    download_url = bldg_id.get_annual_load_curve_url()
-    if download_url is None:
-        message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
-        raise NoAnnualLoadCurveError(message)
+    # Create S3 filesystem for anonymous access
+    s3_filesystem = fs.S3FileSystem(anonymous=True, region="us-west-2")
 
-    output_filename = bldg_id.get_annual_load_curve_filename()
-    if output_filename is None:
-        message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
-        raise NoAnnualLoadCurveError(message)
+    for url in urls:
+        s3_path = _convert_url_to_s3_path(url)
+        progress.update(task_id, description=f"[yellow](annual) Connecting to S3: {progress_suffix}")
 
-    output_file = (
-        output_dir
-        / bldg_id.get_release_name()
-        / "load_curve_annual"
-        / f"state={bldg_id.state}"
-        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / output_filename
-    )
+        try:
+            # Get total file size from S3
+            s3_path_parts = s3_path.replace("s3://", "").split("/", 1)
+            bucket_name = s3_path_parts[0]
+            s3_key = s3_path_parts[1] if len(s3_path_parts) > 1 else ""
 
-    # If the file already exists, return it. We only need to download the file for each unique annual load curve.
+            # Use boto3 to get file size (HEAD request)
+            progress.update(task_id, description=f"[yellow](annual) Getting file size: {progress_suffix}")
+            s3_client = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+            try:
+                response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+                total_file_size = response.get("ContentLength", 0)
+            except Exception:
+                total_file_size = 0
+
+            s3_file_path = f"{bucket_name}/{s3_key}"
+
+            try:
+                progress.update(
+                    task_id, description=f"[yellow](annual) Reading and filtering data from S3: {progress_suffix}"
+                )
+                with s3_filesystem.open_input_file(s3_file_path) as s3_file:
+                    parquet_file = pq.ParquetFile(s3_file)
+                    pq_metadata = parquet_file.metadata
+                    total_rows = pq_metadata.num_rows
+
+                    s3_file.seek(0)
+
+                    column_names = pq_metadata.schema.names
+                    columns_to_keep = []
+                    for col in column_names:
+                        if (
+                            any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"])
+                            or col.startswith("out.")
+                        ) and not col.startswith("in."):
+                            columns_to_keep.append(col)
+
+                    # Filter for only requested bldg_ids
+                    df = (
+                        pl.scan_parquet(s3_file)
+                        .select(columns_to_keep)
+                        .filter(pl.col("bldg_id").is_in(requested_bldg_ids))
+                        .collect()
+                    )
+                    found_bldg_ids.extend(df["bldg_id"].to_list())
+                    selected_rows = len(df)
+                    progress.update(
+                        task_id,
+                        total=total_file_size * (selected_rows / total_rows) if total_rows > 0 else total_file_size,
+                        description=f"[yellow](annual) Writing filtered data: {progress_suffix}",
+                    )
+            except Exception:
+                traceback.print_exc()
+                raise
+
+            selected_rows = len(df)
+
+            # Check if output file already exists
+            if output_file.exists():
+                # Read existing file and combine with new data
+                existing_file = pl.scan_parquet(output_file)
+                new_df = df if isinstance(df, pl.DataFrame) else pl.DataFrame(df)
+                new_file_lazy = pl.LazyFrame(new_df)
+
+                # Use how="diagonal" to handle schema mismatches
+                combined_file = pl.concat([existing_file, new_file_lazy])
+                # Remove duplicate rows based on bldg_id column
+                deduplicated_file = combined_file.collect().unique(subset=["bldg_id"], keep="first")
+                deduplicated_file.write_parquet(output_file)
+            else:
+                # Write filtered data directly
+                df.write_parquet(output_file)
+
+            # Calculate downloaded size as ratio
+            downloaded_size = int(total_file_size * (selected_rows / total_rows)) if total_rows > 0 else 0
+            progress.update(
+                task_id,
+                completed=downloaded_size,
+                total=downloaded_size,
+                description=f"[green](annual) Download complete: {progress_suffix}",
+            )
+            gc.collect()
+        except Exception:
+            # Fallback to old method (download entire file using requests) if S3 filtering fails
+            progress.update(
+                task_id, description=f"[yellow](annual) Falling back to full file download: {progress_suffix}"
+            )
+            return _download_with_progress_annual_load_curve_fallback(url, output_file, progress, task_id)
+        else:
+            return downloaded_size
+
+    return 0
+
+
+def _download_with_progress_annual_load_curve_fallback(
+    url: str, output_file: Path, progress: Progress, task_id: TaskID
+) -> int:
+    """Fallback method to download entire annual load curve file (old behavior)."""
+    # Get file size first
+    response = requests.head(url, timeout=30, verify=True)
+    response.raise_for_status()
+    total_size = int(response.headers.get("content-length", 0))
+    progress.update(task_id, total=total_size)
+
+    # Download with streaming
+    response = requests.get(url, stream=True, timeout=30, verify=True)
+    response.raise_for_status()
+
+    downloaded_size = 0
+
+    # Check if output file already exists
     if output_file.exists():
-        return output_file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+            temp_path = Path(temp_file.name)
+            with open(temp_path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        file.write(chunk)
+                        downloaded_size += len(chunk)
+                        if total_size > 0:
+                            progress.update(task_id, completed=downloaded_size)
 
+            existing_file = pl.scan_parquet(output_file)
+            new_file = pl.scan_parquet(temp_path)
+            # Use how="diagonal" to handle schema mismatches
+            combined_file = pl.concat([existing_file, new_file], how="diagonal")
+            # Remove duplicate rows based on bldg_id column
+            deduplicated_file = combined_file.collect().unique(subset=["bldg_id"], keep="first")
+            deduplicated_file.write_parquet(output_file)
+            gc.collect()
+            os.remove(temp_path)
+
+    else:
+        # File doesn't exist, download normally
+        with open(str(output_file), "wb") as file:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    file.write(chunk)
+                    downloaded_size += len(chunk)
+                    if total_size > 0:
+                        progress.update(task_id, completed=downloaded_size)
+
+    return downloaded_size
+
+
+def download_annual_load_curve_with_progress(
+    bldg_ids: list[BuildingID],
+    output_file: Path,
+    download_urls: list[str],
+    progress: Optional[Progress] = None,
+    task_id: Optional[TaskID] = None,
+) -> Path:
+    """Download the annual load curve for given buildings with progress tracking and S3 filtering."""
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Download with progress tracking if progress object is provided
     if progress and task_id is not None:
-        _download_with_progress(download_url, output_file, progress, task_id)
+        found_bldg_ids: list[int] = []
+        _download_with_progress_annual_load_curve(
+            download_urls, bldg_ids, output_file, progress, task_id, found_bldg_ids
+        )
     else:
-        response = requests.get(download_url, timeout=30, verify=True)
-        response.raise_for_status()
-        with open(output_file, "wb") as file:
-            file.write(response.content)
+        # Fallback to simple download if no progress tracking
+        for download_url in download_urls:
+            response = requests.get(download_url, timeout=30, verify=True)
+            response.raise_for_status()
+            if output_file.exists():
+                # Combine with existing file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as temp_file:
+                    temp_path = Path(temp_file.name)
+                    with open(temp_path, "wb") as file:
+                        file.write(response.content)
+                    existing_file = pl.scan_parquet(output_file)
+                    new_file = pl.scan_parquet(temp_path)
+                    combined_file = pl.concat([existing_file, new_file], how="diagonal")
+                    deduplicated_file = combined_file.collect().unique(subset=["bldg_id"], keep="first")
+                    deduplicated_file.write_parquet(output_file)
+                    os.remove(temp_path)
+            else:
+                with open(output_file, "wb") as file:
+                    file.write(response.content)
 
     return output_file
 
@@ -1994,9 +2196,94 @@ def download_annual_load_curve_SB_upgrade(
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
     component_output_files = download_annual_load_curve_SB_upgrade_components(bldg_id, output_dir, progress, task_id)
+    print("TESTING:")
+    print(bldg_id)
     print(component_output_files)
 
     return output_file
+
+
+def _add_bldg_id_to_grouping(
+    output_file: Path,
+    bldg_id: BuildingID,
+    output_file_to_bldg_ids: dict[Path, list[BuildingID]],
+) -> None:
+    """Add bldg_id to the output file grouping dictionary."""
+    if output_file not in output_file_to_bldg_ids:
+        output_file_to_bldg_ids[output_file] = []
+    output_file_to_bldg_ids[output_file].append(bldg_id)
+
+
+def _group_bldg_ids_by_output_file_annual_load_curve(
+    bldg_ids: list[BuildingID], output_dir: Path, failed_downloads: list[str]
+) -> tuple[dict[Path, list[BuildingID]], dict[Path, list[str]]]:
+    """Group bldg_ids by their output file paths and collect download URLs."""
+    output_file_to_bldg_ids: dict[Path, list[BuildingID]] = {}
+    output_file_to_download_url: dict[Path, list[str]] = {}
+
+    for bldg_id in bldg_ids:
+        if bldg_id.is_SB_upgrade():
+            component_bldg_ids = bldg_id.get_SB_upgrade_component_bldg_ids()
+            if component_bldg_ids is None:
+                failed_downloads.append(str(bldg_id.bldg_id))
+                continue
+            for component_bldg_id in component_bldg_ids:
+                component_output_filename = component_bldg_id.get_annual_load_curve_filename()
+                if component_output_filename is None:
+                    message = f"Annual load curve is not available for {component_bldg_id.get_release_name()}, upgrade {component_bldg_id.upgrade_id}"
+                    raise NoAnnualLoadCurveError(message)
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "load_curve_annual"
+                    / f"state={bldg_id.state}"
+                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                    / component_output_filename
+                )
+                _add_bldg_id_to_grouping(output_file, bldg_id, output_file_to_bldg_ids)
+
+                component_download_url = component_bldg_id.get_annual_load_curve_url()
+                if component_download_url is None:
+                    failed_downloads.append(str(output_file))
+                    continue
+                _add_download_url_to_grouping(output_file, component_download_url, output_file_to_download_url)
+        else:
+            component_output_filename = bldg_id.get_annual_load_curve_filename()
+            if component_output_filename is None:
+                message = (
+                    f"Annual load curve is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
+                )
+                raise NoAnnualLoadCurveError(message)
+            output_file = (
+                output_dir
+                / bldg_id.get_release_name()
+                / "load_curve_annual"
+                / f"state={bldg_id.state}"
+                / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                / component_output_filename
+            )
+            download_url = bldg_id.get_annual_load_curve_url()
+            if download_url is None:
+                failed_downloads.append(str(output_file))
+                continue
+            _add_bldg_id_to_grouping(output_file, bldg_id, output_file_to_bldg_ids)
+            _add_download_url_to_grouping(output_file, download_url, output_file_to_download_url)
+
+    return output_file_to_bldg_ids, output_file_to_download_url
+
+
+def _add_download_url_to_grouping(
+    output_file: Path,
+    download_url: str,
+    output_file_to_download_url: dict[Path, list[str]],
+) -> None:
+    """Add download URL to the download URL grouping dictionary."""
+    if download_url is None:
+        return
+    if output_file not in output_file_to_download_url:
+        output_file_to_download_url[output_file] = []
+    if download_url not in output_file_to_download_url[output_file]:
+        output_file_to_download_url[output_file].append(download_url)
 
 
 def download_annual_load_curve_SB_upgrade_components(
@@ -2038,6 +2325,25 @@ def download_annual_load_curve_SB_upgrade_components(
     return component_output_files
 
 
+def _create_annual_load_curve_tasks(
+    output_file_to_bldg_ids: dict[Path, list[BuildingID]],
+    progress: Progress,
+) -> dict[Path, TaskID]:
+    """Create progress tasks for annual load curve downloads."""
+    output_file_to_annual_load_curve_tasks = {}
+    for output_file, bldg_ids in output_file_to_bldg_ids.items():
+        bldg_id = bldg_ids[0]
+        state = bldg_id.state
+        upgrade = bldg_id.upgrade_id
+        release_name = bldg_id.get_release_name()
+        annual_load_curve_task = progress.add_task(
+            f"[magenta]Annual load curve {release_name} - (upgrade {upgrade}) - {state}",
+            total=0,  # Will be updated when we get the file size
+        )
+        output_file_to_annual_load_curve_tasks[output_file] = annual_load_curve_task
+    return output_file_to_annual_load_curve_tasks
+
+
 def _download_annual_load_curves_parallel(
     bldg_ids: list[BuildingID],
     output_dir: Path,
@@ -2048,54 +2354,99 @@ def _download_annual_load_curves_parallel(
     console: Console,
 ) -> None:
     """Download annual load curves in parallel with progress tracking."""
+
+    output_file_to_bldg_ids, output_file_to_download_url = _group_bldg_ids_by_output_file_annual_load_curve(
+        bldg_ids, output_dir, failed_downloads
+    )
+    print("TESTING:")
+    print(output_file_to_bldg_ids)
+    print(output_file_to_download_url)
+
     # Create progress tasks for annual load curve downloads
-    annual_load_curve_tasks = {}
-    for i, bldg_id in enumerate(bldg_ids):
-        task_id = progress.add_task(
-            f"[magenta]Annual load curve {bldg_id.bldg_id} (upgrade {bldg_id.upgrade_id})",
-            total=0,  # Will be updated when we get the file size
-        )
-        annual_load_curve_tasks[i] = task_id
+    output_file_to_annual_load_curve_tasks = _create_annual_load_curve_tasks(output_file_to_bldg_ids, progress)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Create a modified version of the download function that uses the specific task IDs
-        def download_annual_with_task_id(bldg_id: BuildingID, output_dir: Path, task_id: TaskID) -> Path:
-            return download_annual_load_curve_with_progress(bldg_id, output_dir, progress, task_id)
+        def download_annual_with_task_id(
+            bldg_ids_for_file: list[BuildingID], output_file: Path, download_urls: list[str], task_id: TaskID
+        ) -> Path:
+            return download_annual_load_curve_with_progress(
+                bldg_ids_for_file, output_file, download_urls, progress, task_id
+            )
 
         future_to_bldg = {
-            executor.submit(download_annual_with_task_id, bldg_id, output_dir, annual_load_curve_tasks[i]): bldg_id
-            for i, bldg_id in enumerate(bldg_ids)
+            executor.submit(
+                download_annual_with_task_id,
+                output_file_to_bldg_ids[output_file],
+                output_file,
+                download_urls,
+                output_file_to_annual_load_curve_tasks[output_file],
+            ): output_file
+            for output_file, download_urls in output_file_to_download_url.items()
         }
 
         for future in concurrent.futures.as_completed(future_to_bldg):
-            bldg_id = future_to_bldg[future]
-            output_filename = bldg_id.get_annual_load_curve_filename()
-            try:
-                output_file = future.result()
+            # TODO: Check here if bldg_id is SB upgrade. If so, process it accordingly.
+            output_file = future_to_bldg[future]
+            bldg_ids = output_file_to_bldg_ids[output_file]
+            bldg_id = bldg_ids[0]
+            print("TEST 1")
+            print(bldg_id)
+            if bldg_id.is_SB_upgrade():
+                # If the upgrade is an SB upgrade, there will be multiple output files.
+                # Only here do we add the final metadata file to the "successful downloads" list.
+                annual_load_curve_filename = bldg_id.get_annual_load_curve_filename()
+                if annual_load_curve_filename is None:
+                    msg = f"Annual load curve filename is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
+                    raise ValueError(msg)
+                output_file = (
+                    output_dir
+                    / bldg_id.get_release_name()
+                    / "load_curve_annual"
+                    / f"state={bldg_id.state}"
+                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                    / annual_load_curve_filename
+                )
+
+                # Check if all required component files exist
+                required_component_files = _get_required_component_files_for_SB_upgrade(
+                    bldg_id, output_dir, "load_curve_annual"
+                )
+                if not all(comp_file.exists() for comp_file in required_component_files):
+                    continue
+
+                print("TEST 2")
+                print(output_file)
                 downloaded_paths.append(output_file)
-            except NoAnnualLoadCurveError:
-                output_file = (
-                    output_dir
-                    / bldg_id.get_release_name()
-                    / "load_curve_annual"
-                    / f"state={bldg_id.state}"
-                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-                    / (output_filename or "")  # TODO: Find a better way
-                )
-                failed_downloads.append(str(output_file))
-                console.print(f"[red]Annual load curve not available for {bldg_id.get_release_name()}[/red]")
-                raise
-            except Exception as e:
-                output_file = (
-                    output_dir
-                    / bldg_id.get_release_name()
-                    / "load_curve_annual"
-                    / f"state={bldg_id.state}"
-                    / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-                    / (output_filename or "")  # TODO: Find a better way
-                )
-                failed_downloads.append(str(output_file))
-                console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
+                _process_SB_upgrade_scenario(bldg_id, output_dir, output_file, "load_curve_annual", None)
+            else:
+                output_filename = bldg_id.get_annual_load_curve_filename()
+                try:
+                    output_file = future.result()
+                    downloaded_paths.append(output_file)
+                except NoAnnualLoadCurveError:
+                    output_file = (
+                        output_dir
+                        / bldg_id.get_release_name()
+                        / "load_curve_annual"
+                        / f"state={bldg_id.state}"
+                        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                        / (output_filename or "")  # TODO: Find a better way
+                    )
+                    failed_downloads.append(str(output_file))
+                    console.print(f"[red]Annual load curve not available for {bldg_id.get_release_name()}[/red]")
+                    raise
+                except Exception as e:
+                    output_file = (
+                        output_dir
+                        / bldg_id.get_release_name()
+                        / "load_curve_annual"
+                        / f"state={bldg_id.state}"
+                        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                        / (output_filename or "")  # TODO: Find a better way
+                    )
+                    failed_downloads.append(str(output_file))
+                    console.print(f"[red]Download failed for annual load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
 def _get_parquet_files_for_state(s3_client: Any, bucket: str, s3_prefix: str) -> list[str]:
