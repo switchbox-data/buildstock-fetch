@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Optional, Union, cast, get_args
+from typing import Any, Optional, Union, cast
 
 import boto3
 import polars as pl
@@ -33,10 +33,14 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-from buildstock_fetch.types import FileType, FunctionalGroup, LoadCurveFuelType, ReleaseYear, ResCom, Weather
+from buildstock_fetch.enhancements.SB_upgrades import (
+    _get_required_component_files_for_SB_upgrade,
+    _process_SB_upgrade_scenario,
+)
+from buildstock_fetch.types import FileType, ReleaseYear, ResCom, Weather
 
 from .building import BuildingID
-from .constants import LOAD_CURVE_COLUMN_AGGREGATION, METADATA_DIR, SB_ANALYSIS_UPGRADES_FILE
+from .constants import LOAD_CURVE_COLUMN_AGGREGATION, METADATA_DIR
 from .exception import (
     InvalidProductError,
     InvalidReleaseNameError,
@@ -49,60 +53,6 @@ from .exception import (
 )
 
 # from buildstock_fetch.main_cli import _get_all_available_releases
-
-# Module-level cache for SB analysis upgrades data
-_SB_ANALYSIS_UPGRADES_CACHE: dict[str, Any] | None = None
-
-
-def _get_SB_analysis_upgrades() -> dict[str, Any]:
-    """Load SB analysis upgrades data once and cache it for subsequent calls."""
-    global _SB_ANALYSIS_UPGRADES_CACHE
-    if _SB_ANALYSIS_UPGRADES_CACHE is None:
-        with open(SB_ANALYSIS_UPGRADES_FILE) as f:
-            _SB_ANALYSIS_UPGRADES_CACHE = json.load(f)
-    if _SB_ANALYSIS_UPGRADES_CACHE is None:
-        msg = "SB analysis upgrades data not available"
-        raise ValueError(msg)
-    return _SB_ANALYSIS_UPGRADES_CACHE
-
-
-# Module-level cache for SB analysis upgrades column map
-_SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE: pl.DataFrame | None = None
-_SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE: pl.DataFrame | None = None
-
-
-def _get_SB_analysis_upgrades_column_map(release_year: ReleaseYear, file_type: FileType) -> pl.DataFrame:
-    """Load SB analysis upgrades column map once and cache it for subsequent calls."""
-    global _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE, _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE
-
-    if release_year == "2024":
-        if (
-            file_type == "load_curve_15min"
-            or file_type == "load_curve_hourly"
-            or file_type == "load_curve_daily"
-            or file_type == "load_curve_monthly"
-        ):
-            if _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE is None:
-                column_map_file = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("data_dictionary_2024_load_curve_labeled.csv")
-                _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE = pl.read_csv(column_map_file)
-                if _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE.is_empty():
-                    msg = "SB analysis upgrades load curve column map not available"
-                    raise ValueError(msg)
-            return _SB_ANALYSIS_UPGRADES_LOAD_CURVE_COLUMN_MAP_CACHE
-        elif file_type == "metadata" or file_type == "load_curve_annual":
-            if _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE is None:
-                column_map_file = LOAD_CURVE_COLUMN_AGGREGATION.joinpath(
-                    "data_dictionary_2024_metadata_and_annual_labeled.csv"
-                )
-                _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE = pl.read_csv(column_map_file)
-                if _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE.is_empty():
-                    msg = "SB analysis upgrades metadata column map not available"
-                    raise ValueError(msg)
-            return _SB_ANALYSIS_UPGRADES_METADATA_COLUMN_MAP_CACHE
-    else:
-        msg = f"Release year {release_year} not supported"
-        raise ValueError(msg)
-    return pl.DataFrame()
 
 
 @dataclass
@@ -135,6 +85,20 @@ def _validate_release_name(release_name: str) -> bool:
     # Get the top-level keys as valid release names
     valid_release_names = list(releases_data.keys())
     return release_name in valid_release_names
+
+
+def _derive_load_curve_dir_name(aggregate_time_step: str) -> str:
+    """Derive the load curve directory name from the aggregate time step."""
+    if aggregate_time_step == "monthly":
+        return "load_curve_monthly"
+    elif aggregate_time_step == "hourly":
+        return "load_curve_hourly"
+    elif aggregate_time_step == "daily":
+        return "load_curve_daily"
+    else:
+        msg = f"Unknown aggregate time step: {aggregate_time_step}"
+        raise ValueError(msg)
+    return aggregate_time_step
 
 
 def _resolve_unique_metadata_urls(bldg_ids: list[BuildingID]) -> list[str]:
@@ -774,6 +738,7 @@ def download_15min_load_curve_with_progress(
 
     # Special case for SwitchBox Analysis upgrades
     if bldg_id.is_SB_upgrade():
+        # Download each of the component files for the SB upgrade
         bldg_id_component_list = bldg_id.get_SB_upgrade_component_bldg_ids()
         if bldg_id_component_list is None:
             message = f"15 min load profile timeseries is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
@@ -882,23 +847,57 @@ def download_aggregate_time_step_load_curve_with_progress(
 ) -> Path:
     """Download the aggregate time step load profile timeseries for a given building with progress tracking."""
 
-    # Process the aggregate time step load curve directory name
-    if aggregate_time_step == "monthly":
-        load_curve_dir = "load_curve_monthly"
-    elif aggregate_time_step == "hourly":
-        load_curve_dir = "load_curve_hourly"
-    elif aggregate_time_step == "daily":
-        load_curve_dir = "load_curve_daily"
-    else:
-        message = f"Unknown aggregate time step: {aggregate_time_step}"
-        raise ValueError(message)
+    # Derive load_curve_dir and file_type from aggregate_time_step
+    load_curve_dir = _derive_load_curve_dir_name(aggregate_time_step)
+    file_type: FileType = cast(FileType, load_curve_dir)
 
     # Special case for SwitchBox Analysis upgrades
     if bldg_id.is_SB_upgrade():
-        output_file = _download_aggregate_load_curve_components_SB_upgrade(
-            bldg_id, output_dir, progress, task_id, aggregate_time_step, load_curve_dir
+        # Download each of the component files for the SB upgrade
+        bldg_id_component_list = bldg_id.get_SB_upgrade_component_bldg_ids()
+        if bldg_id_component_list is None:
+            message = f"{aggregate_time_step} load profile timeseries is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
+            raise NoAggregateLoadCurveError(message)
+
+        for bldg_id_component in bldg_id_component_list:
+            download_url = bldg_id_component.get_aggregate_load_curve_url()
+            if download_url is None:
+                message = f"{aggregate_time_step} load profile timeseries is not available for {bldg_id_component.get_release_name()}, upgrade {bldg_id_component.upgrade_id}"
+                raise NoAggregateLoadCurveError(message)
+
+            output_file_component = (
+                output_dir
+                / bldg_id.get_release_name()
+                / load_curve_dir
+                / f"state={bldg_id.state}"
+                / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+                / bldg_id_component.get_output_filename(file_type)
+            )
+            output_file_component.parent.mkdir(parents=True, exist_ok=True)
+
+            # Download with progress tracking if progress object is provided
+            if progress and task_id is not None:
+                _download_with_progress(download_url, output_file_component, progress, task_id)
+            else:
+                response = requests.get(download_url, timeout=30, verify=True)
+                response.raise_for_status()
+                output_file_component.write_bytes(response.content)
+
+            # Process aggregation for each component
+            component_load_curve_aggregate = pl.read_parquet(output_file_component)
+            component_load_curve_aggregate = _process_aggregate_load_curve(
+                component_load_curve_aggregate, aggregate_time_step, bldg_id.release_year
+            )
+            component_load_curve_aggregate.write_parquet(output_file_component)
+
+        output_file = (
+            output_dir
+            / bldg_id.get_release_name()
+            / load_curve_dir
+            / f"state={bldg_id.state}"
+            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
+            / bldg_id.get_output_filename(file_type)
         )
-        file_type: FileType = cast(FileType, load_curve_dir)
         _process_SB_upgrade_scenario(bldg_id, output_dir, output_file, file_type, aggregate_time_step)
         return output_file
 
@@ -957,55 +956,6 @@ def _process_aggregate_load_curve(
     load_curve_aggregate = _aggregate_load_curve_aggregate(preaggregate_load_curve, aggregate_time_step, release_year)
     _add_time_aggregation_columns(load_curve_aggregate, aggregate_time_step)
     return load_curve_aggregate
-
-
-def _download_aggregate_load_curve_components_SB_upgrade(
-    bldg_id: BuildingID,
-    output_dir: Path,
-    progress: Optional[Progress],
-    task_id: Optional[TaskID],
-    aggregate_time_step: str,
-    load_curve_dir: str,
-) -> Path:
-    file_type: FileType = cast(FileType, load_curve_dir)
-    bldg_id_component_list = bldg_id.get_SB_upgrade_component_bldg_ids()
-    if bldg_id_component_list is None:
-        message = f"{aggregate_time_step} load profile timeseries is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
-        raise NoAggregateLoadCurveError(message)
-
-    for bldg_id_component in bldg_id_component_list:
-        download_url = bldg_id_component.get_aggregate_load_curve_url()
-        if download_url is None:
-            message = f"{aggregate_time_step} load profile timeseries is not available for {bldg_id_component.get_release_name()}, upgrade {bldg_id_component.upgrade_id}"
-            raise NoAggregateLoadCurveError(message)
-
-        output_file_component = (
-            output_dir
-            / bldg_id.get_release_name()
-            / load_curve_dir
-            / f"state={bldg_id.state}"
-            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-            / bldg_id_component.get_output_filename(file_type)
-        )
-        output_file_component.parent.mkdir(parents=True, exist_ok=True)
-
-        # Download with progress tracking if progress object is provided
-        if progress and task_id is not None:
-            _download_with_progress(download_url, output_file_component, progress, task_id)
-        else:
-            response = requests.get(download_url, timeout=30, verify=True)
-            response.raise_for_status()
-            output_file_component.write_bytes(response.content)
-
-    output_file = (
-        output_dir
-        / bldg_id.get_release_name()
-        / load_curve_dir
-        / f"state={bldg_id.state}"
-        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / bldg_id.get_output_filename(file_type)
-    )
-    return output_file
 
 
 def _parse_requested_file_type(file_type: tuple[str, ...]) -> RequestedFileTypes:
@@ -1638,242 +1588,6 @@ def _process_download_future_15min(
         console.print(f"[red]Download failed for 15 min load curve {bldg_id.bldg_id}: {e}[/red]")
 
 
-def _process_SB_upgrade_scenario(
-    bldg_id: BuildingID,
-    output_dir: Path,
-    output_file: Path,
-    file_type: FileType,
-    aggregate_time_step: str | None = None,
-) -> None:
-    """Process a SwitchBox Analysis upgrade load curve."""
-    # Load SB analysis upgrades data json file
-    sb_analysis_upgrades = _get_SB_analysis_upgrades()
-    # Load SB analysis upgrades column map csv file (maps which columns are HVAC and which are appliances)
-    sb_analysis_upgrades_column_map = _get_SB_analysis_upgrades_column_map(bldg_id.release_year, file_type)
-    # Extract out this specific release's data
-    release_name = bldg_id.get_release_name()
-    if release_name not in sb_analysis_upgrades:
-        msg = f"Release name {release_name} not found in SB analysis upgrades data"
-        raise ValueError(msg)
-    sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
-    upgrade_components = sb_analysis_upgrade_data["upgrade_components"][bldg_id.upgrade_id]
-
-    # Initialize the final SB upgrade load curve dataframe. Load the timestamp from the first upgrade component.
-    SB_upgrade_df = pl.DataFrame()
-    first_upgrade_component = upgrade_components[0]
-    first_upgrade_component_bldg_id = bldg_id.copy(upgrade_id=first_upgrade_component)
-    first_upgrade_component_filename = _get_SB_upgrade_component_filename(
-        bldg_id, first_upgrade_component_bldg_id, output_dir, file_type
-    )
-    SB_upgrade_df = _initialize_SB_upgrade_dataframe(first_upgrade_component_filename, file_type)
-
-    # Save component file names to delete later
-    component_file_names_to_delete = []
-
-    for functional_group in get_args(FunctionalGroup):
-        if functional_group in ["total", "net"] or functional_group not in sb_analysis_upgrade_data:
-            continue
-        # Each functional group comes from a different upgrade
-        # There are also column names associated with each functional group
-        functional_group_upgrade_id = sb_analysis_upgrade_data[functional_group][bldg_id.upgrade_id]
-        functional_group_column_names = (
-            sb_analysis_upgrades_column_map.filter(pl.col("functional_group") == functional_group)
-            .select("field_name")
-            .to_series()
-            .to_list()
-        )
-        if not functional_group_column_names:
-            continue
-        bldg_id_component = bldg_id.copy(upgrade_id=functional_group_upgrade_id)
-        component_filename = _get_SB_upgrade_component_filename(bldg_id, bldg_id_component, output_dir, file_type)
-        # Read the file for this component and add to the final SB upgrade dataframe
-        join_column_name, columns_to_select = _get_SB_upgrade_component_columns(
-            file_type, functional_group_column_names
-        )
-
-        # Get available columns from the parquet file and filter to only select existing columns
-        available_columns = set(pl.scan_parquet(component_filename).collect_schema().names())
-        columns_to_select_filtered = [col for col in columns_to_select if col in available_columns]
-
-        # Ensure join column exists, otherwise skip this component
-        if join_column_name not in columns_to_select_filtered:
-            continue
-
-        component_df = pl.read_parquet(component_filename).select(columns_to_select_filtered)
-        SB_upgrade_df = SB_upgrade_df.join(component_df, on=join_column_name)
-        # Add component file name to list of files to delete
-        component_file_names_to_delete.append(component_filename)
-
-    # Convert to set of strings for deletion
-    component_file_names_to_delete_set = {str(path) for path in component_file_names_to_delete}
-
-    # Delete the component load curve dataframes
-    for component_filename_str in component_file_names_to_delete_set:
-        os.remove(component_filename_str)
-    gc.collect()
-
-    if (
-        file_type == "load_curve_15min"
-        or file_type == "load_curve_hourly"
-        or file_type == "load_curve_daily"
-        or file_type == "load_curve_monthly"
-    ):
-        # Add total load curve columns for SB upgrade scenarios
-        SB_upgrade_df = _add_SB_upgrade_load_curve_total_columns(SB_upgrade_df)
-
-    if (
-        file_type == "load_curve_hourly" or file_type == "load_curve_daily" or file_type == "load_curve_monthly"
-    ) and aggregate_time_step is not None:
-        SB_upgrade_df = _process_aggregate_load_curve(SB_upgrade_df, aggregate_time_step, bldg_id.release_year)
-
-    # Save the final SB upgrade load curve dataframe to a parquet file
-    SB_upgrade_df.write_parquet(output_file)
-
-
-def _get_required_component_files_for_SB_upgrade(
-    bldg_id: BuildingID, output_dir: Path, file_type: FileType
-) -> list[Path]:
-    """Get all required component file paths for an SB upgrade scenario."""
-    sb_analysis_upgrades = _get_SB_analysis_upgrades()
-    release_name = bldg_id.get_release_name()
-    if release_name not in sb_analysis_upgrades:
-        return []
-
-    sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
-    upgrade_components = sb_analysis_upgrade_data["upgrade_components"][bldg_id.upgrade_id]
-
-    required_files: list[Path] = []
-
-    for upgrade_id in upgrade_components:
-        component_bldg_id = bldg_id.copy(upgrade_id=upgrade_id)
-        component_filename = _get_SB_upgrade_component_filename(bldg_id, component_bldg_id, output_dir, file_type)
-        required_files.append(component_filename)
-
-    return required_files
-
-
-def _get_SB_upgrade_component_filename(
-    final_bldg_id: BuildingID, component_bldg_id: BuildingID, output_dir: Path, file_type: FileType
-) -> Path:
-    if file_type == "metadata":
-        return (
-            output_dir
-            / final_bldg_id.get_release_name()
-            / file_type
-            / f"state={final_bldg_id.state}"
-            / f"upgrade={str(int(final_bldg_id.upgrade_id)).zfill(2)}"
-            / f"upgrade{str(int(component_bldg_id.upgrade_id)).zfill(2)}.parquet"
-        )
-    elif (
-        file_type == "load_curve_15min"
-        or file_type == "load_curve_hourly"
-        or file_type == "load_curve_daily"
-        or file_type == "load_curve_monthly"
-    ):
-        return (
-            output_dir
-            / final_bldg_id.get_release_name()
-            / file_type
-            / f"state={final_bldg_id.state}"
-            / f"upgrade={str(int(final_bldg_id.upgrade_id)).zfill(2)}"
-            / component_bldg_id.get_output_filename(file_type)
-        )
-    elif file_type == "load_curve_annual":
-        component_output_filename = component_bldg_id.get_annual_load_curve_filename()
-        if component_output_filename is None:
-            msg = f"Annual load curve filename is not available for {component_bldg_id.get_release_name()}, upgrade {component_bldg_id.upgrade_id}"
-            raise ValueError(msg)
-        return (
-            output_dir
-            / final_bldg_id.get_release_name()
-            / file_type
-            / f"state={final_bldg_id.state}"
-            / f"upgrade={str(int(final_bldg_id.upgrade_id)).zfill(2)}"
-            / component_output_filename
-        )
-    else:
-        msg = f"File type {file_type} not supported"
-        raise ValueError(msg)
-
-
-def _initialize_SB_upgrade_dataframe(first_upgrade_component_filename: Path, file_type: FileType) -> pl.DataFrame:
-    SB_upgrade_df = pl.DataFrame()
-    if file_type == "metadata" or file_type == "load_curve_annual":
-        SB_upgrade_df = pl.read_parquet(first_upgrade_component_filename).select("bldg_id")
-    elif (
-        file_type == "load_curve_15min"
-        or file_type == "load_curve_hourly"
-        or file_type == "load_curve_daily"
-        or file_type == "load_curve_monthly"
-    ):
-        SB_upgrade_df = pl.read_parquet(first_upgrade_component_filename).select("timestamp")
-    else:
-        msg = f"File type {file_type} not supported"
-        raise ValueError(msg)
-    return SB_upgrade_df
-
-
-def _get_SB_upgrade_component_columns(
-    file_type: FileType, functional_group_column_names: list[str]
-) -> tuple[str, list[str]]:
-    if file_type == "metadata" or file_type == "load_curve_annual":
-        join_column_name = "bldg_id"
-        return join_column_name, [join_column_name, *functional_group_column_names]
-    elif (
-        file_type == "load_curve_15min"
-        or file_type == "load_curve_hourly"
-        or file_type == "load_curve_daily"
-        or file_type == "load_curve_monthly"
-    ):
-        join_column_name = "timestamp"
-        return join_column_name, [join_column_name, *functional_group_column_names]
-    else:
-        msg = f"File type {file_type} not supported"
-        raise ValueError(msg)
-
-
-def _add_SB_upgrade_load_curve_total_columns(SB_upgrade_load_curve_df: pl.DataFrame) -> pl.DataFrame:
-    """Add total load curve columns for SB upgrade scenarios."""
-    # Add total load curve columns for each fuel type
-    for fuel_type in get_args(LoadCurveFuelType):
-        # Extract all columns that start with the fuel type
-        fuel_type_consumption_columns = [
-            col
-            for col in SB_upgrade_load_curve_df.columns
-            if col.startswith(f"out.{fuel_type}")
-            and "consumption" in col
-            and "consumption_intensity" not in col
-            and "savings" not in col
-        ]
-        fuel_type_consumption_intensity_columns = [
-            col
-            for col in SB_upgrade_load_curve_df.columns
-            if col.startswith(f"out.{fuel_type}") and "consumption_intensity" in col and "savings" not in col
-        ]
-
-        # Skip if no columns found for this fuel type
-        if not fuel_type_consumption_columns and not fuel_type_consumption_intensity_columns:
-            continue
-
-        # Create expressions for the total columns
-        expressions = []
-        if fuel_type_consumption_columns:
-            expressions.append(
-                pl.sum_horizontal(fuel_type_consumption_columns).alias(f"out.{fuel_type}.total.energy_consumption")
-            )
-        if fuel_type_consumption_intensity_columns:
-            expressions.append(
-                pl.sum_horizontal(fuel_type_consumption_intensity_columns).alias(
-                    f"out.{fuel_type}.total.energy_consumption_intensity"
-                )
-            )
-
-        # Add the total fuel type columns to the dataframe
-        SB_upgrade_load_curve_df = SB_upgrade_load_curve_df.with_columns(expressions)
-
-    return SB_upgrade_load_curve_df
-
-
 def _download_aggregate_load_curves_parallel(
     bldg_ids: list[BuildingID],
     output_dir: Path,
@@ -1941,8 +1655,6 @@ def _download_aggregate_load_curves_parallel(
         # Process completed futures
         for future in concurrent.futures.as_completed(future_to_bldg):
             bldg_id = future_to_bldg[future]
-            print("TEST 3")
-            print(bldg_id)
             _process_download_future(
                 future, bldg_id, output_dir, aggregate_time_step, downloaded_paths, failed_downloads, console
             )
@@ -2176,33 +1888,6 @@ def download_annual_load_curve_with_progress(
     return output_file
 
 
-def download_annual_load_curve_SB_upgrade(
-    bldg_id: BuildingID, output_dir: Path, progress: Optional[Progress] = None, task_id: Optional[TaskID] = None
-) -> Path:
-    """Download the annual load curve for a given building with progress tracking."""
-
-    output_filename = bldg_id.get_annual_load_curve_filename()
-    if output_filename is None:
-        message = f"Annual load curve is not available for {bldg_id.get_release_name()}"
-        raise NoAnnualLoadCurveError(message)
-    output_file = (
-        output_dir
-        / bldg_id.get_release_name()
-        / "load_curve_annual"
-        / f"state={bldg_id.state}"
-        / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-        / output_filename
-    )
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-
-    component_output_files = download_annual_load_curve_SB_upgrade_components(bldg_id, output_dir, progress, task_id)
-    print("TESTING:")
-    print(bldg_id)
-    print(component_output_files)
-
-    return output_file
-
-
 def _add_bldg_id_to_grouping(
     output_file: Path,
     bldg_id: BuildingID,
@@ -2286,45 +1971,6 @@ def _add_download_url_to_grouping(
         output_file_to_download_url[output_file].append(download_url)
 
 
-def download_annual_load_curve_SB_upgrade_components(
-    bldg_id: BuildingID, output_dir: Path, progress: Optional[Progress] = None, task_id: Optional[TaskID] = None
-) -> list[Path]:
-    """Download the annual load curve for the components of a given building with progress tracking."""
-    component_bldg_ids = bldg_id.get_SB_upgrade_component_bldg_ids()
-    if component_bldg_ids is None:
-        message = f"Annual load curve is not available for {bldg_id.get_release_name()}, upgrade {bldg_id.upgrade_id}"
-        raise NoAnnualLoadCurveError(message)
-    component_output_files = []
-    for component_bldg_id in component_bldg_ids:
-        component_output_filename = component_bldg_id.get_annual_load_curve_filename()
-        if component_output_filename is None:
-            message = f"Annual load curve is not available for {component_bldg_id.get_release_name()}, upgrade {component_bldg_id.upgrade_id}"
-            raise NoAnnualLoadCurveError(message)
-        component_output_file = (
-            output_dir
-            / bldg_id.get_release_name()
-            / "load_curve_annual"
-            / f"state={bldg_id.state}"
-            / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
-            / component_output_filename
-        )
-        download_url = component_bldg_id.get_annual_load_curve_url()
-        if download_url is None:
-            message = f"Annual load curve is not available for {component_bldg_id.get_release_name()}, upgrade {component_bldg_id.upgrade_id}"
-            raise NoAnnualLoadCurveError(message)
-        # Download the annual load curve for the component
-        if progress and task_id is not None:
-            _download_with_progress(download_url, component_output_file, progress, task_id)
-            component_output_files.append(component_output_file)
-        else:
-            response = requests.get(download_url, timeout=30, verify=True)
-            response.raise_for_status()
-            with open(component_output_file, "wb") as file:
-                file.write(response.content)
-            component_output_files.append(component_output_file)
-    return component_output_files
-
-
 def _create_annual_load_curve_tasks(
     output_file_to_bldg_ids: dict[Path, list[BuildingID]],
     progress: Progress,
@@ -2386,7 +2032,6 @@ def _download_annual_load_curves_parallel(
         }
 
         for future in concurrent.futures.as_completed(future_to_bldg):
-            # TODO: Check here if bldg_id is SB upgrade. If so, process it accordingly.
             output_file = future_to_bldg[future]
             bldg_ids = output_file_to_bldg_ids[output_file]
             bldg_id = bldg_ids[0]
