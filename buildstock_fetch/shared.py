@@ -61,14 +61,14 @@ class DownloadAndProcessProgress:
         self._processing_total = 0
         self._processed = 0
 
-    def on_chunk_downloaded(self, chunk_size: int):
+    def on_chunk_downloaded(self, chunk_size: int) -> None:
         self._download_progress.advance(self._download_progress_task, chunk_size)
 
-    def on_processing_started(self):
+    def on_processing_started(self) -> None:
         self._processing_total += 1
         self._processing_progress.update(self._processing_progress_task, total=self._processing_total)
 
-    def on_processing_finished(self):
+    def on_processing_finished(self) -> None:
         self._processed += 1
         if self._processed == self._processing_total:
             self._processing_progress.update(
@@ -79,7 +79,7 @@ class DownloadAndProcessProgress:
         else:
             self._processing_progress.update(self._download_progress_task, completed=self._processed)
 
-    def on_building_finished(self):
+    def on_building_finished(self) -> None:
         self._total_progress.advance(self._total_progress_task)
 
     def live(self) -> Live:

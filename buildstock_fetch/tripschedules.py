@@ -68,7 +68,6 @@ async def _download_and_process(
     buildings: Collection[Building],
     progress: DownloadAndProcessProgress,
 ) -> Path:
-    tempfiles = []
     async with AsyncExitStack() as stack:
         tempfiles: list[AsyncBufferedIOBase] = []
         for _ in s3_keys:
@@ -126,7 +125,7 @@ async def _download(
     s3_key: str,
     buffer: AsyncBufferedIOBase,
     progress: DownloadAndProcessProgress,
-):
+) -> None:
     resp = await client.get_object(Bucket="buildstock-fetch", Key=s3_key)
     body = resp["Body"]
     async for chunk in body.iter_chunks():

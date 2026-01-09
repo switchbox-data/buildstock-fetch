@@ -18,7 +18,7 @@ async def download_and_process_annual_results(
     target_folder: Path,
     client: AsyncClient,
     buildings: Collection[Building],
-):
+) -> list[Path]:
     grouped = {
         urljoin(OEDI_WEB_URL, oedi_annualcurve_path): {
             local_annualcurve_path: list(buildings_with_local_annualcurve_path)
@@ -50,7 +50,7 @@ async def _download_and_process_annual_results(
     oedi_url: str,
     partitions: dict[Path, list[Building]],
     progress: DownloadAndProcessProgress,
-):
+) -> list[Path]:
     async with download(client, oedi_url, progress) as f:
         progress.on_processing_started()
 

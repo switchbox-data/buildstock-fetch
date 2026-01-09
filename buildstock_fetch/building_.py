@@ -2,11 +2,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import final, override
 
-from buildstock_fetch.constants import METADATA_DIR, WEATHER_FILE_DIR
-from buildstock_fetch.releases import RELEASES, BuildstockRelease
-from buildstock_fetch.types import FileType, ReleaseKey, ReleaseVersion, ReleaseYear, USStateCode, UpgradeID, Weather
 import polars as pl
 
+from buildstock_fetch.constants import WEATHER_FILE_DIR
+from buildstock_fetch.releases import RELEASES, BuildstockRelease
+from buildstock_fetch.types import FileType, ReleaseKey, UpgradeID, USStateCode
 
 _weather_map_df: pl.DataFrame | None = None
 
@@ -64,7 +64,7 @@ class Building:
     state: USStateCode
     cached_county: str | None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         obj = RELEASES[self.release]
         if self.upgrade not in obj.upgrades:
             raise InconsistentBuildingUpgrade(self)

@@ -1,8 +1,8 @@
 import re
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from typing_extensions import Self
 

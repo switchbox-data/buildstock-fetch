@@ -219,5 +219,6 @@ per_rule_ignores.DEP003 = ["typing_extensions"]
 [dependency-groups]
 dev = [
     "pytest-recording>=0.13.4",
+    "types-aiofiles>=25.1.0.20251011",
     "useful-types>=0.2.1",
 ]

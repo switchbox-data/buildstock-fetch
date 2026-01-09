@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import cast
 
 import aioboto3
-from aiobotocore.config import AioConfig
-from botocore import UNSIGNED
+import httpx
 import polars as pl
+from aiobotocore.config import AioConfig
+from botocore import UNSIGNED  # pyright: ignore[reportAny]
 from httpx import AsyncClient
 
 from buildstock_fetch.annualcurves import download_and_process_annual_results
@@ -15,17 +16,17 @@ from buildstock_fetch.building_ import Building
 from buildstock_fetch.constants import METADATA_DIR
 from buildstock_fetch.energymodels import ENERGY_MODEL_FILE_TYPE, download_and_process_energy_models_batch
 from buildstock_fetch.metadata import download_and_process_metadata_batch
-from buildstock_fetch.tripschedules import download_and_process_trip_schedules_batch
-from buildstock_fetch.weather import download_and_process_weather_batch
-from .loadcurves import LoadCurve, download_and_process_load_curves_batch
 from buildstock_fetch.releases import RELEASES, BuildstockRelease
+from buildstock_fetch.tripschedules import download_and_process_trip_schedules_batch
 from buildstock_fetch.types import (
     FileType,
     ReleaseKey,
     UpgradeID,
     USStateCode,
 )
-import httpx
+from buildstock_fetch.weather import download_and_process_weather_batch
+
+from .loadcurves import LoadCurve, download_and_process_load_curves_batch
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,7 @@ async def download_and_process_all(
     buildings: Collection[Building],
     file_types: Collection[FileType],
     max_concurrent_downloads: int = 20,
-):
+) -> None:
     file_types_ = set(file_types)
     limits = httpx.Limits(max_connections=max_concurrent_downloads, max_keepalive_connections=10)
     timeout = httpx.Timeout(60)
@@ -113,6 +114,8 @@ def list_buildings(
         df = df.limit(limit)
 
     schema = df.collect_schema()
+
+    lst: list[tuple[int, str]] | list[tuple[int, None]]
 
     if "county" in schema:
         lst = cast(list[tuple[int, str]], df.select(["bldg_id", "county"]).collect().rows())

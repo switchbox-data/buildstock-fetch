@@ -2,86 +2,30 @@ from typing import Any, Literal, NewType, TypeAlias, get_args
 
 from typing_extensions import TypeIs
 
-ReleaseKeyResY2021 = Literal[
+ReleaseKey = Literal[
     "res_2021_amy2018_1",
     "res_2021_tmy3_1",
-]
-
-ReleaseKeyComY2021 = Literal[
     "com_2021_amy2018_1",
     "com_2021_tmy3_1",
-]
-
-ReleaseKeyY2021 = Literal[
-    ReleaseKeyResY2021,
-    ReleaseKeyComY2021,
-]
-
-ReleaseKeyResY2022 = Literal[
     "res_2022_amy2012_1",
     "res_2022_amy2012_1.1",
     "res_2022_amy2018_1",
     "res_2022_amy2018_1.1",
     "res_2022_tmy3_1",
     "res_2022_tmy3_1.1",
-]
-
-ReleaseKeyY2022 = ReleaseKeyResY2022
-
-ReleaseKeyComY2023 = Literal[
     "com_2023_amy2018_1",
     "com_2023_amy2018_2",
-]
-
-ReleaseKeyY2023 = ReleaseKeyComY2023
-
-ReleaseKeyResY2024 = Literal[
     "res_2024_amy2018_2",
     "res_2024_tmy3_1",
     "res_2024_tmy3_2",
-]
-
-ReleaseKeyComY2024 = Literal[
     "com_2024_amy2018_1",
     "com_2024_amy2018_2",
-]
-
-ReleaseKeyY2024 = Literal[ReleaseKeyResY2024, ReleaseKeyComY2024]
-
-ReleaseKeyResY2025 = Literal[
     "res_2025_amy2012_1",
     "res_2025_amy2018_1",
-]
-
-ReleaseKeyComY2025 = Literal[
     "com_2025_amy2012_2",
     "com_2025_amy2018_1",
     "com_2025_amy2018_2",
     "com_2025_amy2018_3",
-]
-
-ReleaseKeyY2025 = Literal[
-    ReleaseKeyResY2025,
-    ReleaseKeyComY2025,
-]
-
-ReleaseKeyRes = Literal[
-    ReleaseKeyResY2021,
-    ReleaseKeyY2022,
-    ReleaseKeyResY2024,
-    ReleaseKeyResY2025,
-]
-
-ReleaseKeyCom = Literal[
-    ReleaseKeyComY2021,
-    ReleaseKeyY2023,
-    ReleaseKeyComY2024,
-    ReleaseKeyComY2025,
-]
-
-ReleaseKey = Literal[
-    ReleaseKeyRes,
-    ReleaseKeyCom,
 ]
 
 UpgradeID = NewType("UpgradeID", str)
@@ -221,62 +165,6 @@ ReleaseKeyV2 = Literal[
 ]
 
 ReleaseKeyV3 = Literal["com_2025_amy2018_3",]
-
-
-def is_year_2021(release_key: ReleaseKey) -> TypeIs[ReleaseKeyY2021]:
-    return "_2021_" in release_key
-
-
-def is_year_2022(release_key: ReleaseKey) -> TypeIs[ReleaseKeyY2022]:
-    return "_2022_" in release_key
-
-
-def is_year_2023(release_key: ReleaseKey) -> TypeIs[ReleaseKeyY2023]:
-    return "_2023_" in release_key
-
-
-def is_year_2024(release_key: ReleaseKey) -> TypeIs[ReleaseKeyY2024]:
-    return "_2024_" in release_key
-
-
-def is_year_2025(release_key: ReleaseKey) -> TypeIs[ReleaseKeyY2025]:
-    return "_2025_" in release_key
-
-
-def is_amy2012(release_key: ReleaseKey) -> TypeIs[ReleaseKeyAmy2012]:
-    return "amy2012" in release_key
-
-
-def is_amy2018(release_key: ReleaseKey) -> TypeIs[ReleaseKeyAmy2018]:
-    return "amy2018" in release_key
-
-
-def is_tmy3(release_key: ReleaseKey) -> TypeIs[ReleaseKeyTMY3]:
-    return "tmy3" in release_key
-
-
-def is_version_1(release_key: ReleaseKey) -> TypeIs[ReleaseKeyV1]:
-    return release_key.endswith("_1")
-
-
-def is_version_1_1(release_key: ReleaseKey) -> TypeIs[ReleaseKeyV1_1]:
-    return release_key.endswith("_1.1")
-
-
-def is_version_2(release_key: ReleaseKey) -> TypeIs[ReleaseKeyV2]:
-    return release_key.endswith("_2")
-
-
-def is_version_3(release_key: ReleaseKey) -> TypeIs[ReleaseKeyV3]:
-    return release_key.endswith("_3")
-
-
-def is_resstock(release_key: ReleaseKey) -> TypeIs[ReleaseKeyRes]:
-    return release_key.startswith("res_")
-
-
-def is_comstock(release_key: ReleaseKey) -> TypeIs[ReleaseKeyCom]:
-    return release_key.startswith("com_")
 
 
 def is_valid_state_code(value: Any) -> TypeIs[USStateCode]:  # pyright: ignore[reportAny, reportExplicitAny]

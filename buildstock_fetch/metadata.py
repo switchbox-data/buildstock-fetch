@@ -20,7 +20,7 @@ main_semaphore = asyncio.Semaphore(200)
 
 async def download_and_process_metadata_batch(
     target_folder: Path, client: AsyncClient, buildings: Collection[Building]
-):
+) -> list[Path]:
     grouped = {
         urljoin(OEDI_WEB_URL, oedi_metadata_path): {
             local_metadata_path: list(buildings_with_local_metadata_path)
@@ -52,7 +52,7 @@ async def _download_and_process_metadata(
     oedi_matadata_url: str,
     partitions: dict[Path, list[Building]],
     progress: DownloadAndProcessProgress,
-):
+) -> list[Path]:
     async with download(client, oedi_matadata_url, progress) as f:
         progress.on_processing_started()
 

@@ -344,6 +344,7 @@ test = [
 [package.dev-dependencies]
 dev = [
     { name = "pytest-recording" },
+    { name = "types-aiofiles" },
     { name = "useful-types" },
 ]
 
@@ -388,6 +389,7 @@ provides-extras = ["test", "docs", "lint", "dev-utils", "dev"]
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest-recording", specifier = ">=0.13.4" },
+    { name = "types-aiofiles", specifier = ">=25.1.0.20251011" },
     { name = "useful-types", specifier = ">=0.2.1" },
 ]
 
@@ -2009,6 +2011,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/7d/35/e2f2216c8f7a8897df05dd9f5475e623a65791d8ed8496de5dd920caf9de/types_aiobotocore_sqs-2.25.2.tar.gz", hash = "sha256:60b38f4ede6d83cc6bd82db2b0721a983cd5010f1cfa78edaa8e5b380917b077", size = 23372, upload-time = "2025-11-12T01:52:55.566Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b2/06/f8d12215ace746f7e5282f0c5c89d04c1e380176a408aa26f99264d80e55/types_aiobotocore_sqs-2.25.2-py3-none-any.whl", hash = "sha256:04c5f20bc8da8f02d6db20d2369fedf8012596829a61aa40c68ff83d3970bcb3", size = 34098, upload-time = "2025-11-12T01:52:53.667Z" },
+]
+
+[[package]]
+name = "types-aiofiles"
+version = "25.1.0.20251011"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/6c/6d23908a8217e36704aa9c79d99a620f2fdd388b66a4b7f72fbc6b6ff6c6/types_aiofiles-25.1.0.20251011.tar.gz", hash = "sha256:1c2b8ab260cb3cd40c15f9d10efdc05a6e1e6b02899304d80dfa0410e028d3ff", size = 14535, upload-time = "2025-10-11T02:44:51.237Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/0f/76917bab27e270bb6c32addd5968d69e558e5b6f7fb4ac4cbfa282996a96/types_aiofiles-25.1.0.20251011-py3-none-any.whl", hash = "sha256:8ff8de7f9d42739d8f0dadcceeb781ce27cd8d8c4152d4a7c52f6b20edb8149c", size = 14338, upload-time = "2025-10-11T02:44:50.054Z" },
 ]
 
 [[package]]
