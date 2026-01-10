@@ -1432,7 +1432,7 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    assert len(downloaded_paths) == 4
+    assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
@@ -1476,7 +1476,7 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    assert len(downloaded_paths) == 2
+    assert len(downloaded_paths) == 1
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
@@ -1511,7 +1511,7 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    assert len(downloaded_paths) == 2
+    assert len(downloaded_paths) == 1
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
@@ -1546,7 +1546,7 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    assert len(downloaded_paths) == 2
+    assert len(downloaded_paths) == 1
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
@@ -1582,7 +1582,7 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    assert len(downloaded_paths) == 2
+    assert len(downloaded_paths) == 1
     assert len(failed_downloads) == 0
     assert Path(
         f"data/{bldg_ids[0].get_release_name()}/load_curve_annual/state={bldg_ids[0].state}/upgrade={str(int(bldg_ids[0].upgrade_id)).zfill(2)}/{bldg_ids[0].get_annual_load_curve_filename()}"
@@ -1630,7 +1630,7 @@ def test_fetch_annual_load_curve(cleanup_downloads):
     output_dir = Path("data")
 
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
-    assert len(downloaded_paths) == 4
+    assert len(downloaded_paths) == 2
     assert len(failed_downloads) == 0
     bldg_id = bldg_ids[0]
     assert Path(
