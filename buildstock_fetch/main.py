@@ -2004,9 +2004,6 @@ def _download_annual_load_curves_parallel(
     output_file_to_bldg_ids, output_file_to_download_url = _group_bldg_ids_by_output_file_annual_load_curve(
         bldg_ids, output_dir, failed_downloads
     )
-    print("TESTING:")
-    print(output_file_to_bldg_ids)
-    print(output_file_to_download_url)
 
     # Create progress tasks for annual load curve downloads
     output_file_to_annual_load_curve_tasks = _create_annual_load_curve_tasks(output_file_to_bldg_ids, progress)
@@ -2035,8 +2032,6 @@ def _download_annual_load_curves_parallel(
             output_file = future_to_bldg[future]
             bldg_ids = output_file_to_bldg_ids[output_file]
             bldg_id = bldg_ids[0]
-            print("TEST 1")
-            print(bldg_id)
             if bldg_id.is_SB_upgrade():
                 # If the upgrade is an SB upgrade, there will be multiple output files.
                 # Only here do we add the final metadata file to the "successful downloads" list.
@@ -2060,8 +2055,6 @@ def _download_annual_load_curves_parallel(
                 if not all(comp_file.exists() for comp_file in required_component_files):
                     continue
 
-                print("TEST 2")
-                print(output_file)
                 downloaded_paths.append(output_file)
                 _process_SB_upgrade_scenario(bldg_id, output_dir, output_file, "load_curve_annual", None)
             else:
@@ -2362,7 +2355,8 @@ def fetch_bldg_data(
     if file_type_obj.load_curve_monthly:
         total_files += len(bldg_ids)  # Add monthly load curve files
     if file_type_obj.load_curve_annual:
-        total_files += len(bldg_ids)  # Add annual load curve files
+        output_file_to_bldg_ids, _ = _group_bldg_ids_by_output_file_annual_load_curve(bldg_ids, Path("data"), [])
+        total_files += len(output_file_to_bldg_ids.keys())  # Add annual load curve files
     if file_type_obj.weather:
         available_bldg_ids = [bldg_id for bldg_id in bldg_ids if bldg_id.state in weather_states]
         total_files += len(available_bldg_ids) * len(weather_states)  # Add weather map files
@@ -2495,33 +2489,26 @@ def _execute_downloads(
 if __name__ == "__main__":  # pragma: no cover
     bldg_ids = [
         BuildingID(
-            bldg_id=19713,
-            release_year="2024",
+            bldg_id=80963,
+            release_year="2025",
             res_com="comstock",
             weather="amy2018",
+            release_number="1",
             upgrade_id="0",
-            release_number="2",
+            state="OH",
         ),
         BuildingID(
-            bldg_id=658,
-            release_year="2024",
+            bldg_id=82148,
+            release_year="2025",
             res_com="comstock",
             weather="amy2018",
+            release_number="1",
             upgrade_id="0",
-            release_number="2",
-        ),
-        BuildingID(
-            bldg_id=659,
-            release_year="2024",
-            res_com="comstock",
-            weather="amy2018",
-            upgrade_id="0",
-            release_number="2",
+            state="OH",
         ),
     ]
-    file_type = ("metadata",)
+    file_type = ("load_curve_annual",)
     output_dir = Path("data")
-
     downloaded_paths, failed_downloads = fetch_bldg_data(bldg_ids, file_type, output_dir)
     print(downloaded_paths)
     print(failed_downloads)
