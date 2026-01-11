@@ -35,6 +35,7 @@ from rich.progress import (
 
 from buildstock_fetch.enhancements.SB_upgrades import (
     _get_required_component_files_for_SB_upgrade,
+    _is_valid_parquet_file,
     _process_SB_upgrade_scenario,
 )
 from buildstock_fetch.types import FileType, ReleaseYear, ResCom, Weather
@@ -1275,8 +1276,11 @@ def _download_metadata_with_progress(
                 / f"upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}"
                 / bldg_id.get_output_filename("metadata")
             )
-            downloaded_paths.append(output_file)
-            _process_SB_upgrade_scenario(bldg_id, output_dir, output_file, "metadata", None)
+            # Check if all required component files exist and are valid parquet files
+            required_component_files = _get_required_component_files_for_SB_upgrade(bldg_id, output_dir, "metadata")
+            if all(_is_valid_parquet_file(comp_file) for comp_file in required_component_files):
+                downloaded_paths.append(output_file)
+                _process_SB_upgrade_scenario(bldg_id, output_dir, output_file, "metadata", None)
     return downloaded_paths, failed_downloads
 
 
@@ -2048,11 +2052,11 @@ def _download_annual_load_curves_parallel(
                     / annual_load_curve_filename
                 )
 
-                # Check if all required component files exist
+                # Check if all required component files exist and are valid parquet files
                 required_component_files = _get_required_component_files_for_SB_upgrade(
                     bldg_id, output_dir, "load_curve_annual"
                 )
-                if not all(comp_file.exists() for comp_file in required_component_files):
+                if not all(_is_valid_parquet_file(comp_file) for comp_file in required_component_files):
                     continue
 
                 downloaded_paths.append(output_file)

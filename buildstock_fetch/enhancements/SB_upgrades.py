@@ -187,6 +187,33 @@ def _get_SB_upgrade_component_columns(
         raise ValueError(msg)
 
 
+def _is_valid_parquet_file(file_path: Path) -> bool:
+    """Check if a parquet file exists, is non-empty, and is valid.
+
+    Args:
+        file_path: Path to the parquet file to validate
+
+    Returns:
+        True if the file is a valid parquet file, False otherwise
+    """
+    if not file_path.exists():
+        return False
+
+    # Check file size (must be > 0)
+    if file_path.stat().st_size == 0:
+        return False
+
+    # Try to read the parquet file to validate it's complete and valid
+    try:
+        # Use lazy reading to avoid loading the entire file into memory
+        _ = pl.scan_parquet(file_path).schema
+    except Exception:
+        # File is corrupted, incomplete, or not a valid parquet file
+        return False
+    else:
+        return True
+
+
 def _get_required_component_files_for_SB_upgrade(
     bldg_id: BuildingID, output_dir: Path, file_type: FileType
 ) -> list[Path]:
