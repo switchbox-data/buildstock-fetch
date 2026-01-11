@@ -25,7 +25,7 @@ def test_SB_upgrade_load_curve_15min():
     _, _ = fetch_bldg_data(bldg_ids, file_type, output_dir)
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_15min/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_output_filename("load_curve_15min")}"
     ).exists()
 
 
@@ -47,7 +47,7 @@ def test_SB_upgrade_load_curve_hourly():
     _, _ = fetch_bldg_data(bldg_ids, file_type, output_dir)
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_hourly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_output_filename("load_curve_hourly")}"
     ).exists()
 
 
@@ -69,7 +69,7 @@ def test_SB_upgrade_load_curve_daily():
     _, _ = fetch_bldg_data(bldg_ids, file_type, output_dir)
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_daily/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_output_filename("load_curve_daily")}"
     ).exists()
 
 
@@ -91,7 +91,7 @@ def test_SB_upgrade_load_curve_monthly():
     _, _ = fetch_bldg_data(bldg_ids, file_type, output_dir)
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_monthly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_monthly/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_output_filename("load_curve_monthly")}"
     ).exists()
 
 
@@ -113,7 +113,7 @@ def test_SB_upgrade_annual_load_curve():
     _, _ = fetch_bldg_data(bldg_ids, file_type, output_dir)
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{str(bldg_id.bldg_id)!s}-{int(bldg_id.upgrade_id)!s}.parquet"
+        f"data/{bldg_id.get_release_name()}/load_curve_annual/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_output_filename("load_curve_annual")}"
     ).exists()
 
 
@@ -135,5 +135,5 @@ def test_SB_upgrade_metadata():
     _, _ = fetch_bldg_data(bldg_ids, file_type, output_dir)
     bldg_id = bldg_ids[0]
     assert Path(
-        f"data/{bldg_id.get_release_name()}/metadata/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/metadata.parquet"
+        f"data/{bldg_id.get_release_name()}/metadata/state={bldg_id.state}/upgrade={str(int(bldg_id.upgrade_id)).zfill(2)}/{bldg_id.get_output_filename("metadata")}"
     ).exists()

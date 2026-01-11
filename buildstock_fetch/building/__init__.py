@@ -229,9 +229,13 @@ class BuildingID:
             or file_type == "load_curve_hourly"
             or file_type == "load_curve_daily"
             or file_type == "load_curve_monthly"
-            or file_type == "load_curve_annual"
         ):
             return f"{str(self.bldg_id)!s}-{int(self.upgrade_id)!s}.parquet"
+        elif file_type == "load_curve_annual":
+            annual_load_curve_filename = self.get_annual_load_curve_filename()
+            if annual_load_curve_filename is None:
+                return ""
+            return annual_load_curve_filename
         elif file_type == "metadata":
             return "metadata.parquet"
         elif file_type == "hpxml":
