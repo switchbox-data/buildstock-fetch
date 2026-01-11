@@ -198,8 +198,8 @@ out.params.wall_area_above_grade_conditioned_ft_2,envelope
 out.params.wall_area_above_grade_exterior_ft_2,envelope
 out.params.wall_area_below_grade_ft_2,envelope
 out.params.window_area_ft_2,envelope
-out.electricity.ceiling_fan.energy_consumption,appliances
-out.electricity.ceiling_fan.energy_consumption_intensity,appliances
+out.electricity.ceiling_fan.energy_consumption,HVAC_cooling
+out.electricity.ceiling_fan.energy_consumption_intensity,HVAC_cooling
 out.electricity.clothes_dryer.energy_consumption,appliances
 out.electricity.clothes_dryer.energy_consumption_intensity,appliances
 out.electricity.clothes_washer.energy_consumption,appliances
