@@ -12,6 +12,8 @@ import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
 
+from buildstock_fetch.constants import SB_ANALYSIS_UPGRADES_FILE
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -424,6 +426,20 @@ def _find_upgrade_ids(s3_client: Any, bucket_name: str, prefix: str) -> list[str
     return upgrade_ids
 
 
+def _add_SB_upgrades(
+    res_com_type: str, release_year: str, weather: str, release_number: str, upgrade_ids: list[str]
+) -> list[str]:
+    """Add new upgrades for SwitchBox Analysis"""
+    with open(SB_ANALYSIS_UPGRADES_FILE) as f:
+        sb_analysis_upgrades = json.load(f)
+    release_name = f"{res_com_type}_{release_year}_{weather}_{release_number}"
+    if release_name not in sb_analysis_upgrades:
+        return upgrade_ids
+    sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
+    upgrade_ids.extend(sb_analysis_upgrade_data["upgrade_ids"])
+    return upgrade_ids
+
+
 def _find_trip_schedules(sb_bucket_name: str, sb_prefix: str):
     """
     Scan an S3 bucket for EV trip schedule files and return a mapping of release versions to their available states.
@@ -492,6 +508,8 @@ def _process_release(
 
     # Find the building_energy_model directory and its upgrade IDs
     upgrade_ids = _find_upgrade_ids(s3_client, bucket_name, release_path)
+
+    upgrade_ids = _add_SB_upgrades(res_com_type, release_year, weather, release_number, upgrade_ids)
 
     release_data: BuildStockRelease = {
         "release_year": release_year,

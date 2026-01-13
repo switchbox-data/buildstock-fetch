@@ -5,6 +5,8 @@ __all__ = [
     "LOAD_CURVE_COLUMN_AGGREGATION",
     "METADATA_DIR",
     "RELEASE_JSON_FILE",
+    "SB_ANALYSIS_UPGRADES_FILE",
+    "UPGRADES_LOOKUP_FILE",
     "WEATHER_FILE_DIR",
 ]
 
@@ -17,3 +19,4 @@ LOAD_CURVE_COLUMN_AGGREGATION = Path(str(files("buildstock_fetch").joinpath("dat
 WEATHER_FILE_DIR = Path(str(files("buildstock_fetch").joinpath("data").joinpath("weather_station_map")))
 BUILDSTOCK_RELEASES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_releases.json"))
 UPGRADES_LOOKUP_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("buildstock_upgrades_lookup.json"))
+SB_ANALYSIS_UPGRADES_FILE = str(files("buildstock_fetch").joinpath("data").joinpath("SB_analysis_upgrades.json"))

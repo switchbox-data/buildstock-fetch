@@ -96,7 +96,13 @@
       "13": "Ultra high efficiency heat pump with elec backup + Light Touch Envelope + Full Appliance Electrification with Efficiency",
       "14": "ENERGY STAR heat pump with existing system as backup + Light Touch Envelope + Full Appliance Electrification with Efficiency",
       "15": "Geothermal heat pump + Light Touch Envelope + Full Appliance Electrification with Efficiency",
-      "16": "Envelope Only - Light Touch Envelope"
+      "16": "Envelope Only - Light Touch Envelope",
+      "17": "ENERGY STAR heat pump with elec backup + Full Appliance Electrification with Efficiency\u200b",
+      "18": "High efficiency cold-climate air-to-air heat pump with electric backup + Full Appliance Electrification with Efficiency\u200b",
+      "19": "Ultra high efficiency heat pump with elec backup + Full Appliance Electrification with Efficiency\u200b",
+      "20": "ENERGY STAR heat pump with existing system as backup\u200b + Full Appliance Electrification with Efficiency\u200b\u200b",
+      "21": "Geothermal heat pump\u200b + Full Appliance Electrification with Efficiency\u200b\u200b",
+      "22": "Full Appliance Electrification with Efficiency Only\u200b"
     }
   },
   "res_2024_tmy3_2": {
@@ -117,7 +123,13 @@
       "13": "Ultra high efficiency heat pump with elec backup + Light Touch Envelope + Full Appliance Electrification with Efficiency",
       "14": "ENERGY STAR heat pump with existing system as backup + Light Touch Envelope + Full Appliance Electrification with Efficiency",
       "15": "Geothermal heat pump + Light Touch Envelope + Full Appliance Electrification with Efficiency",
-      "16": "Envelope Only - Light Touch Envelope"
+      "16": "Envelope Only - Light Touch Envelope",
+      "17": "ENERGY STAR heat pump with elec backup + Full Appliance Electrification with Efficiency\u200b",
+      "18": "High efficiency cold-climate air-to-air heat pump with electric backup + Full Appliance Electrification with Efficiency\u200b",
+      "19": "Ultra high efficiency heat pump with elec backup + Full Appliance Electrification with Efficiency\u200b",
+      "20": "ENERGY STAR heat pump with existing system as backup\u200b + Full Appliance Electrification with Efficiency\u200b\u200b",
+      "21": "Geothermal heat pump\u200b + Full Appliance Electrification with Efficiency\u200b\u200b",
+      "22": "Full Appliance Electrification with Efficiency Only\u200b"
     }
   }
 }

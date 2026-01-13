@@ -1,10 +1,12 @@
 import json
 from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
 
 import polars as pl
 
-from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, WEATHER_FILE_DIR
-from buildstock_fetch.types import ReleaseYear, ResCom, Weather
+from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, SB_ANALYSIS_UPGRADES_FILE, WEATHER_FILE_DIR
+from buildstock_fetch.types import FileType, ReleaseYear, ResCom, Weather
 
 from .annualcurve import get_annual_load_curve_url
 from .annualcurvefilename import get_annual_load_curve_filename
@@ -18,6 +20,18 @@ __all__ = [
 ]
 
 weather_map_df = pl.read_parquet(WEATHER_FILE_DIR)
+
+# Module-level cache for SB analysis upgrades data
+_SB_ANALYSIS_UPGRADES_CACHE: dict[str, Any] | None = None
+
+
+def _get_SB_analysis_upgrades() -> dict[str, Any] | None:
+    """Load SB analysis upgrades data once and cache it for subsequent calls."""
+    global _SB_ANALYSIS_UPGRADES_CACHE
+    if _SB_ANALYSIS_UPGRADES_CACHE is None:
+        with open(SB_ANALYSIS_UPGRADES_FILE) as f:
+            _SB_ANALYSIS_UPGRADES_CACHE = json.load(f)
+    return _SB_ANALYSIS_UPGRADES_CACHE
 
 
 @dataclass(frozen=True)
@@ -67,7 +81,7 @@ class BuildingID:
         release_data = releases_data[release_name]
         return file_type in release_data["available_data"]
 
-    def get_metadata_url(self) -> str | None:
+    def get_metadata_url(self) -> str | list[str] | None:
         """Generate the S3 download URL for this building."""
         return get_metadata_url(self)
 
@@ -76,6 +90,19 @@ class BuildingID:
 
     def get_15min_load_curve_url(self) -> str | None:
         return get_15min_load_curve_url(self)
+
+    def get_SB_upgrade_component_bldg_ids(self) -> list["BuildingID"] | None:
+        with open(SB_ANALYSIS_UPGRADES_FILE) as f:
+            sb_analysis_upgrades = json.load(f)
+        release_name = self.get_release_name()
+        if release_name not in sb_analysis_upgrades:
+            return None
+        sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
+        upgrade_components = sb_analysis_upgrade_data["upgrade_components"][self.upgrade_id]
+        bldg_id_component_list = []
+        for component_id in upgrade_components:
+            bldg_id_component_list.append(self.copy(upgrade_id=component_id))
+        return bldg_id_component_list
 
     def get_aggregate_load_curve_url(self) -> str | None:
         """Generate the S3 download URL for this building. The url is the same as the 15-minute load curve url."""
@@ -151,6 +178,96 @@ class BuildingID:
         res_com_str = "res" if self.res_com == "resstock" else "com"
         return f"{res_com_str}_{self.release_year}_{self.weather}_{self.release_number}"
 
+    def get_output_file_path(self, file_type: FileType, output_dir: Path | None = None) -> Path:
+        if output_dir is None:
+            if (
+                file_type == "load_curve_15min"
+                or file_type == "load_curve_hourly"
+                or file_type == "load_curve_daily"
+                or file_type == "load_curve_monthly"
+                or file_type == "load_curve_annual"
+            ):
+                return Path(
+                    self.get_release_name(),
+                    file_type,
+                    f"state={self.state}",
+                    f"upgrade={str(int(self.upgrade_id)).zfill(2)}",
+                    f"{str(self.bldg_id)!s}-{int(self.upgrade_id)!s}.parquet",
+                )
+            elif file_type == "metadata":
+                return Path(
+                    self.get_release_name(),
+                    "metadata",
+                    f"state={self.state}",
+                    f"upgrade={str(int(self.upgrade_id)).zfill(2)}",
+                    "metadata.parquet",
+                )
+            elif file_type == "hpxml":
+                return Path(
+                    self.get_release_name(),
+                    "hpxml",
+                    f"state={self.state}",
+                    f"upgrade={str(int(self.upgrade_id)).zfill(2)}",
+                    f"bldg{str(self.bldg_id).zfill(7)}-up{self.upgrade_id.zfill(2)}.xml",
+                )
+            elif file_type == "schedule":
+                return Path(
+                    self.get_release_name(),
+                    "schedule",
+                    f"state={self.state}",
+                    f"upgrade={str(int(self.upgrade_id)).zfill(2)}",
+                    f"bldg{str(self.bldg_id).zfill(7)}-up{self.upgrade_id.zfill(2)}_schedule.csv",
+                )
+            else:
+                return Path()
+        else:
+            return output_dir / self.get_output_file_path(file_type)
+
+    def get_output_filename(self, file_type: FileType) -> str:
+        if (
+            file_type == "load_curve_15min"
+            or file_type == "load_curve_hourly"
+            or file_type == "load_curve_daily"
+            or file_type == "load_curve_monthly"
+        ):
+            return f"{str(self.bldg_id)!s}-{int(self.upgrade_id)!s}.parquet"
+        elif file_type == "load_curve_annual":
+            annual_load_curve_filename = self.get_annual_load_curve_filename()
+            if annual_load_curve_filename is None:
+                return ""
+            return annual_load_curve_filename
+        elif file_type == "metadata":
+            return "metadata.parquet"
+        elif file_type == "hpxml":
+            return f"bldg{str(self.bldg_id).zfill(7)}-up{self.upgrade_id.zfill(2)}.xml"
+        elif file_type == "schedule":
+            return f"bldg{str(self.bldg_id).zfill(7)}-up{self.upgrade_id.zfill(2)}_schedule.csv"
+        else:
+            return ""
+
     def to_json(self) -> str:
         """Convert the building ID object to a JSON string."""
         return json.dumps(asdict(self))
+
+    def is_SB_upgrade(self) -> bool:
+        """Check if the upgrade is a SB upgrade."""
+        sb_analysis_upgrades = _get_SB_analysis_upgrades()
+        if sb_analysis_upgrades is None:
+            msg = "SB analysis upgrades data not available"
+            raise ValueError(msg)
+        release_name = self.get_release_name()
+        if release_name not in sb_analysis_upgrades:
+            return False
+        sb_analysis_upgrade_data = sb_analysis_upgrades[release_name]
+        return self.upgrade_id in sb_analysis_upgrade_data["upgrade_ids"]
+
+    def copy(self, upgrade_id: str | None = None) -> "BuildingID":
+        return BuildingID(
+            bldg_id=self.bldg_id,
+            release_number=self.release_number,
+            release_year=self.release_year,
+            res_com=self.res_com,
+            weather=self.weather,
+            upgrade_id=upgrade_id if upgrade_id is not None else self.upgrade_id,
+            state=self.state,
+        )
