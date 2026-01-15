@@ -100,7 +100,7 @@ async def estimate_download_size(client: AsyncClient, urls: Collection[str]) -> 
     tasks = [_estimate_average_download_size_single_file(client, url) for url in sorted(urls)]
     results: list[int] = []
     with progress:
-        async for future in asyncio.as_completed(tasks):
+        for future in asyncio.as_completed(tasks):
             try:
                 value = future.result()
                 results.append(value)
