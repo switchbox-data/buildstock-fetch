@@ -24,8 +24,6 @@ from rich.progress import (
 )
 from useful_types import SupportsRichComparisonT
 
-download_semaphore = asyncio.Semaphore(100)
-
 
 @final
 class DownloadAndProcessProgress:
@@ -99,7 +97,7 @@ async def estimate_download_size(client: AsyncClient, urls: Collection[str]) -> 
         transient=True,
     )
     task = progress.add_task("Estimating download size", total=len(urls))
-    tasks = [_estimate_average_download_size_single_file(client, url) for url in urls]
+    tasks = [_estimate_average_download_size_single_file(client, url) for url in sorted(urls)]
     results: list[int] = []
     with progress:
         async for future in asyncio.as_completed(tasks):
@@ -122,7 +120,7 @@ async def _estimate_average_download_size_single_file(client: AsyncClient, url: 
 async def download(
     client: AsyncClient, url: str, progress: DownloadAndProcessProgress
 ) -> AsyncGenerator[AsyncBufferedReader]:
-    async with download_semaphore, aiofiles.tempfile.NamedTemporaryFile(delete_on_close=False) as f:
+    async with aiofiles.tempfile.NamedTemporaryFile(delete_on_close=False) as f:
         async with client.stream("GET", url) as stream:
             _ = stream.raise_for_status()
             async for data in stream.aiter_bytes(8192):

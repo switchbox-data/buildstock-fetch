@@ -18,10 +18,6 @@ from .types import ReleaseKey
 
 AGGREGATION_RULES_CACHE: dict[ReleaseKey, list[pl.Expr]] = {}
 
-process_semaphore = asyncio.Semaphore(1)
-main_semaphore = asyncio.Semaphore(200)
-
-
 LoadCurveAggregate = Literal[
     "load_curve_hourly",
     "load_curve_daily",
@@ -31,21 +27,33 @@ LoadCurve = Literal[LoadCurveAggregate, "load_curve_15min"]
 
 
 async def download_and_process_load_curves_batch(
-    target_folder: Path, client: AsyncClient, curves: Collection[LoadCurve], buildings: Sequence[Building]
+    target_folder: Path,
+    client: AsyncClient,
+    curves: Collection[LoadCurve],
+    buildings: Sequence[Building],
+    semaphore: asyncio.Semaphore | None,
+    processing_semaphore: asyncio.Semaphore | None,
 ) -> list[Path]:
+    semaphore = semaphore or asyncio.Semaphore(200)
+    processing_semaphore = processing_semaphore or asyncio.Semaphore(1)
     if not buildings:
         return []
     sample_size = min(len(buildings), 100)
     sample_download_size = await estimate_download_size(
         client,
-        [urljoin(OEDI_WEB_URL, building.load_curve_15min_path) for building in random.sample(buildings, sample_size)],
+        [
+            urljoin(OEDI_WEB_URL, building.load_curve_15min_path)
+            for building in random.Random(0).sample(buildings, sample_size)
+        ],
     )
     estimated_download_size = (sample_download_size / sample_size) * len(buildings)
     progress = DownloadAndProcessProgress(
         estimated_download_size, len(buildings), "Downloading and processing load curves"
     )
     tasks = [
-        _download_and_process_load_curves_for_building(target_folder, client, curves, building, progress)
+        _download_and_process_load_curves_for_building(
+            target_folder, client, curves, building, progress, semaphore, processing_semaphore
+        )
         for building in buildings
     ]
     with progress.live():
@@ -65,13 +73,17 @@ async def _download_and_process_load_curves_for_building(
     curves: Collection[LoadCurve],
     building: Building,
     progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
+    processing_semaphore: asyncio.Semaphore,
 ) -> list[Path]:
     url = urljoin(OEDI_WEB_URL, building.load_curve_15min_path)
-    async with download(client, url, progress) as f:
+    async with semaphore, download(client, url, progress) as f:
         file_path = Path(cast(str, f.name))
 
         tasks = [
-            asyncio.create_task(_async_process_load_curve_aggregate(target_folder, file_path, aggregate, building))
+            asyncio.create_task(
+                _async_process_load_curve_aggregate(target_folder, file_path, aggregate, building, processing_semaphore)
+            )
             for aggregate in set(curves)
         ]
         for task in tasks:
@@ -83,9 +95,13 @@ async def _download_and_process_load_curves_for_building(
 
 
 async def _async_process_load_curve_aggregate(
-    target_folder: Path, file_path: Path, aggregate: LoadCurve, building: Building
+    target_folder: Path,
+    file_path: Path,
+    aggregate: LoadCurve,
+    building: Building,
+    semaphore: asyncio.Semaphore,
 ) -> Path:
-    async with process_semaphore:
+    async with semaphore:
         return await asyncio.to_thread(_process_load_curve_aggregate, target_folder, file_path, aggregate, building)
 
 

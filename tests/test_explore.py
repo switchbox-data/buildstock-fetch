@@ -1,43 +1,24 @@
-import shutil
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
-from buildstock_fetch.building import BuildingID
 from buildstock_fetch.explore import DownloadedData, filter_downloads
-from buildstock_fetch.main import fetch_bldg_data
+from buildstock_fetch.main_new import download_and_process_all, list_buildings
+from buildstock_fetch.types import normalize_upgrade_id
 
 
-@pytest.fixture(scope="function")
-def cleanup_downloads():
-    """Fixture to clean up downloaded data before and after tests.
-
-    This fixture:
-    1. Removes any existing 'data' directory before the test runs
-    2. Yields control to the test
-    3. Removes the 'data' directory after the test completes
-
-    This ensures each test starts with a clean slate and doesn't leave
-    downloaded files behind.
-    """
-    # Setup - clean up any existing files before test
-    data_dir = Path("data")
-
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
-
-    yield
-
-    # Teardown - clean up downloaded files after test
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
+@pytest.fixture
+def target_folder():
+    with TemporaryDirectory() as td:
+        yield Path(td)
 
 
-@pytest.mark.usefixtures("cleanup_downloads")
-def test_metadata_upgrade_located():
-    bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-    _ = fetch_bldg_data(bldg_ids, ("metadata",), Path("./data"))
-    files = DownloadedData(filter_downloads(Path("./data")))
+@pytest.mark.asyncio
+async def test_metadata_upgrade_located(target_folder: Path):
+    buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 5)
+    _ = await download_and_process_all(target_folder, buildings, ["metadata"])
+    files = DownloadedData(filter_downloads(target_folder))
     assert len(files)
     assert files.upgrades() == frozenset({"0"})
     assert files.states() == frozenset({"NY"})

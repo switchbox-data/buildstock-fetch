@@ -17,8 +17,14 @@ from .types import ReleaseKey, USStateCode
 
 
 async def download_and_process_trip_schedules_batch(
-    target_folder: Path, client: S3Client, buildings: Collection[Building]
+    target_folder: Path,
+    client: S3Client,
+    buildings: Collection[Building],
+    semaphore: asyncio.Semaphore | None = None,
+    processing_semaphore: asyncio.Semaphore | None = None,
 ) -> list[Path]:
+    semaphore = semaphore or asyncio.Semaphore(200)
+    processing_semaphore = processing_semaphore or asyncio.Semaphore(1)
     grouped = cast(
         dict[ReleaseKey, dict[USStateCode, list[Building]]],
         {
@@ -35,7 +41,7 @@ async def download_and_process_trip_schedules_batch(
         "Locating parquet files", total=sum(len(_) for _ in grouped.values())
     )
     locating_parquet_files_tasks = [
-        create_task(_locate_parquet_files(client, release, state))
+        create_task(_locate_parquet_files(client, release, state, semaphore))
         for release, release_group in grouped.items()
         for state in release_group
     ]
@@ -52,7 +58,15 @@ async def download_and_process_trip_schedules_batch(
     )
 
     tasks = [
-        _download_and_process(target_folder, client, [k for k, _ in s3_keys], grouped[release][state], progress)
+        _download_and_process(
+            target_folder,
+            client,
+            [k for k, _ in s3_keys],
+            grouped[release][state],
+            progress,
+            semaphore,
+            processing_semaphore,
+        )
         for release, state, s3_keys in parquet_files
         if s3_keys
     ]
@@ -67,6 +81,8 @@ async def _download_and_process(
     s3_keys: list[str],
     buildings: Collection[Building],
     progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
+    processing_semaphore: asyncio.Semaphore,
 ) -> Path:
     async with AsyncExitStack() as stack:
         tempfiles: list[AsyncBufferedIOBase] = []
@@ -75,22 +91,27 @@ async def _download_and_process(
             tempfiles.append(f)
 
         download_tasks = [
-            _download(client, s3_key, buffer, progress) for s3_key, buffer in zip(s3_keys, tempfiles, strict=True)
+            _download(client, s3_key, buffer, progress, semaphore)
+            for s3_key, buffer in zip(s3_keys, tempfiles, strict=True)
         ]
         _ = await asyncio.gather(*download_tasks)
 
         progress.on_processing_started()
 
         paths = [Path(cast(str, f.name)) for f in tempfiles]
-        processing_result = await _async_process(target_folder, paths, buildings)
+        processing_result = await _async_process(target_folder, paths, buildings, processing_semaphore)
         progress.on_processing_finished()
     return processing_result
 
 
 async def _async_process(
-    target_folder: Path, parquet_filenames: Collection[Path], buildings: Collection[Building]
+    target_folder: Path,
+    parquet_filenames: Collection[Path],
+    buildings: Collection[Building],
+    semaphore: asyncio.Semaphore,
 ) -> Path:
-    return await asyncio.to_thread(_process, target_folder, parquet_filenames, buildings)
+    async with semaphore:
+        return await asyncio.to_thread(_process, target_folder, parquet_filenames, buildings)
 
 
 def _process(
@@ -98,7 +119,6 @@ def _process(
     parquet_filenames: Collection[Path],
     buildings: Collection[Building],
 ) -> Path:
-    print(buildings)
     lf = pl.concat([pl.scan_parquet(fn) for fn in parquet_filenames])
     lf = lf.filter(pl.col("bldg_id").is_in({str(_.id) for _ in buildings}))
 
@@ -125,28 +145,32 @@ async def _download(
     s3_key: str,
     buffer: AsyncBufferedIOBase,
     progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
 ) -> None:
-    resp = await client.get_object(Bucket="buildstock-fetch", Key=s3_key)
-    body = resp["Body"]
-    async for chunk in body.iter_chunks():
-        if not chunk:
-            continue
-        written = await buffer.write(chunk)
-        progress.on_chunk_downloaded(written)
-    await buffer.close()
+    async with semaphore:
+        resp = await client.get_object(Bucket="buildstock-fetch", Key=s3_key)
+        body = resp["Body"]
+        async for chunk in body.iter_chunks():
+            if not chunk:
+                continue
+            written = await buffer.write(chunk)
+            progress.on_chunk_downloaded(written)
+        await buffer.close()
 
 
 async def _locate_parquet_files(
     client: S3Client,
     release: ReleaseKey,
     state: USStateCode,
+    semaphore: asyncio.Semaphore,
 ) -> tuple[ReleaseKey, USStateCode, list[tuple[str, int]]]:
     result: list[tuple[str, int]] = []
     paginator = client.get_paginator("list_objects_v2")
-    async for page in paginator.paginate(
-        Bucket="buildstock-fetch", Prefix=f"ev_demand/trip_schedules/release={release}/state={state}"
-    ):
-        for obj in page.get("Contents", []):
-            if (key := obj.get("Key", "")).endswith(".parquet"):
-                result.append((key, obj.get("Size", 0)))
+    async with semaphore:
+        async for page in paginator.paginate(
+            Bucket="buildstock-fetch", Prefix=f"ev_demand/trip_schedules/release={release}/state={state}"
+        ):
+            for obj in page.get("Contents", []):
+                if (key := obj.get("Key", "")).endswith(".parquet"):
+                    result.append((key, obj.get("Size", 0)))
     return (release, state, result)

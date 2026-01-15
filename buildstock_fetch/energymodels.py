@@ -23,7 +23,11 @@ async def download_and_process_energy_models_batch(
     client: AsyncClient,
     file_types: Collection[ENERGY_MODEL_FILE_TYPE],
     buildings: Collection[Building],
+    semaphore: asyncio.Semaphore | None = None,
+    processing_semaphore: asyncio.Semaphore | None = None,
 ) -> list[Path]:
+    semaphore = semaphore or asyncio.Semaphore(200)
+    processing_semaphore = processing_semaphore or asyncio.Semaphore(1)
     if not buildings:
         return []
     sample_size = min(len(buildings), 100)
@@ -47,6 +51,8 @@ async def download_and_process_energy_models_batch(
             file_types,
             building,
             progress,
+            semaphore,
+            processing_semaphore,
         )
         for building in buildings
     ]
@@ -63,25 +69,37 @@ async def _download_and_process_energy_models_for_building(
     file_types: Collection[ENERGY_MODEL_FILE_TYPE],
     building: Building,
     progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
+    processing_semaphore: asyncio.Semaphore,
 ) -> list[Path]:
     url = urljoin(OEDI_WEB_URL, building.energy_models_path)
-    async with download(client, url, progress) as f:
+    async with semaphore, download(client, url, progress) as f:
         progress.on_processing_started()
         file_path = Path(cast(str, f.name))
-        result_future = await asyncio.to_thread(
-            _process_energy_models,
+        result = await _async_process_energy_models(
             file_path,
             target_folder,
             file_types,
             building,
+            processing_semaphore,
         )
-        result = await result_future
         progress.on_processing_finished()
         progress.on_building_finished()
         return result
 
 
-async def _process_energy_models(
+async def _async_process_energy_models(
+    zip_file_path: Path,
+    target_folder: Path,
+    file_types: Collection[ENERGY_MODEL_FILE_TYPE],
+    building: Building,
+    semaphore: asyncio.Semaphore,
+) -> list[Path]:
+    async with semaphore:
+        return await asyncio.to_thread(_process_energy_models, zip_file_path, target_folder, file_types, building)
+
+
+def _process_energy_models(
     zip_file_path: Path,
     target_folder: Path,
     file_types: Collection[ENERGY_MODEL_FILE_TYPE],

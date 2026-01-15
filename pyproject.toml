@@ -27,11 +27,11 @@ dependencies = [
   "botocore>=1.33.0",
   "pyarrow>=14.0.1",
   "typedload>=2.39",
-  "asyncio>=4.0.0",
   "httpx>=0.28.1",
   "aiofiles>=25.1.0",
   "types-aioboto3[essential,s3]>=15.5.0",
   "aioboto3>=15.5.0",
+  "xmltodict>=1.0.2",
 ]
 
 [project.urls]
@@ -44,7 +44,7 @@ bsf = "buildstock_fetch.cli.main:app"
 
 [project.optional-dependencies]
 # Core testing dependencies
-test = ["pytest>=7.2.0"]
+test = ["pytest>=7.2.0", "pytest-asyncio>=1.3.0", "pytest-recording>=0.13.4"]
 
 # Documentation dependencies
 docs = [
@@ -61,6 +61,8 @@ lint = [
   "types-requests>=2.31.0",
   "types-boto3>=1.33.0",
   "pandas-stubs>=2.2.0",
+  "types-aiofiles>=25.1.0.20251011",
+  "useful-types>=0.2.1",
 ]
 
 # Development utilities dependencies (only for utils/ directory)
@@ -112,6 +114,7 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = ["network"]
+asyncio_mode = "auto"
 
 [tool.ruff]
 target-version = "py310"
@@ -213,12 +216,17 @@ per_rule_ignores.DEP002 = [
   "awscli",
   "xmltodict",
   "tomli",
+
+  "pytest-asyncio",
+  "types-aioboto3",
+  "pytest-recording",
+  "types-aiofiles",
 ]
-per_rule_ignores.DEP003 = ["typing_extensions"]
+per_rule_ignores.DEP003 = [
+  "typing_extensions",
+  "types_aiobotocore_s3",
+  "aiobotocore",
+]
 
 [dependency-groups]
-dev = [
-    "pytest-recording>=0.13.4",
-    "types-aiofiles>=25.1.0.20251011",
-    "useful-types>=0.2.1",
-]
+dev = []

@@ -39,6 +39,7 @@ def cleanup_downloads():
 runner = CliRunner()
 
 
+@pytest.mark.vcr
 @patch("questionary.confirm")
 @patch("questionary.press_any_key_to_continue")
 @patch("questionary.path")
@@ -176,6 +177,7 @@ def test_interactive_mode(
     assert "test_output" in result.stdout
 
 
+@pytest.mark.vcr
 @patch("questionary.confirm")
 @patch("questionary.press_any_key_to_continue")
 @patch("questionary.path")
@@ -262,6 +264,7 @@ def test_interactive_mode_zero_sample(
     assert "No files selected for download" in result.stdout
 
 
+@pytest.mark.vcr
 def test_cli_direct_arguments(cleanup_downloads):
     """Test CLI with direct command line arguments (non-interactive mode)."""
     # Test with direct arguments for metadata download
@@ -381,6 +384,7 @@ def test_cli_direct_arguments(cleanup_downloads):
     assert "test_output" in result.stdout
 
 
+@pytest.mark.vcr
 def test_cli_multiple_file_types(cleanup_downloads):
     """Test CLI with multiple file types."""
     result = runner.invoke(
@@ -419,6 +423,7 @@ def test_cli_multiple_file_types(cleanup_downloads):
     assert "Upgrade ids: ['7']" in result.stdout
 
 
+@pytest.mark.vcr
 def test_cli_multiple_upgrade_ids(cleanup_downloads):
     """Test CLI with multiple upgrade IDs."""
     result = runner.invoke(
@@ -564,6 +569,7 @@ def test_cli_help():
     assert "--output_directory" in clean_output
 
 
+@pytest.mark.vcr
 def test_cli_direct_arguments_trip_schedules(cleanup_downloads):
     """Test CLI with direct command line arguments (non-interactive mode)."""
     # Test with direct arguments for metadata download

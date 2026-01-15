@@ -1,45 +1,28 @@
 import shutil
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import polars as pl
 import pytest
 
 from buildstock_fetch.building import BuildingID
-from buildstock_fetch.main import fetch_bldg_data
+from buildstock_fetch.main_new import download_and_process_all, list_buildings
 from buildstock_fetch.read import BuildStockRead, FileTypeNotAvailableError, NoUpgradesFoundError
+from buildstock_fetch.types import normalize_upgrade_id
 
 
-@pytest.fixture(scope="function")
-def cleanup_downloads():
-    """Fixture to clean up downloaded data before and after tests.
-
-    This fixture:
-    1. Removes any existing 'data' directory before the test runs
-    2. Yields control to the test
-    3. Removes the 'data' directory after the test completes
-
-    This ensures each test starts with a clean slate and doesn't leave
-    downloaded files behind.
-    """
-    # Setup - clean up any existing files before test
-    data_dir = Path("data")
-
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
-
-    yield
-
-    # Teardown - clean up downloaded files after test
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
+@pytest.fixture
+def target_folder():
+    with TemporaryDirectory() as td:
+        yield Path(td)
 
 
-@pytest.mark.usefixtures("cleanup_downloads")
-def test_read_metadata_single_upgrade():
-    bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-    _ = fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
+@pytest.mark.asyncio
+async def test_read_metadata_single_upgrade(target_folder: Path):
+    buildings = list_buildings("res_2022_tmy3_1", "NY", normalize_upgrade_id("0"), 1)
+    _ = await download_and_process_all(target_folder, buildings, ["metadata"])
     bsr = BuildStockRead(
-        data_path="./data",
+        data_path=target_folder,
         release="res_2022_tmy3_1",
         states="NY",
     )
@@ -50,17 +33,17 @@ def test_read_metadata_single_upgrade():
     assert df.height > 0
 
 
-@pytest.mark.usefixtures("cleanup_downloads")
-def test_read_metadata_multiple_upgrades():
+@pytest.mark.asyncio
+async def test_read_metadata_multiple_upgrades(target_folder: Path):
     """Test reading metadata for multiple upgrades."""
-    bldg_ids = [
-        BuildingID(bldg_id=7, upgrade_id="0"),
-        BuildingID(bldg_id=7, upgrade_id="1"),
+    buildings = [
+        *list_buildings("res_2022_tmy3_1", "NY", normalize_upgrade_id("0"), 1),
+        *list_buildings("res_2022_tmy3_1", "NY", normalize_upgrade_id("1"), 1),
     ]
-    fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
+    _ = await download_and_process_all(target_folder, buildings, ["metadata"])
 
     bsr = BuildStockRead(
-        data_path="data",
+        data_path=target_folder,
         release="res_2022_tmy3_1",
         states="NY",
     )
@@ -74,15 +57,15 @@ def test_read_metadata_multiple_upgrades():
     assert 1 in df["upgrade"].to_list()
 
 
-@pytest.mark.usefixtures("cleanup_downloads")
-def test_read_metadata_auto_detect_upgrades():
+@pytest.mark.asyncio
+async def test_read_metadata_auto_detect_upgrades(target_folder: Path):
     """Test reading metadata with auto-detected upgrades."""
 
-    bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
-    fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
+    buildings = list_buildings("res_2022_tmy3_1", "NY", normalize_upgrade_id("0"), 1)
+    _ = await download_and_process_all(target_folder, buildings, ["metadata"])
 
     bsr = BuildStockRead(
-        data_path="data",
+        data_path=target_folder,
         release="res_2022_tmy3_1",
         states="NY",
     )
@@ -93,18 +76,14 @@ def test_read_metadata_auto_detect_upgrades():
     assert df.height > 0
 
 
-@pytest.mark.usefixtures("cleanup_downloads")
-def test_read_load_curve_15min():
+@pytest.mark.asyncio
+async def test_read_load_curve_15min(target_folder: Path):
     """Test reading 15-minute load curve data."""
-    bldg_ids = [
-        BuildingID(
-            bldg_id=122289, upgrade_id="0", release_year="2024", weather="tmy3", release_number="2", res_com="resstock"
-        )
-    ]
-    fetch_bldg_data(bldg_ids, ("load_curve_15min",), Path("data"))
+    buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 1)
+    _ = await download_and_process_all(target_folder, buildings, ["load_curve_15min"])
 
     bsr = BuildStockRead(
-        data_path="data",
+        data_path=target_folder,
         release="res_2024_tmy3_2",
         states="NY",
     )
@@ -118,23 +97,14 @@ def test_read_load_curve_15min():
     assert "bldg_id" in df.columns
 
 
-@pytest.mark.usefixtures("cleanup_downloads")
-def test_read_load_curve_hourly():
+@pytest.mark.asyncio
+async def test_read_load_curve_hourly(target_folder: Path):
     """Test reading hourly load curve data."""
-    bldg_ids = [
-        BuildingID(
-            bldg_id=122289,
-            upgrade_id="0",
-            release_year="2024",
-            weather="tmy3",
-            release_number="2",
-            res_com="resstock",
-        )
-    ]
-    fetch_bldg_data(bldg_ids, ("load_curve_hourly",), Path("data"))
+    buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 1)
+    _ = await download_and_process_all(target_folder, buildings, ["load_curve_hourly"])
 
     bsr = BuildStockRead(
-        data_path="data",
+        data_path=target_folder,
         release="res_2024_tmy3_2",
         states="NY",
     )
@@ -147,22 +117,13 @@ def test_read_load_curve_hourly():
     assert "timestamp" in df.columns
 
 
-@pytest.mark.usefixtures("cleanup_downloads")
-def test_read_load_curve_daily():
+@pytest.mark.asyncio
+async def test_read_load_curve_daily(target_folder: Path):
     """Test reading daily load curve data."""
-    bldg_ids = [
-        BuildingID(
-            bldg_id=122289,
-            upgrade_id="0",
-            release_year="2024",
-            weather="tmy3",
-            release_number="2",
-            res_com="resstock",
-        )
-    ]
-    fetch_bldg_data(bldg_ids, ("load_curve_daily",), Path("data"))
+    buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 1)
+    _ = await download_and_process_all(target_folder, buildings, ["load_curve_daily"])
     bsr = BuildStockRead(
-        data_path="data",
+        data_path=target_folder,
         release="res_2024_tmy3_2",
         states="NY",
     )
@@ -177,22 +138,13 @@ def test_read_load_curve_daily():
     assert "timestamp" in df.columns
 
 
-@pytest.mark.usefixtures("cleanup_downloads")
-def test_read_load_curve_annual():
+@pytest.mark.asyncio
+async def test_read_load_curve_annual(target_folder: Path):
     """Test reading annual load curve data."""
-    bldg_ids = [
-        BuildingID(
-            bldg_id=122289,
-            upgrade_id="0",
-            release_year="2024",
-            weather="tmy3",
-            release_number="2",
-            res_com="resstock",
-        )
-    ]
-    fetch_bldg_data(bldg_ids, ("load_curve_annual",), Path("data"))
+    buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 1)
+    _ = await download_and_process_all(target_folder, buildings, ["load_curve_annual"])
     bsr = BuildStockRead(
-        data_path="data",
+        data_path=target_folder,
         release="res_2024_tmy3_2",
         states="NY",
     )
@@ -205,56 +157,37 @@ def test_read_load_curve_annual():
     assert "bldg_id" in df.columns
 
 
-@pytest.mark.usefixtures("cleanup_downloads")
-def test_read_load_curve_not_available_for_release():
+@pytest.mark.asyncio
+async def test_read_load_curve_not_available_for_release(target_folder: Path):
     """Test that LoadCurveNotFoundError is raised for unavailable data type in release."""
-    bldg_ids = [
-        BuildingID(
-            bldg_id=122289,
-            upgrade_id="0",
-            release_year="2024",
-            weather="tmy3",
-            release_number="2",
-            res_com="resstock",
-        )
-    ]
-    fetch_bldg_data(bldg_ids, ("load_curve_annual",), Path("data"))
+    buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 1)
+    _ = await download_and_process_all(target_folder, buildings, ["load_curve_annual"])
     bsr = BuildStockRead(
-        data_path="data",
+        data_path=target_folder,
         release="res_2024_tmy3_2",
         states="NY",
     )
     # RES_2024_TMY3_2 should have load_curve_15min available, but not on disk
     with pytest.raises((FileTypeNotAvailableError, NoUpgradesFoundError)):
-        bsr.read_load_curve_15min(upgrades="0")
+        _ = bsr.read_load_curve_15min(upgrades="0")
 
 
-@pytest.mark.usefixtures("cleanup_downloads")
-def test_sampling_with_seed():
+@pytest.mark.asyncio
+async def test_sampling_with_seed(target_folder: Path):
     """Test that sampling with seed is reproducible."""
+    buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 200)
     bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
+    _ = await download_and_process_all(target_folder, buildings, ["metadata"])
 
-    fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
-    bldg_ids = [
-        BuildingID(
-            bldg_id=122289,
-            upgrade_id="0",
-            release_year="2024",
-            weather="tmy3",
-            release_number="2",
-            res_com="resstock",
-        )
-    ]
-    fetch_bldg_data(bldg_ids, ("metadata",), Path("data"))
     bsr1 = BuildStockRead(
-        data_path="data",
+        data_path=target_folder,
         release="res_2024_tmy3_2",
         states="NY",
         sample_n=100,
         random=42,
     )
     bsr2 = BuildStockRead(
-        data_path="data",
+        data_path=target_folder,
         release="res_2024_tmy3_2",
         states="NY",
         sample_n=100,

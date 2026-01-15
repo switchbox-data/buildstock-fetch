@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Collection
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -40,10 +41,14 @@ async def download_and_process_all(
     target_folder: Path,
     buildings: Collection[Building],
     file_types: Collection[FileType],
-    max_concurrent_downloads: int = 20,
+    max_connections: int = 50,
+    max_tasks: int = 200,
+    max_processing_tasks: int = 2,
 ) -> None:
+    semaphore = asyncio.Semaphore(max_tasks)
+    processing_semaphore = asyncio.Semaphore(max_processing_tasks)
     file_types_ = set(file_types)
-    limits = httpx.Limits(max_connections=max_concurrent_downloads, max_keepalive_connections=10)
+    limits = httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_connections)
     timeout = httpx.Timeout(60)
     s3_session = aioboto3.Session()
     s3_client_ = s3_session.client("s3", config=AioConfig(signature_version=UNSIGNED))  # pyright: ignore[reportUnknownMemberType]
@@ -57,6 +62,8 @@ async def download_and_process_all(
                 client,
                 curves & file_types_,
                 list(buildings),
+                semaphore,
+                processing_semaphore,
             )
         if "load_curve_annual" in file_types_:
             _ = await download_and_process_annual_results(
@@ -71,18 +78,23 @@ async def download_and_process_all(
                 client,
                 energy_models & file_types_,
                 buildings,
+                semaphore,
+                processing_semaphore,
             )
         if "trip_schedules" in file_types_:
             _ = await download_and_process_trip_schedules_batch(
                 target_folder,
                 s3_client,
                 buildings,
+                semaphore,
+                processing_semaphore,
             )
         if "weather" in file_types:
             _ = await download_and_process_weather_batch(
                 target_folder,
                 client,
                 buildings,
+                semaphore,
             )
 
 

@@ -173,7 +173,8 @@ class Building:
     def county(self) -> str:
         if self.cached_county is not None:
             return self.cached_county
-        raise RuntimeError()
+        msg = "County is not set"
+        raise RuntimeError(msg)
 
     @property
     def weather_path(self) -> str | None:  # noqa: C901

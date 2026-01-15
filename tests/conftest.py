@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(scope="session")
+def vcr_config():
+    return {"record_mode": "new_episodes"}
+
+
 @pytest.fixture(scope="function")
 def cleanup_downloads():
     """Fixture to clean up downloaded data before and after tests.

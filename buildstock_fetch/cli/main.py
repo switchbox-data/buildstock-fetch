@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Annotated, NamedTuple, cast, get_args
 
 import questionary
-from rich.logging import RichHandler
 import typer
 from rich.console import Console
+from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
 from typing_extensions import Never
@@ -194,7 +194,7 @@ def main(  # noqa: C901
             inputs_final.output_directory,
             buildings,
             inputs_final.file_types,
-            max_concurrent_downloads=threads,
+            max_connections=threads,
         )
     )
 

@@ -17,8 +17,12 @@ from .constants import OEDI_WEB_URL
 
 
 async def download_and_process_weather_batch(
-    target_folder: Path, client: AsyncClient, buildings: Collection[Building]
+    target_folder: Path,
+    client: AsyncClient,
+    buildings: Collection[Building],
+    semaphore: asyncio.Semaphore | None = None,
 ) -> list[Path]:
+    semaphore = semaphore or asyncio.Semaphore(200)
     buildings_in_weather_states: list[Building] = []
     for building in buildings:
         if building.state not in RELEASES[building.release].weather_map_available_states:
@@ -40,7 +44,7 @@ async def download_and_process_weather_batch(
 
     progress = DownloadAndProcessProgress(estimated_download_size, len(urls), "Downloading weather files")
 
-    tasks = [_download_and_process(target_folder, client, url, paths, progress) for url, paths in grouped]
+    tasks = [_download_and_process(target_folder, client, url, paths, progress, semaphore) for url, paths in grouped]
 
     with progress.live():
         result = await asyncio.gather(*tasks, return_exceptions=True)
@@ -55,9 +59,10 @@ async def _download_and_process(
     url: str,
     copy_to_paths: Collection[Path],
     progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
 ) -> list[Path]:
     result: list[Path] = []
-    async with download(client, url, progress) as f:
+    async with semaphore, download(client, url, progress) as f:
         file_path = Path(cast(str, f.name))
         progress.on_processing_started()
         for path in copy_to_paths:
