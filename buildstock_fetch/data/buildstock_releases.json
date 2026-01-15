@@ -726,7 +726,6 @@
       "260"
     ],
     "available_data": [
-      "load_curve_annual",
       "metadata",
       "weather"
     ]
