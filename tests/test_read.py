@@ -194,7 +194,6 @@ async def test_read_load_curve_not_available_for_release(target_folder: Path):
 async def test_sampling_with_seed(target_folder: Path):
     """Test that sampling with seed is reproducible."""
     buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 200)
-    bldg_ids = [BuildingID(bldg_id=7, upgrade_id="0")]
     _ = await download_and_process_all(target_folder, buildings, ["metadata"])
 
     bsr1 = BuildStockRead(
