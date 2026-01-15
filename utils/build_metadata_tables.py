@@ -8,7 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
 import boto3
 import polars as pl
@@ -266,7 +266,7 @@ def _handle_bldg_id_column(df: pl.DataFrame, file_key: str, s3: Any, bucket_name
     return df
 
 
-def _validate_bldg_id(df: pl.DataFrame, release_name: Union[str, None]) -> tuple[pl.DataFrame, bool]:
+def _validate_bldg_id(df: pl.DataFrame, release_name: str | None) -> tuple[pl.DataFrame, bool]:
     """
     Validate bldg_id column and return the modified DataFrame and validation status.
 
@@ -310,10 +310,10 @@ def _validate_bldg_id(df: pl.DataFrame, release_name: Union[str, None]) -> tuple
 
 def _add_metadata_columns(
     df: pl.DataFrame,
-    res_com: Union[str, None],
-    weather: Union[str, None],
-    release_version: Union[str, None],
-    release_year: Union[str, None],
+    res_com: str | None,
+    weather: str | None,
+    release_version: str | None,
+    release_year: str | None,
 ) -> pl.DataFrame:
     """
     Add metadata columns to DataFrame.
@@ -349,12 +349,12 @@ def process_parquet_file(
     file_key: str,
     s3: Any,
     bucket_name: str,
-    res_com: Union[str, None] = None,
-    weather: Union[str, None] = None,
-    release_version: Union[str, None] = None,
-    release_year: Union[str, None] = None,
-    release_name: Union[str, None] = None,
-) -> Union[pl.DataFrame, None]:
+    res_com: str | None = None,
+    weather: str | None = None,
+    release_version: str | None = None,
+    release_year: str | None = None,
+    release_name: str | None = None,
+) -> pl.DataFrame | None:
     """
     Process a parquet file from S3 and return a polars DataFrame.
 
@@ -411,7 +411,7 @@ def process_parquet_file(
         return df
 
 
-def _extract_upgrade_number(filename: str) -> Union[str, None]:
+def _extract_upgrade_number(filename: str) -> str | None:
     """
     Extract upgrade number from filename like 'AK_G0200130_upgrade01.parquet'.
 
@@ -589,12 +589,12 @@ def find_all_parquet_files(base_file_key: str, s3_client: Any, bucket_name: str)
 def _process_single_file(
     file_key: str,
     bucket_name: str,
-    res_com: Union[str, None],
-    weather: Union[str, None],
-    release_version: Union[str, None],
-    release_year: Union[str, None],
-    release_name: Union[str, None],
-) -> Union[pl.DataFrame, None]:
+    res_com: str | None,
+    weather: str | None,
+    release_version: str | None,
+    release_year: str | None,
+    release_name: str | None,
+) -> pl.DataFrame | None:
     """
     Process a single parquet file. This function is designed to be called in parallel.
 
@@ -630,7 +630,7 @@ def _process_release_2021(
     release_name: str,
     release: dict[str, Any],
     bucket_name: str,
-) -> Union[pl.DataFrame, None]:
+) -> pl.DataFrame | None:
     """Process a 2021 release."""
     release_year = release["release_year"]
     res_com = release["res_com"]
@@ -648,7 +648,7 @@ def _process_release_2022_2024(
     release_name: str,
     release: dict[str, Any],
     bucket_name: str,
-) -> Union[pl.DataFrame, None]:
+) -> pl.DataFrame | None:
     """Process a 2022-2024 release (excluding special 2024 releases)."""
     release_year = release["release_year"]
     res_com = release["res_com"]
@@ -809,7 +809,7 @@ def _process_release_2024_2025(
     release: dict[str, Any],
     bucket_name: str,
     s3_client: Any,
-) -> Union[pl.DataFrame, None]:
+) -> pl.DataFrame | None:
     """Process a 2024/2025 release with multiple files."""
     release_year = release["release_year"]
     res_com = release["res_com"]
@@ -877,7 +877,7 @@ def _process_release_2024_res_tmy3_1(
     release: dict[str, Any],
     bucket_name: str,
     s3_client: Any,
-) -> Union[pl.DataFrame, None]:
+) -> pl.DataFrame | None:
     """Process a 2024 ResStock TMY3 release 1."""
     release_year = "2024"
     res_com = "resstock"
@@ -928,7 +928,7 @@ if __name__ == "__main__":
 
     logger.info(f"Releases to process: {list(data.keys())}")
 
-    def _process_release_wrapper(release_name: str, release: dict[str, Any]) -> tuple[str, Union[pl.DataFrame, None]]:
+    def _process_release_wrapper(release_name: str, release: dict[str, Any]) -> tuple[str, pl.DataFrame | None]:
         """Wrapper function to process a release and return (release_name, df)."""
         release_year = release["release_year"]
 

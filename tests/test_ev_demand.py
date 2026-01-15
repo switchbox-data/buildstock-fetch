@@ -259,7 +259,7 @@ def test_generate_daily_schedules(calculator):
     print(schedules)
     assert len(schedules) == len(expected_schedules)
 
-    for actual, expected in zip(schedules.iter_rows(named=True), expected_schedules):
+    for actual, expected in zip(schedules.iter_rows(named=True), expected_schedules, strict=True):
         assert actual["bldg_id"] == "b1"
         assert actual["vehicle_id"] == 1
         assert actual["date"] == expected["date"]

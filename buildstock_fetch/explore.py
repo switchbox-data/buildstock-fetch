@@ -6,7 +6,7 @@ from typing import Any, TypeVar, cast
 
 from typing_extensions import Self
 
-from buildstock_fetch.releases import RELEASES, BuildstockRelease, BuildstockReleases
+from buildstock_fetch.releases import RELEASES, BuildstockRelease
 
 from .types import (
     FileType,

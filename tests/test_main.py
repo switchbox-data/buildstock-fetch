@@ -2426,7 +2426,7 @@ def test_aggregation_functions(cleanup_downloads):
 
     load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
     aggregation_rules = pl.read_csv(load_curve_map)
-    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
+    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"], strict=True))
 
     for aggregate_timestep in aggregate_timesteps:
         # Create a copy of the 15min data and apply the same timestamp adjustment as the aggregation function
@@ -2467,7 +2467,7 @@ def test_aggregation_functions(cleanup_downloads):
 
     load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_resstock_load_curve_columns.csv")
     aggregation_rules = pl.read_csv(load_curve_map)
-    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
+    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"], strict=True))
 
     for aggregate_timestep in aggregate_timesteps:
         # Create a copy of the 15min data and apply the same timestamp adjustment as the aggregation function

@@ -1,11 +1,9 @@
-import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import polars as pl
 import pytest
 
-from buildstock_fetch.building import BuildingID
 from buildstock_fetch.main_new import download_and_process_all, list_buildings
 from buildstock_fetch.read import BuildStockRead, FileTypeNotAvailableError, NoUpgradesFoundError
 from buildstock_fetch.types import normalize_upgrade_id
