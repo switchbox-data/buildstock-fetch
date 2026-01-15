@@ -4,8 +4,7 @@ from dataclasses import asdict, dataclass
 import polars as pl
 
 from buildstock_fetch.constants import METADATA_DIR, RELEASE_JSON_FILE, WEATHER_FILE_DIR
-from buildstock_fetch.releases import RELEASES, BuildstockRelease
-from buildstock_fetch.types import ReleaseKey, ReleaseYear, ResCom, UpgradeID, USStateCode, Weather
+from buildstock_fetch.types import ReleaseYear, ResCom, Weather
 
 from .annualcurve import get_annual_load_curve_url
 from .annualcurvefilename import get_annual_load_curve_filename
@@ -19,22 +18,6 @@ __all__ = [
 ]
 
 weather_map_df = pl.read_parquet(WEATHER_FILE_DIR)
-
-
-@dataclass(frozen=True)
-class Building:
-    id: int
-    release: ReleaseKey
-    upgrade: UpgradeID
-    state: USStateCode
-
-    @property
-    def release_obj(self) -> BuildstockRelease:
-        return RELEASES[self.release]
-
-    @property
-    def metadata_url(self) -> str | None:
-        pass
 
 
 @dataclass(frozen=True)
