@@ -18,6 +18,8 @@ def target_folder():
 
 
 @pytest.mark.asyncio
+@pytest.mark.vcr
+@pytest.mark.network
 async def test_read_metadata_single_upgrade(target_folder: Path):
     buildings = list_buildings("res_2022_tmy3_1", "NY", normalize_upgrade_id("0"), 1)
     _ = await download_and_process_all(target_folder, buildings, ["metadata"])
@@ -34,6 +36,8 @@ async def test_read_metadata_single_upgrade(target_folder: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.vcr
+@pytest.mark.network
 async def test_read_metadata_multiple_upgrades(target_folder: Path):
     """Test reading metadata for multiple upgrades."""
     buildings = [
@@ -58,6 +62,8 @@ async def test_read_metadata_multiple_upgrades(target_folder: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.vcr
+@pytest.mark.network
 async def test_read_metadata_auto_detect_upgrades(target_folder: Path):
     """Test reading metadata with auto-detected upgrades."""
 
@@ -77,6 +83,8 @@ async def test_read_metadata_auto_detect_upgrades(target_folder: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.vcr
+@pytest.mark.network
 async def test_read_load_curve_15min(target_folder: Path):
     """Test reading 15-minute load curve data."""
     buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 1)
@@ -98,6 +106,8 @@ async def test_read_load_curve_15min(target_folder: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.vcr
+@pytest.mark.network
 async def test_read_load_curve_hourly(target_folder: Path):
     """Test reading hourly load curve data."""
     buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 1)
@@ -118,6 +128,8 @@ async def test_read_load_curve_hourly(target_folder: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.vcr
+@pytest.mark.network
 async def test_read_load_curve_daily(target_folder: Path):
     """Test reading daily load curve data."""
     buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 1)
@@ -139,6 +151,8 @@ async def test_read_load_curve_daily(target_folder: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.vcr
+@pytest.mark.network
 async def test_read_load_curve_annual(target_folder: Path):
     """Test reading annual load curve data."""
     buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 1)
@@ -158,6 +172,8 @@ async def test_read_load_curve_annual(target_folder: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.vcr
+@pytest.mark.network
 async def test_read_load_curve_not_available_for_release(target_folder: Path):
     """Test that LoadCurveNotFoundError is raised for unavailable data type in release."""
     buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 1)
@@ -173,6 +189,8 @@ async def test_read_load_curve_not_available_for_release(target_folder: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.vcr
+@pytest.mark.network
 async def test_sampling_with_seed(target_folder: Path):
     """Test that sampling with seed is reproducible."""
     buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 200)

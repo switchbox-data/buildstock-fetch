@@ -68,6 +68,7 @@ def test_15min_load_curve(building: Building):
     ],
     ids=building_id_str,
 )
+@pytest.mark.network
 def test_15min_load_curve_file_type_unavailable(building: Building):
     with pytest.raises(UnavailableFileTypeError):
         _ = building.load_curve_15min_path
@@ -84,6 +85,8 @@ def test_15min_load_curve_file_type_unavailable(building: Building):
     ],
     ids=building_id_str,
 )
+@pytest.mark.vcr
+@pytest.mark.network
 def test_annual_load_curve(building: Building):
     url = urljoin(OEDI_WEB_URL, building.load_curve_annual_path)
     response = httpx.head(url)
@@ -120,6 +123,7 @@ def test_annual_load_curve_file_type_unavailable(building: Building):
     ],
     ids=building_id_str,
 )
+@pytest.mark.vcr
 def test_energy_models_path(building: Building):
     url = urljoin(OEDI_WEB_URL, building.energy_models_path)
     response = httpx.head(url)

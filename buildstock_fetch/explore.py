@@ -35,13 +35,13 @@ T = TypeVar("T")
 class DownloadedDataInfo:
     base_path: Path
     filename: str
-    release: BuildstockRelease
+    release_key: ReleaseKey
     file_type: FileType
     state: USStateCode
     upgrade: UpgradeID
 
     @classmethod
-    def from_file_path(cls, path: Path, releases: BuildstockReleases = RELEASES) -> Self:
+    def from_file_path(cls, path: Path) -> Self:
         posix_path = path.as_posix()
         match = DOWNLOADED_FILE_PATH_REGEXP.match(posix_path)
         if match is None:
@@ -52,7 +52,7 @@ class DownloadedDataInfo:
         upgrade = normalize_upgrade_id(cast(str, groups["upgrade_id"]))
         state = normalize_state_code(cast(str, groups["state"]))
         file_type = normalize_file_type(cast(str, groups["file_type"]))
-        release = releases[normalize_release_key(cast(str, groups["release_key"]))]
+        release = normalize_release_key(cast(str, groups["release_key"]))
         base_path = Path(cast(str, groups["base_path"]))
 
         return cls(
@@ -61,14 +61,14 @@ class DownloadedDataInfo:
             file_type=file_type,
             state=state,
             upgrade=upgrade,
-            release=release,
+            release_key=release,
         )
 
     @property
     def file_path(self) -> Path:
         return (
             self.base_path
-            / self.release.key
+            / self.release_key
             / self.file_type
             / f"state={self.state}"
             / f"upgrade={self.upgrade.zfill(2)}"
@@ -76,8 +76,8 @@ class DownloadedDataInfo:
         )
 
     @property
-    def release_key(self) -> ReleaseKey:
-        return self.release.key
+    def release(self) -> BuildstockRelease:
+        return RELEASES[self.release_key]
 
     def match(  # noqa: C901
         self,
@@ -98,7 +98,7 @@ class DownloadedDataInfo:
         if isinstance(suffix, str):
             suffix = (suffix,)
 
-        if release_key is not None and all(_ != self.release_key for _ in release_key):
+        if release_key is not None and all(_ != self.release for _ in release_key):
             return False
         if file_type is not None and all(_ != self.file_type for _ in file_type):
             return False
@@ -144,7 +144,6 @@ def filter_downloads(
     file_type: Collection[FileType] | FileType | None = None,
     state: Collection[USStateCode] | USStateCode | None = None,
     upgrade: Collection[UpgradeID] | UpgradeID | None = None,
-    releases: BuildstockReleases = RELEASES,
 ) -> Iterator[DownloadedDataInfo]:
     if is_valid_release_key(release_key):
         release_key = (release_key,)
@@ -156,7 +155,7 @@ def filter_downloads(
         upgrade = (upgrade,)
 
     return (
-        DownloadedDataInfo.from_file_path(file_, releases)
+        DownloadedDataInfo.from_file_path(file_)
         for release_key_path in path.iterdir()
         if (release_key_value := noraise(normalize_release_key, release_key_path.name)) is not None
         if release_key is None or release_key_value in release_key

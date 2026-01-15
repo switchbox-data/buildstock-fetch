@@ -32,6 +32,7 @@ def first_building_id_str(buildings: Collection[Building]) -> str:
 
 @pytest.mark.vcr
 @pytest.mark.asyncio
+@pytest.mark.network
 @pytest.mark.parametrize(
     ["buildings"],
     [
@@ -76,6 +77,7 @@ async def test_metadata_has_required_fields_and_exists_in_paths(target_folder: P
 
 # @pytest.mark.vcr
 @pytest.mark.asyncio
+@pytest.mark.network
 @pytest.mark.parametrize(
     "buildings_partitioned",
     [
@@ -139,6 +141,7 @@ RELEASES_WITH_LOAD_CURVES: list[ReleaseKey] = [
 
 @pytest.mark.vcr
 @pytest.mark.asyncio
+@pytest.mark.network
 @pytest.mark.parametrize(
     ["buildings"],
     [
@@ -183,6 +186,7 @@ async def test_load_curve_annual(target_folder: Path, buildings: Collection[Buil
 
 @pytest.mark.vcr
 @pytest.mark.asyncio
+@pytest.mark.network
 @pytest.mark.parametrize(
     "buildings_partitioned",
     [
@@ -232,6 +236,7 @@ async def test_annual_load_curves_merging(target_folder: Path, buildings_partiti
 
 @pytest.mark.vcr
 @pytest.mark.asyncio
+@pytest.mark.network
 @pytest.mark.parametrize(
     ["buildings"],
     [

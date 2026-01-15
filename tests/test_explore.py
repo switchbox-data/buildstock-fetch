@@ -15,6 +15,8 @@ def target_folder():
 
 
 @pytest.mark.asyncio
+@pytest.mark.vcr
+@pytest.mark.network
 async def test_metadata_upgrade_located(target_folder: Path):
     buildings = list_buildings("res_2024_tmy3_2", "NY", normalize_upgrade_id("0"), 5)
     _ = await download_and_process_all(target_folder, buildings, ["metadata"])
