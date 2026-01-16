@@ -102,7 +102,7 @@ async def estimate_download_size(client: AsyncClient, urls: Collection[str]) -> 
     with progress:
         for future in asyncio.as_completed(tasks):
             try:
-                value = future.result()
+                value = await future
                 results.append(value)
             except Exception as _:
                 logging.getLogger(__name__).exception("An error occured while estimating download size")
