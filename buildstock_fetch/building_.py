@@ -141,7 +141,7 @@ class Building:
         if "hpxml" not in obj.file_types:
             raise UnavailableFileTypeError(self, "hpxml")
         if "schedule" not in obj.file_types:
-            raise UnavailableFileTypeError(self, "hpxml")
+            raise UnavailableFileTypeError(self, "schedule")
 
         bldg_str = f"bldg{str(self.id).zfill(7)}"
         upgrade_str = f"up{self.upgrade.zfill(2)}"
