@@ -97,9 +97,9 @@ out.natural_gas.total.energy_consumption,sum
 out.natural_gas.total.energy_consumption_intensity,sum
 out.propane.total.energy_consumption,sum
 out.propane.total.energy_consumption_intensity,sum
-out.load.cooling.energy_delivered.kbtu,sum
-out.load.heating.energy_delivered.kbtu,sum
-out.load.hot_water.energy_delivered.kbtu,sum
+out.load.cooling.energy_delivered.kbtu,mean
+out.load.heating.energy_delivered.kbtu,mean
+out.load.hot_water.energy_delivered.kbtu,mean
 out.outdoor_air_dryblub_temp.c,mean
 out.zone_mean_air_temp.air_source_heat_pump_airloop_ret_air_zone.c,mean
 out.zone_mean_air_temp.attic_vented.c,mean
