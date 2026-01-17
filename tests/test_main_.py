@@ -45,7 +45,7 @@ def first_building_id_str(buildings: Collection[Building]) -> str:
     ids=first_building_id_str,
 )
 async def test_metadata_has_required_fields_and_exists_in_paths(target_folder: Path, buildings: Collection[Building]):
-    METADATA_COLUMNS = ["bldg_id", "upgrade", "in."]
+    METADATA_COLUMNS = ["bldg_id", "upgrade", "in.", "upgrade."]
     NOT_METADATA_COLUMNS = ["out."]
     await download_and_process_all(target_folder, buildings, ["metadata"])
     filenames: set[Path] = set()
@@ -90,7 +90,7 @@ async def test_metadata_has_required_fields_and_exists_in_paths(target_folder: P
     ids=lambda _: first_building_id_str(_[0]),
 )
 async def test_metadata_merging(target_folder: Path, buildings_partitioned: list[Collection[Building]]):
-    METADATA_COLUMNS = ["bldg_id", "upgrade", "in."]
+    METADATA_COLUMNS = ["bldg_id", "upgrade", "in.", "upgrade."]
     NOT_METADATA_COLUMNS = ["out."]
 
     for building_chunk in buildings_partitioned:

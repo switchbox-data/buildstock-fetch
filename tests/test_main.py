@@ -337,7 +337,7 @@ def test_fetch_bldg_data(cleanup_downloads):
 
 
 def test_fetch_metadata(cleanup_downloads):
-    METADATA_COLUMNS = ["bldg_id", "upgrade", "in."]
+    METADATA_COLUMNS = ["bldg_id", "upgrade", "in.", "upgrade."]
     NOT_METADATA_COLUMNS = ["out."]
     bldg_ids = [
         BuildingID(
@@ -694,7 +694,7 @@ def test_fetch_metadata(cleanup_downloads):
 
 
 def test_fetch_metadata_relevant_bldg_id(cleanup_downloads):
-    METADATA_COLUMNS = ["bldg_id", "upgrade", "in."]
+    METADATA_COLUMNS = ["bldg_id", "upgrade", "in.", "upgrade."]
     NOT_METADATA_COLUMNS = ["out."]
     bldg_ids = [
         BuildingID(
