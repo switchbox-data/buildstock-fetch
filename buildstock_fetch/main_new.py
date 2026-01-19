@@ -1,4 +1,5 @@
 import asyncio
+import os
 from collections.abc import Collection
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -41,10 +42,12 @@ async def download_and_process_all(
     target_folder: Path,
     buildings: Collection[Building],
     file_types: Collection[FileType],
-    max_connections: int = 50,
     max_tasks: int = 200,
-    max_processing_tasks: int = 2,
+    max_connections: int | None = None,
+    max_processing_tasks: int | None = None,
 ) -> None:
+    max_connections = max_connections or max_tasks
+    max_processing_tasks = max_processing_tasks or os.cpu_count() or 2
     semaphore = asyncio.Semaphore(max_tasks)
     processing_semaphore = asyncio.Semaphore(max_processing_tasks)
     file_types_ = set(file_types)

@@ -284,6 +284,7 @@ dependencies = [
     { name = "typedload" },
     { name = "typer" },
     { name = "types-aioboto3", extra = ["essential", "s3"] },
+    { name = "useful-types" },
     { name = "xmltodict" },
 ]
 
@@ -308,7 +309,6 @@ dev = [
     { name = "types-aiofiles" },
     { name = "types-boto3" },
     { name = "types-requests" },
-    { name = "useful-types" },
     { name = "xmltodict" },
 ]
 dev-utils = [
@@ -332,7 +332,6 @@ lint = [
     { name = "types-aiofiles" },
     { name = "types-boto3" },
     { name = "types-requests" },
-    { name = "useful-types" },
 ]
 test = [
     { name = "pytest" },
@@ -376,7 +375,7 @@ requires-dist = [
     { name = "types-aiofiles", marker = "extra == 'lint'", specifier = ">=25.1.0.20251011" },
     { name = "types-boto3", marker = "extra == 'lint'", specifier = ">=1.33.0" },
     { name = "types-requests", marker = "extra == 'lint'", specifier = ">=2.31.0" },
-    { name = "useful-types", marker = "extra == 'lint'", specifier = ">=0.2.1" },
+    { name = "useful-types", specifier = ">=0.2.1" },
     { name = "xmltodict", specifier = ">=1.0.2" },
     { name = "xmltodict", marker = "extra == 'dev-utils'", specifier = ">=0.14.2" },
 ]

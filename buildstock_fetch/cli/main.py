@@ -110,9 +110,13 @@ def main(  # noqa: C901
             help="Number of building IDs to download across all upgrades. Use 0 for all buildings.",
         ),
     ] = None,
-    threads: Annotated[
+    tasks: Annotated[
         int, typer.Option("--threads", "-t", help="Number of files to download at the same time", min=1, max=100)
     ] = 15,
+    connections: Annotated[int | None, typer.Option("--connections", help="Number of http connections")] = None,
+    processing_tasks: Annotated[
+        int | None, typer.Option("--processing_tasks", help="Number of processing tasks")
+    ] = None,
 ) -> None:
     logging.basicConfig(level=logging.ERROR, handlers=[RichHandler()])
 
@@ -171,7 +175,7 @@ def main(  # noqa: C901
     if not inputs_finalized:
         if not verify_inputs(inputs_final):
             cancel()
-        display_cli_args(inputs_final, threads, sample)
+        display_cli_args(inputs_final, tasks, connections, processing_tasks, sample)
 
     display_download_parameters(inputs_final)
     release = releases.filter_one(**inputs.as_filter())
@@ -194,7 +198,9 @@ def main(  # noqa: C901
             inputs_final.output_directory,
             buildings,
             inputs_final.file_types,
-            max_connections=threads,
+            max_tasks=tasks,
+            max_connections=connections,
+            max_processing_tasks=processing_tasks,
         )
     )
 
@@ -427,7 +433,9 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[Building]
     return result
 
 
-def display_cli_args(inputs: InputsFinal, threads: int, sample: Sample | None) -> None:
+def display_cli_args(
+    inputs: InputsFinal, tasks: int, connections: int | None, processing_tasks: int | None, sample: Sample | None
+) -> None:
     console.print("[blue]Paste this in the command line to launch the script again with the same arguments[/]")
     display = (
         "bsf \\\n\t"
@@ -439,8 +447,12 @@ def display_cli_args(inputs: InputsFinal, threads: int, sample: Sample | None) -
         f'--file_type "{" ".join(sorted(inputs.file_types, key=get_args(FileType).index))}"\\\n\t'
         f'--upgrade_id "{" ".join(map(str, sorted(inputs.upgrade_ids)))}"\\\n\t'
         f'--output_directory "{inputs.output_directory.as_posix()}"\\\n\t'
-        f"--threads {threads}"
+        f"--tasks {tasks}"
     )
+    if connections is not None:
+        display += f"\\\n\t--connections {connections}"
+    if processing_tasks is not None:
+        display += f"\\\n\t--processing-tasks {processing_tasks}"
     if sample is not None:
         display += f"\\\n\t--sample {0 if sample == 'all' else sample}"
     console.print(display)
