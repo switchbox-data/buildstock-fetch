@@ -1,0 +1,15 @@
+name,Aggregate_function
+out.electricity.cooling.energy_consumption,sum
+out.electricity.heating.energy_consumption,sum
+out.natural_gas.heating.energy_consumption,sum
+out.electricity.total.energy_consumption,sum
+out.natural_gas.total.energy_consumption,sum
+out.site_energy.total.energy_consumption,sum
+out.electricity.cooling.energy_consumption_intensity,sum
+out.electricity.heating.energy_consumption_intensity,sum
+out.natural_gas.heating.energy_consumption_intensity,sum
+out.electricity.total.energy_consumption_intensity,sum
+out.natural_gas.total.energy_consumption_intensity,sum
+out.site_energy.total.energy_consumption_intensity,sum
+bldg_id,first
+timestamp,first

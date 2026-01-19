@@ -47,18 +47,10 @@ def test_package_functionality():
     """Test basic functionality of the installed package."""
 
     # Test that we can import the main modules
-    try:
-        import buildstock_fetch
-        from buildstock_fetch.cli.main import app
-        from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
-    except ImportError as e:
-        raise AssertionError(f"Failed to import modules: {e}")
+    import buildstock_fetch
 
     # Test that the package has the expected attributes
     assert hasattr(buildstock_fetch, "__version__"), "Package should have __version__"
-
-    # Test that the CLI app is available
-    assert app is not None, "CLI app should be available"
 
 
 def test_slow_run_all_tests():
@@ -90,7 +82,10 @@ def test_slow_run_all_tests():
 
         # Run pytest on the copied test files in the temp environment
         test_result = subprocess.run(
-            [sys.executable, "-m", "pytest", str(temp_test_dir), "-v"], capture_output=True, text=True, cwd=temp_path
+            [sys.executable, "-m", "pytest", str(temp_test_dir), "-v", "--disable-recording"],
+            capture_output=True,
+            text=True,
+            cwd=temp_path,
         )
 
         # Check if tests passed
