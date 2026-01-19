@@ -32,6 +32,7 @@ dependencies = [
   "types-aioboto3[essential,s3]>=15.5.0",
   "aioboto3>=15.5.0",
   "xmltodict>=1.0.2",
+  "useful-types>=0.2.1",
 ]
 
 [project.urls]
@@ -62,7 +63,6 @@ lint = [
   "types-boto3>=1.33.0",
   "pandas-stubs>=2.2.0",
   "types-aiofiles>=25.1.0.20251011",
-  "useful-types>=0.2.1",
 ]
 
 # Development utilities dependencies (only for utils/ directory)
