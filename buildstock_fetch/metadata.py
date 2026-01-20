@@ -36,14 +36,38 @@ async def download_and_process_metadata_batch(
 
     with progress.live():
         tasks = (
-            _download_and_process_metadata(target_folder, client, oedi_metadata_url, partitions, progress, semaphore)
+            _download_and_process_metadata_logged(
+                target_folder, client, oedi_metadata_url, partitions, progress, semaphore
+            )
             for oedi_metadata_url, partitions in grouped.items()
         )
-        nested = await asyncio.gather(*tasks, return_exceptions=True)
-        exceptions: list[BaseException] = [n for n in nested if isinstance(n, BaseException)]
-        for exception in exceptions:
-            logging.getLogger(__name__).exception("error: %s", exception)
-        return [_ for n in nested if not isinstance(n, BaseException) for _ in n]
+        nested = await asyncio.gather(*tasks)
+        return [_ for n in nested for _ in n]
+
+
+async def _download_and_process_metadata_logged(
+    target_folder: Path,
+    client: AsyncClient,
+    oedi_matadata_url: str,
+    partitions: dict[Path, list[Building]],
+    progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
+) -> list[Path]:
+    with progress.live():
+        try:
+            return await _download_and_process_metadata(
+                target_folder,
+                client,
+                oedi_matadata_url,
+                partitions,
+                progress,
+                semaphore,
+            )
+        except Exception as e:
+            logging.getLogger(__name__).exception(
+                "Error while processing url %s", oedi_matadata_url, exc_info=e.with_traceback(None)
+            )
+            return []
 
 
 async def _download_and_process_metadata(

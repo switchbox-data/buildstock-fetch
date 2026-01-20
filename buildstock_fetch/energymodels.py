@@ -10,6 +10,7 @@ from typing import Literal, cast
 from urllib.parse import urljoin
 
 from httpx import AsyncClient
+from polars.meta import build
 
 from .building_ import Building
 from .constants import OEDI_WEB_URL
@@ -45,7 +46,7 @@ async def download_and_process_energy_models_batch(
         "Downloading and processing energy models",
     )
     tasks = [
-        _download_and_process_energy_models_for_building(
+        _download_and_process_energy_models_for_building_logged(
             target_folder,
             client,
             file_types,
@@ -57,10 +58,34 @@ async def download_and_process_energy_models_batch(
         for building in buildings
     ]
     with progress.live():
-        nested = await asyncio.gather(*tasks, return_exceptions=True)
-    for e in (_ for _ in nested if isinstance(_, BaseException)):
-        logging.getLogger(__name__).exception("Error: %s", e)
-    return [_ for n in nested if not isinstance(n, BaseException) for _ in n]
+        nested = await asyncio.gather(*tasks)
+    return [_ for n in nested for _ in n]
+
+
+async def _download_and_process_energy_models_for_building_logged(
+    target_folder: Path,
+    client: AsyncClient,
+    file_types: Collection[ENERGY_MODEL_FILE_TYPE],
+    building: Building,
+    progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
+    processing_semaphore: asyncio.Semaphore,
+) -> list[Path]:
+    try:
+        return await _download_and_process_energy_models_for_building(
+            target_folder,
+            client,
+            file_types,
+            building,
+            progress,
+            semaphore,
+            processing_semaphore,
+        )
+    except Exception as e:
+        logging.getLogger(__name__).exception(
+            "Error while processing building %s", building, exc_info=e.with_traceback(None)
+        )
+        return []
 
 
 async def _download_and_process_energy_models_for_building(

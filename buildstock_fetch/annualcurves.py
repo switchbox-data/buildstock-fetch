@@ -34,15 +34,39 @@ async def download_and_process_annual_results(
     }
     download_size = await estimate_download_size(client, grouped.keys())
     progress = DownloadAndProcessProgress(download_size, len(grouped), "Downloading and processing annual results")
+    tasks = [
+        _download_and_process_annual_results_logged(target_folder, client, oedi_url, partitions, progress, semaphore)
+        for oedi_url, partitions in grouped.items()
+    ]
     with progress.live():
-        tasks = [
-            _download_and_process_annual_results(target_folder, client, oedi_url, partitions, progress, semaphore)
-            for oedi_url, partitions in grouped.items()
-        ]
-        nested = await asyncio.gather(*tasks, return_exceptions=True)
-    for e in (_ for _ in nested if isinstance(_, BaseException)):
-        logging.getLogger(__name__).exception("Error: %s", e)
-    return [_ for n in nested if not isinstance(n, BaseException) for _ in n]
+        nested = await asyncio.gather(*tasks)
+    return [_ for n in nested for _ in n]
+
+
+async def _download_and_process_annual_results_logged(
+    target_folder: Path,
+    client: AsyncClient,
+    oedi_url: str,
+    partitions: dict[Path, list[Building]],
+    progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
+) -> list[Path]:
+    try:
+        result = await _download_and_process_annual_results(
+            target_folder,
+            client,
+            oedi_url,
+            partitions,
+            progress,
+            semaphore,
+        )
+    except Exception as e:
+        logging.getLogger(__name__).exception(
+            "Error while processing url %s", oedi_url, exc_info=e.with_traceback(None)
+        )
+        return []
+    else:
+        return result
 
 
 async def _download_and_process_annual_results(

@@ -50,21 +50,42 @@ async def download_and_process_load_curves_batch(
     progress = DownloadAndProcessProgress(
         estimated_download_size, len(buildings), "Downloading and processing load curves"
     )
+
     tasks = [
-        _download_and_process_load_curves_for_building(
+        _download_and_process_load_curves_for_building_logged(
             target_folder, client, curves, building, progress, semaphore, processing_semaphore
         )
         for building in buildings
     ]
+
     with progress.live():
-        nested = await asyncio.gather(*tasks, return_exceptions=True)
-    exceptions = (_ for _ in nested if isinstance(_, BaseException))
-    for e in exceptions:
-        logging.getLogger(__name__).exception("Error: %s", e)
-    return [_ for n in nested if not isinstance(n, BaseException) for _ in n]
+        result = [path for nested in await asyncio.gather(*tasks) for path in nested]
+    return result
 
 
 sem = asyncio.Semaphore(50)
+
+
+async def _download_and_process_load_curves_for_building_logged(
+    target_folder: Path,
+    client: AsyncClient,
+    curves: Collection[LoadCurve],
+    building: Building,
+    progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
+    processing_semaphore: asyncio.Semaphore,
+) -> list[Path]:
+    try:
+        result = await _download_and_process_load_curves_for_building(
+            target_folder, client, curves, building, progress, semaphore, processing_semaphore
+        )
+    except Exception as e:
+        logging.getLogger(__name__).exception(
+            "Error while processing building %s", building, exc_info=e.with_traceback(None)
+        )
+        return []
+    else:
+        return result
 
 
 async def _download_and_process_load_curves_for_building(

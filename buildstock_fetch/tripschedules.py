@@ -2,6 +2,7 @@ import asyncio
 from asyncio import create_task
 from collections.abc import Collection
 from contextlib import AsyncExitStack
+import logging
 from pathlib import Path
 from typing import cast
 
@@ -58,7 +59,7 @@ async def download_and_process_trip_schedules_batch(
     )
 
     tasks = [
-        _download_and_process(
+        _download_and_process_logged(
             target_folder,
             client,
             [k for k, _ in s3_keys],
@@ -72,7 +73,25 @@ async def download_and_process_trip_schedules_batch(
     ]
     with progress.live():
         result = await asyncio.gather(*tasks)
-    return result
+    return [_ for _ in result if _ is not None]
+
+
+async def _download_and_process_logged(
+    target_folder: Path,
+    client: S3Client,
+    s3_keys: list[str],
+    buildings: Collection[Building],
+    progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
+    processing_semaphore: asyncio.Semaphore,
+) -> Path | None:
+    try:
+        return await _download_and_process(
+            target_folder, client, s3_keys, buildings, progress, semaphore, processing_semaphore
+        )
+    except Exception as e:
+        logging.getLogger(__name__).exception("Error", exc_info=e.with_traceback(None))
+        return None
 
 
 async def _download_and_process(
