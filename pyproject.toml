@@ -34,6 +34,8 @@ dependencies = [
   "xmltodict>=1.0.2",
   "useful-types>=0.2.1",
   "tenacity>=9.1.2",
+  "async-timer>=1.1.6",
+  "psutil>=7.2.1",
 ]
 
 [project.urls]

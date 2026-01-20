@@ -1,5 +1,4 @@
 import asyncio
-import gc
 import logging
 import random
 import shutil
@@ -11,12 +10,12 @@ from urllib.parse import urljoin
 
 import httpx
 import polars as pl
-from httpx import AsyncClient
 import tenacity
+from httpx import AsyncClient
 
 from .building_ import Building
 from .constants import LOAD_CURVE_COLUMN_AGGREGATION, OEDI_WEB_URL
-from .shared import DownloadAndProcessProgress, batched, download, estimate_download_size
+from .shared import DownloadAndProcessProgress, download, estimate_download_size
 from .types import ReleaseKey
 
 AGGREGATION_RULES_CACHE: dict[ReleaseKey, list[pl.Expr]] = {}
@@ -28,7 +27,7 @@ LoadCurveAggregate = Literal[
 ]
 LoadCurve = Literal[LoadCurveAggregate, "load_curve_15min"]
 
-BATCH_SIZE = 1000
+BATCH_SIZE = 200
 
 
 async def download_and_process_load_curves_batch(
@@ -56,18 +55,14 @@ async def download_and_process_load_curves_batch(
         estimated_download_size, len(buildings), "Downloading and processing load curves"
     )
 
-    result: list[Path] = []
-
     with progress.live():
-        for batch in batched(buildings, BATCH_SIZE):
-            tasks = [
-                _download_and_process_load_curves_for_building_logged(
-                    target_folder, client, curves, building, progress, semaphore, processing_semaphore
-                )
-                for building in batch
-            ]
-            result.extend(path for nested in await asyncio.gather(*tasks) for path in nested)
-            _ = gc.collect()
+        tasks = [
+            _download_and_process_load_curves_for_building_logged(
+                target_folder, client, curves, building, progress, semaphore, processing_semaphore
+            )
+            for building in buildings
+        ]
+        result = [path for nested in await asyncio.gather(*tasks) for path in nested]
 
     return result
 

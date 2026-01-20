@@ -3,11 +3,14 @@ import importlib.metadata
 import logging
 import pprint
 import re
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import Annotated, Literal, NamedTuple, cast, get_args
+from typing import Annotated, Any, Literal, NamedTuple, cast, get_args
 
+import psutil
 import questionary
 import typer
+from async_timer.timer import Timer
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
@@ -121,6 +124,7 @@ def main(  # noqa: C901
         int | None, typer.Option("--processing_tasks", help="Number of processing tasks")
     ] = None,
     loglevel: LogLevelStr = "error",
+    logmem: Annotated[bool, typer.Option("--logmem", help="Log memory usage")] = False,
 ) -> None:
     log_levels: dict[LogLevelStr, int] = {
         "critical": logging.CRITICAL,
@@ -203,17 +207,24 @@ def main(  # noqa: C901
             buildings |= set(group.buildings[: -1 if sample == "all" else sample])
     else:
         buildings = get_buildings_sample(building_groups)
-
-    _ = asyncio.run(
-        download_and_process_all(
-            inputs_final.output_directory,
-            buildings,
-            inputs_final.file_types,
-            max_tasks=tasks,
-            max_connections=connections,
-            max_processing_tasks=processing_tasks,
-        )
+    callee = download_and_process_all(
+        inputs_final.output_directory,
+        buildings,
+        inputs_final.file_types,
+        max_tasks=tasks,
+        max_connections=connections,
+        max_processing_tasks=processing_tasks,
     )
+
+    if logmem:
+        asyncio.run(run_with_logmem(callee))
+    else:
+        _ = asyncio.run(callee)
+
+
+async def run_with_logmem(callee: Awaitable):  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]
+    async with Timer(10, print_memory_info):  # pyright: ignore[reportUnknownArgumentType]
+        _ = await callee  # pyright: ignore[reportUnknownVariableType]
 
 
 def select_product(releases: BuildstockReleases, inputs: InputsMaybe) -> ResCom:
@@ -548,6 +559,12 @@ def _validate_sample(value: int) -> Sample:
 def cancel(result: int = 0, message: str = "Operation cancelled by user.") -> Never:
     console.print(f"\n[red]{message}[/red]")
     raise typer.Exit(result) from None
+
+
+def print_memory_info():
+    process = psutil.Process()
+    rss_mb = cast(int, process.memory_info().rss) / (1024 * 1024)
+    print(f"RSS Memory Usage = {rss_mb:.2f} MB")
 
 
 if __name__ == "__main__":

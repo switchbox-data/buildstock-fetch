@@ -118,10 +118,6 @@ async def _estimate_average_download_size_single_file(client: AsyncClient, url: 
     return int(cast(str, response.headers.get("content-length")))
 
 
-@tenacity.retry(
-    wait=tenacity.wait_exponential(2),
-    stop=tenacity.stop_after_attempt(9),
-)
 @asynccontextmanager
 async def download(
     client: AsyncClient, url: str, progress: DownloadAndProcessProgress
