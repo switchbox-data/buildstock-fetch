@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import logging
 import random
 import shutil
@@ -8,12 +9,14 @@ from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import urljoin
 
+import httpx
 import polars as pl
 from httpx import AsyncClient
+import tenacity
 
 from .building_ import Building
 from .constants import LOAD_CURVE_COLUMN_AGGREGATION, OEDI_WEB_URL
-from .shared import DownloadAndProcessProgress, download, estimate_download_size
+from .shared import DownloadAndProcessProgress, batched, download, estimate_download_size
 from .types import ReleaseKey
 
 AGGREGATION_RULES_CACHE: dict[ReleaseKey, list[pl.Expr]] = {}
@@ -24,6 +27,8 @@ LoadCurveAggregate = Literal[
     "load_curve_monthly",
 ]
 LoadCurve = Literal[LoadCurveAggregate, "load_curve_15min"]
+
+BATCH_SIZE = 1000
 
 
 async def download_and_process_load_curves_batch(
@@ -51,15 +56,19 @@ async def download_and_process_load_curves_batch(
         estimated_download_size, len(buildings), "Downloading and processing load curves"
     )
 
-    tasks = [
-        _download_and_process_load_curves_for_building_logged(
-            target_folder, client, curves, building, progress, semaphore, processing_semaphore
-        )
-        for building in buildings
-    ]
+    result: list[Path] = []
 
     with progress.live():
-        result = [path for nested in await asyncio.gather(*tasks) for path in nested]
+        for batch in batched(buildings, BATCH_SIZE):
+            tasks = [
+                _download_and_process_load_curves_for_building_logged(
+                    target_folder, client, curves, building, progress, semaphore, processing_semaphore
+                )
+                for building in batch
+            ]
+            result.extend(path for nested in await asyncio.gather(*tasks) for path in nested)
+            _ = gc.collect()
+
     return result
 
 
@@ -80,14 +89,18 @@ async def _download_and_process_load_curves_for_building_logged(
             target_folder, client, curves, building, progress, semaphore, processing_semaphore
         )
     except Exception as e:
-        logging.getLogger(__name__).exception(
-            "Error while processing building %s", building, exc_info=e.with_traceback(None)
-        )
+        logging.getLogger(__name__).error("Error while processing building %s: %s", building, e)  # noqa: TRY400
         return []
     else:
         return result
 
 
+@tenacity.retry(
+    retry=tenacity.retry_if_exception_type(httpx.HTTPError),
+    wait=tenacity.wait_exponential(2),
+    stop=tenacity.stop_after_attempt(9),
+    after=lambda e: logging.getLogger(__name__).info("Retrying %s", e),
+)
 async def _download_and_process_load_curves_for_building(
     target_folder: Path,
     client: AsyncClient,

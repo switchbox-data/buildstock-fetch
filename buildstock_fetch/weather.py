@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import urljoin
 
+import httpx
+import tenacity
 from httpx import AsyncClient
 
 from buildstock_fetch.releases import RELEASES
@@ -53,6 +55,12 @@ async def download_and_process_weather_batch(
     return [_ for n in result for _ in n]
 
 
+@tenacity.retry(
+    retry=tenacity.retry_if_exception_type(httpx.HTTPError),
+    wait=tenacity.wait_exponential(2),
+    stop=tenacity.stop_after_attempt(9),
+    after=lambda e: logging.getLogger(__name__).warning("Retrying %s", e),
+)
 async def _download_and_process_logged(
     target_folder: Path,
     client: AsyncClient,

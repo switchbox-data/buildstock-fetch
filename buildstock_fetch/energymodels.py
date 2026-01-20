@@ -10,7 +10,9 @@ from typing import Literal, cast
 from urllib.parse import urljoin
 
 from httpx import AsyncClient
+import httpx
 from polars.meta import build
+import tenacity
 
 from .building_ import Building
 from .constants import OEDI_WEB_URL
@@ -88,6 +90,12 @@ async def _download_and_process_energy_models_for_building_logged(
         return []
 
 
+@tenacity.retry(
+    retry=tenacity.retry_if_exception_type(httpx.HTTPError),
+    wait=tenacity.wait_exponential(2),
+    stop=tenacity.stop_after_attempt(9),
+    after=lambda e: logging.getLogger(__name__).info("Retrying %s", e),
+)
 async def _download_and_process_energy_models_for_building(
     target_folder: Path,
     client: AsyncClient,

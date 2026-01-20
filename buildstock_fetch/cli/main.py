@@ -4,7 +4,7 @@ import logging
 import pprint
 import re
 from pathlib import Path
-from typing import Annotated, NamedTuple, cast, get_args
+from typing import Annotated, Literal, NamedTuple, cast, get_args
 
 import questionary
 import typer
@@ -62,6 +62,9 @@ class BuildingsGroup(NamedTuple):
     buildings: list[Building]
 
 
+LogLevelStr = Literal["critical", "error", "warning", "info", "debug"]
+
+
 @app.command()
 def main(  # noqa: C901
     _: Annotated[bool | None, typer.Option("--version", callback=_show_app_version)] = None,
@@ -117,8 +120,16 @@ def main(  # noqa: C901
     processing_tasks: Annotated[
         int | None, typer.Option("--processing_tasks", help="Number of processing tasks")
     ] = None,
+    loglevel: LogLevelStr = "error",
 ) -> None:
-    logging.basicConfig(level=logging.ERROR, handlers=[RichHandler()])
+    log_levels: dict[LogLevelStr, int] = {
+        "critical": logging.CRITICAL,
+        "error": logging.ERROR,
+        "warning": logging.WARNING,
+        "info": logging.INFO,
+        "debug": logging.DEBUG,
+    }
+    logging.basicConfig(level=log_levels[loglevel], handlers=[RichHandler()])
 
     states = _parse_and_validate_states(states_raw) if states_raw else None
     file_types = _parse_and_validate_file_types(file_types_raw) if file_types_raw else None

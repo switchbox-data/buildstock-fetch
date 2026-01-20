@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import urljoin
 
+import httpx
 import polars as pl
+import tenacity
 from httpx import AsyncClient
 
 from .building_ import Building
@@ -69,6 +71,12 @@ async def _download_and_process_annual_results_logged(
         return result
 
 
+@tenacity.retry(
+    retry=tenacity.retry_if_exception_type(httpx.HTTPError),
+    wait=tenacity.wait_exponential(2),
+    stop=tenacity.stop_after_attempt(9),
+    after=lambda e: logging.getLogger(__name__).info("Retrying %s", e),
+)
 async def _download_and_process_annual_results(
     target_folder: Path,
     client: AsyncClient,
