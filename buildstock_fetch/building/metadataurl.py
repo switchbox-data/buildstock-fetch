@@ -48,6 +48,10 @@ def _get_metadata_url_2024(building: "BuildingID") -> str:
     """Get metadata URL for 2024 releases."""
     if building.res_com == "comstock" and building.weather == "amy2018" and building.release_number == "2":
         return _get_metadata_url_2024_comstock_amy2018_v2(building)
+    if building.res_com == "resstock" and building.weather == "tmy3" and building.release_number == "2":
+        if building.upgrade_id == "0":
+            return f"{building.base_url}metadata_and_annual_results/by_state/state={building.state}/parquet/{building.state}_baseline_metadata_and_annual_results.parquet"
+        return f"{building.base_url}metadata_and_annual_results/by_state/state={building.state}/parquet/{building.state}_upgrade{str(int(building.upgrade_id)).zfill(2)}_metadata_and_annual_results.parquet"
     if building.upgrade_id == "0":
         return f"{building.base_url}metadata/baseline.parquet"
     return f"{building.base_url}metadata/upgrade{str(int(building.upgrade_id)).zfill(2)}.parquet"

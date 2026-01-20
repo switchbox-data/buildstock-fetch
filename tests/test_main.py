@@ -355,6 +355,9 @@ def test_fetch_metadata(cleanup_downloads):
     # Check that each required column pattern is a prefix of at least one actual column name
     for required_col in METADATA_COLUMNS:
         found = any(actual_col.startswith(required_col) for actual_col in metadata_file.columns)
+        if not found:
+            print(f"Required column {required_col} not found in {metadata_file.columns}")
+            print(metadata_file.columns)
         assert found
     for not_required_col in NOT_METADATA_COLUMNS:
         found = any(actual_col.startswith(not_required_col) for actual_col in metadata_file.columns)
