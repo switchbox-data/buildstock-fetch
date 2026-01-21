@@ -156,7 +156,6 @@ def _process_load_curve_aggregate(
     # we want the 00:00:00 timestamp to correspond to the consumption from 00:00:00 to whenever the
     # next timestamp is.
     lf = pl.scan_parquet(file_path).with_columns(
-        # keep the cast if you can't trust schema
         (pl.col("timestamp").cast(pl.Datetime) - timedelta(minutes=15)).alias("timestamp")
     )
 
