@@ -190,7 +190,7 @@ def _extract_metadata_columns_to_keep(metadata_file: Path) -> list[str]:
     columns_to_keep = []
     keep = ["upgrade", "bldg_id", "metadata_index"]
     for col in schema:
-        if any(keyword in col for keyword in keep) or col.startswith("in."):
+        if any(keyword in col for keyword in keep) or col.startswith("in.") or col.startswith("upgrade."):
             columns_to_keep.append(col)
     return columns_to_keep
 
@@ -287,7 +287,7 @@ def _download_with_progress_metadata(
                     for col in column_names:
                         if any(
                             keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index"]
-                        ) or col.startswith("in."):
+                        ) or col.startswith("in.") or col.startswith("upgrade."):
                             columns_to_keep.append(col)
                     # Polars will use predicate pushdown to only read relevant row groups
                     df = (
@@ -401,7 +401,7 @@ def _process_single_metadata_file(metadata_file: Path) -> None:
     # and remove columns that start with "in."
     columns_to_keep = []
     for col in schema:
-        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("in."):
+        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("in.") or col.startswith("upgrade."):
             columns_to_keep.append(col)
 
     # Use streaming operations to avoid loading entire file into memory
@@ -929,7 +929,7 @@ def _process_annual_load_curve_file(file_path: Path) -> None:
     for col in schema:
         if (
             any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("out.")
-        ) and not col.startswith("in."):
+        ) and not col.startswith("in.") and not col.startswith("upgrade."):
             columns_to_keep.append(col)
 
     # Use streaming operations to avoid loading entire file into memory

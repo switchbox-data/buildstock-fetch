@@ -81,6 +81,8 @@ class Building:
                     f"{self.base_path}/metadata_and_annual_results/by_state_and_county/full/parquet/"
                     f"state={self.state}/county={self.county}/{self.state}_{self.county}_{upgrade_str}.parquet"
                 )
+            case BuildstockRelease(year="2024", product="resstock", weather="tmy3", version="2"):
+                return f"{self.base_path}/metadata_and_annual_results/by_state/state={self.state}/parquet/{self.state}_{upgrade_str}_metadata_and_annual_results.parquet"
             case BuildstockRelease(year="2022" | "2023" | "2024"):
                 return f"{self.base_path}/metadata/{upgrade_str}.parquet"
             case BuildstockRelease(year="2025", product="comstock"):

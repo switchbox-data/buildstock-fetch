@@ -86,6 +86,6 @@ def compact_metadata(lf: pl.LazyFrame) -> pl.LazyFrame:
     columns_to_keep = [
         col
         for col in schema
-        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("in.")
+        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("in.") or col.startswith("upgrade.")
     ]
     return lf.select(columns_to_keep)
