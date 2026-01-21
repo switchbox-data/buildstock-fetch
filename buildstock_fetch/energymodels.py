@@ -9,10 +9,9 @@ from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import urljoin
 
-from httpx import AsyncClient
 import httpx
-from polars.meta import build
 import tenacity
+from httpx import AsyncClient
 
 from .building_ import Building
 from .constants import OEDI_WEB_URL

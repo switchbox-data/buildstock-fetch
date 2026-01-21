@@ -6,8 +6,6 @@ from itertools import groupby
 from typing import TypeVar, cast, final
 
 import aiofiles
-import httpx
-import tenacity
 from aiofiles.threadpool.binary import AsyncBufferedReader
 from httpx import AsyncClient
 from rich.console import Group

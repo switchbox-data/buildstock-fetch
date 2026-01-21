@@ -5,7 +5,7 @@ import pprint
 import re
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import Annotated, Any, Literal, NamedTuple, cast, get_args
+from typing import Annotated, Literal, NamedTuple, cast, get_args
 
 import psutil
 import questionary

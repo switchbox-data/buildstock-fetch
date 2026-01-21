@@ -27,13 +27,10 @@ LoadCurveAggregate = Literal[
 ]
 LoadCurve = Literal[LoadCurveAggregate, "load_curve_15min"]
 
-BATCH_SIZE = 200
-
-
 _TIME_BUCKET = {
     "load_curve_hourly": "1h",
     "load_curve_daily": "1d",
-    "load_curve_monthly": "1mo",  # if unsupported in your Polars, see note below
+    "load_curve_monthly": "1mo",
 }
 
 
