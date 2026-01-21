@@ -39,7 +39,10 @@ def first_building_id_str(buildings: Collection[Building]) -> str:
         (buildings,)
         for release in sorted(RELEASES.keys)
         for state in ("NY",)
-        for upgrade in (normalize_upgrade_id("0"),)
+        for upgrade in (
+            [normalize_upgrade_id("0")]
+            + ([normalize_upgrade_id("5")] if normalize_upgrade_id("5") in RELEASES[release].upgrades else [])
+        )
         if (buildings := list_buildings(release, state, upgrade, 5))
     ],
     ids=first_building_id_str,
@@ -65,7 +68,6 @@ async def test_metadata_has_required_fields_and_exists_in_paths(target_folder: P
         assert not lf.filter(pl.col("bldg_id") == building.id).collect().is_empty()
         filenames.add(filename)
     for filename in filenames:
-        print(f"Processing file {filename}")
         lf = pl.scan_parquet(filename)
         columns = lf.collect_schema().keys()
         for required_col in METADATA_COLUMNS:
