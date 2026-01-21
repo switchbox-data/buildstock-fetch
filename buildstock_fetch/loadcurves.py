@@ -30,6 +30,13 @@ LoadCurve = Literal[LoadCurveAggregate, "load_curve_15min"]
 BATCH_SIZE = 200
 
 
+_TIME_BUCKET = {
+    "load_curve_hourly": "1h",
+    "load_curve_daily": "1d",
+    "load_curve_monthly": "1mo",  # if unsupported in your Polars, see note below
+}
+
+
 async def download_and_process_load_curves_batch(
     target_folder: Path,
     client: AsyncClient,
@@ -143,24 +150,22 @@ def _process_load_curve_aggregate(
         _ = shutil.copy2(file_path, target_path)
         return target_path
     aggregation_rules = _load_aggregation_rules(building.release)
-    lf = pl.scan_parquet(file_path)
-    lf = lf.with_columns(pl.col("timestamp").cast(pl.Datetime))
+
+    bucket = _TIME_BUCKET[aggregate]
 
     # We want to subtract 15 minutes because the original load curve provides information
     # for the previous 15 minutes for each timestamp. For example, the first timestamp is 00:00:15,
     # and the columns correspond to consumption from 00:00:00 to 00:00:15. When aggregating,
     # we want the 00:00:00 timestamp to correspond to the consumption from 00:00:00 to whenever the
     # next timestamp is.
-    lf = lf.with_columns((pl.col("timestamp") - timedelta(minutes=15)).alias("timestamp"))
+    lf = pl.scan_parquet(file_path).with_columns(
+        # keep the cast if you can't trust schema
+        (pl.col("timestamp").cast(pl.Datetime) - timedelta(minutes=15)).alias("timestamp")
+    )
 
-    grouping_key, format_string = _get_time_step_grouping_key(aggregate)
-    lf = lf.with_columns(pl.col("timestamp").dt.strftime(format_string).alias(grouping_key))
+    lf = lf.with_columns(pl.col("timestamp").dt.truncate(bucket).alias("_bucket_ts"))
 
-    lf = lf.group_by(grouping_key).agg(aggregation_rules)
-    lf = lf.sort("timestamp").drop(grouping_key)
-    logging.getLogger(__name__).info("Sinking to %s", target_path)
-
-    # Add time aggregation columns
+    lf = lf.group_by("_bucket_ts").agg(aggregation_rules).rename({"_bucket_ts": "timestamp"}).sort("timestamp")
 
     match aggregate:
         case "load_curve_hourly":
@@ -199,26 +204,17 @@ def _load_aggregation_rules(release: ReleaseKey) -> list[pl.Expr]:
     )
     result: list[pl.Expr] = []
     for column, rule in rules_dict.items():
+        if column == "timestamp":
+            continue
         match rule:
             case "sum":
-                result.append(pl.col(column).sum().alias(column))
+                result.append(pl.col(column).sum())
             case "mean":
-                result.append(pl.col(column).mean().alias(column))
+                result.append(pl.col(column).mean())
             case "first":
-                result.append(pl.col(column).first().alias(column))
+                result.append(pl.col(column).first())
             case rule:
                 msg = f"Unknown aggregation function: {rule}"
                 raise ValueError(msg)
     AGGREGATION_RULES_CACHE[release] = result
     return result
-
-
-def _get_time_step_grouping_key(aggregate: LoadCurveAggregate) -> tuple[str, str]:
-    """Get the grouping key and format string for a given time step."""
-    match aggregate:
-        case "load_curve_hourly":
-            return ("year_month_day_hour", "%Y-%m-%d-%H")
-        case "load_curve_daily":
-            return ("year_month_day", "%Y-%m-%d")
-        case "load_curve_monthly":
-            return ("year_month", "%Y-%m")
