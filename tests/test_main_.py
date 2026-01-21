@@ -68,7 +68,9 @@ async def test_metadata_has_required_fields_and_exists_in_paths(target_folder: P
         lf = pl.scan_parquet(filename)
         columns = lf.collect_schema().keys()
         for required_col in METADATA_COLUMNS:
-            if required_col == "upgrade." and ("2022" not in str(filename) or "res_2024" not in str(filename) or "res_2024_tmy3_1" in str(filename)):
+            if required_col == "upgrade." and (
+                "2022" not in str(filename) or "res_2024" not in str(filename) or "res_2024_tmy3_1" in str(filename)
+            ):
                 continue
             if not any(c.startswith(required_col) for c in columns):
                 print(f"Required column {required_col} not found in {columns} for file {filename}")
