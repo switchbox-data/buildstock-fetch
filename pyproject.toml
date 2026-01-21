@@ -110,7 +110,7 @@ warn_unused_ignores = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["pyarrow.*"]
+module = ["pyarrow.*", "psutil.*", "async_timer.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

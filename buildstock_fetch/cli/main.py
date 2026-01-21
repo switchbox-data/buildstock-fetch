@@ -222,7 +222,7 @@ def main(  # noqa: C901
         _ = asyncio.run(callee)
 
 
-async def run_with_logmem(callee: Awaitable):  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]
+async def run_with_logmem(callee: Awaitable) -> None:  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]
     async with Timer(10, print_memory_info):  # pyright: ignore[reportUnknownArgumentType]
         _ = await callee  # pyright: ignore[reportUnknownVariableType]
 
@@ -561,7 +561,7 @@ def cancel(result: int = 0, message: str = "Operation cancelled by user.") -> Ne
     raise typer.Exit(result) from None
 
 
-def print_memory_info():
+def print_memory_info() -> None:
     process = psutil.Process()
     rss_mb = cast(int, process.memory_info().rss) / (1024 * 1024)
     print(f"RSS Memory Usage = {rss_mb:.2f} MB")
