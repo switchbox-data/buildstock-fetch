@@ -3,11 +3,14 @@ import importlib.metadata
 import logging
 import pprint
 import re
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import Annotated, NamedTuple, cast, get_args
+from typing import Annotated, Literal, NamedTuple, cast, get_args
 
+import psutil
 import questionary
 import typer
+from async_timer.timer import Timer
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
@@ -62,6 +65,9 @@ class BuildingsGroup(NamedTuple):
     buildings: list[Building]
 
 
+LogLevelStr = Literal["critical", "error", "warning", "info", "debug"]
+
+
 @app.command()
 def main(  # noqa: C901
     _: Annotated[bool | None, typer.Option("--version", callback=_show_app_version)] = None,
@@ -111,14 +117,23 @@ def main(  # noqa: C901
         ),
     ] = None,
     tasks: Annotated[
-        int, typer.Option("--threads", "-t", help="Number of files to download at the same time", min=1, max=100)
+        int, typer.Option("--tasks", "-t", help="Number of files to download at the same time", min=1, max=100)
     ] = 15,
     connections: Annotated[int | None, typer.Option("--connections", help="Number of http connections")] = None,
     processing_tasks: Annotated[
         int | None, typer.Option("--processing_tasks", help="Number of processing tasks")
     ] = None,
+    loglevel: LogLevelStr = "error",
+    logmem: Annotated[bool, typer.Option("--logmem", help="Log memory usage")] = False,
 ) -> None:
-    logging.basicConfig(level=logging.ERROR, handlers=[RichHandler()])
+    log_levels: dict[LogLevelStr, int] = {
+        "critical": logging.CRITICAL,
+        "error": logging.ERROR,
+        "warning": logging.WARNING,
+        "info": logging.INFO,
+        "debug": logging.DEBUG,
+    }
+    logging.basicConfig(level=log_levels[loglevel], handlers=[RichHandler()])
 
     states = _parse_and_validate_states(states_raw) if states_raw else None
     file_types = _parse_and_validate_file_types(file_types_raw) if file_types_raw else None
@@ -192,17 +207,24 @@ def main(  # noqa: C901
             buildings |= set(group.buildings[: -1 if sample == "all" else sample])
     else:
         buildings = get_buildings_sample(building_groups)
-
-    _ = asyncio.run(
-        download_and_process_all(
-            inputs_final.output_directory,
-            buildings,
-            inputs_final.file_types,
-            max_tasks=tasks,
-            max_connections=connections,
-            max_processing_tasks=processing_tasks,
-        )
+    callee = download_and_process_all(
+        inputs_final.output_directory,
+        buildings,
+        inputs_final.file_types,
+        max_tasks=tasks,
+        max_connections=connections,
+        max_processing_tasks=processing_tasks,
     )
+
+    if logmem:
+        asyncio.run(run_with_logmem(callee))
+    else:
+        _ = asyncio.run(callee)
+
+
+async def run_with_logmem(callee: Awaitable) -> None:  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]
+    async with Timer(10, print_memory_info):  # pyright: ignore[reportUnknownArgumentType]
+        _ = await callee  # pyright: ignore[reportUnknownVariableType]
 
 
 def select_product(releases: BuildstockReleases, inputs: InputsMaybe) -> ResCom:
@@ -537,6 +559,12 @@ def _validate_sample(value: int) -> Sample:
 def cancel(result: int = 0, message: str = "Operation cancelled by user.") -> Never:
     console.print(f"\n[red]{message}[/red]")
     raise typer.Exit(result) from None
+
+
+def print_memory_info() -> None:
+    process = psutil.Process()
+    rss_mb = cast(int, process.memory_info().rss) / (1024 * 1024)
+    print(f"RSS Memory Usage = {rss_mb:.2f} MB")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import urljoin
 
+import httpx
+import tenacity
 from httpx import AsyncClient
 
 from buildstock_fetch.releases import RELEASES
@@ -44,13 +46,34 @@ async def download_and_process_weather_batch(
 
     progress = DownloadAndProcessProgress(estimated_download_size, len(urls), "Downloading weather files")
 
-    tasks = [_download_and_process(target_folder, client, url, paths, progress, semaphore) for url, paths in grouped]
+    tasks = [
+        _download_and_process_logged(target_folder, client, url, paths, progress, semaphore) for url, paths in grouped
+    ]
 
     with progress.live():
-        result = await asyncio.gather(*tasks, return_exceptions=True)
-        for e in (_ for _ in result if isinstance(_, BaseException)):
-            logging.getLogger(__name__).exception("Error: %e", e)
-    return [_ for n in result if not isinstance(n, BaseException) for _ in n]
+        result = await asyncio.gather(*tasks)
+    return [_ for n in result for _ in n]
+
+
+@tenacity.retry(
+    retry=tenacity.retry_if_exception_type(httpx.HTTPError),
+    wait=tenacity.wait_exponential(2),
+    stop=tenacity.stop_after_attempt(9),
+    after=lambda e: logging.getLogger(__name__).warning("Retrying %s", e),
+)
+async def _download_and_process_logged(
+    target_folder: Path,
+    client: AsyncClient,
+    url: str,
+    copy_to_paths: Collection[Path],
+    progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
+) -> list[Path]:
+    try:
+        return await _download_and_process(target_folder, client, url, copy_to_paths, progress, semaphore)
+    except Exception as e:
+        logging.getLogger(__name__).exception("Error while processing url %s", url, exc_info=e.with_traceback(None))
+        return []
 
 
 async def _download_and_process(
