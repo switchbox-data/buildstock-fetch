@@ -117,7 +117,7 @@ def main(  # noqa: C901
         ),
     ] = None,
     tasks: Annotated[
-        int, typer.Option("--threads", "-t", help="Number of files to download at the same time", min=1, max=100)
+        int, typer.Option("--tasks", "-t", help="Number of files to download at the same time", min=1, max=100)
     ] = 15,
     connections: Annotated[int | None, typer.Option("--connections", help="Number of http connections")] = None,
     processing_tasks: Annotated[
