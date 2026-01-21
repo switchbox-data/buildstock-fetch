@@ -137,25 +137,3 @@ def groupby_sorted(
     iterable: Iterable[T], key: Callable[[T], SupportsRichComparisonT]
 ) -> Iterator[tuple[SupportsRichComparisonT, Iterator[T]]]:
     return groupby(sorted(iterable, key=key), key=key)
-
-
-def batched(iterable: Iterable[T], batch_size: int) -> Iterator[list[T]]:
-    """
-    Yield lists of up to `batch_size` items from `iterable`.
-
-    Example:
-        for batch in batched(range(10), 3):
-            print(batch)  # [0,1,2], [3,4,5], [6,7,8], [9]
-    """
-    if batch_size <= 0:
-        msg = "batch size must be > 0"
-        raise ValueError(msg)
-
-    batch: list[T] = []
-    for item in iterable:
-        batch.append(item)
-        if len(batch) >= batch_size:
-            yield batch
-            batch = []
-    if batch:
-        yield batch
