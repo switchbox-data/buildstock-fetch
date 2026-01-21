@@ -39,13 +39,16 @@ def first_building_id_str(buildings: Collection[Building]) -> str:
         (buildings,)
         for release in sorted(RELEASES.keys)
         for state in ("NY",)
-        for upgrade in (normalize_upgrade_id("0"),)
+        for upgrade in (
+            [normalize_upgrade_id("0")]
+            + ([normalize_upgrade_id("5")] if normalize_upgrade_id("5") in RELEASES[release].upgrades else [])
+        )
         if (buildings := list_buildings(release, state, upgrade, 5))
     ],
     ids=first_building_id_str,
 )
 async def test_metadata_has_required_fields_and_exists_in_paths(target_folder: Path, buildings: Collection[Building]):
-    METADATA_COLUMNS = ["bldg_id", "upgrade", "in."]
+    METADATA_COLUMNS = ["bldg_id", "upgrade", "in.", "upgrade."]
     NOT_METADATA_COLUMNS = ["out."]
     await download_and_process_all(target_folder, buildings, ["metadata"])
     filenames: set[Path] = set()
@@ -68,6 +71,12 @@ async def test_metadata_has_required_fields_and_exists_in_paths(target_folder: P
         lf = pl.scan_parquet(filename)
         columns = lf.collect_schema().keys()
         for required_col in METADATA_COLUMNS:
+            if required_col == "upgrade." and (
+                "upgrade=00" in str(filename)
+                or "res_2024_tmy3_1" in str(filename)
+                or ("2022" not in str(filename) and "res_2024" not in str(filename) and "res_2025" not in str(filename))
+            ):
+                continue
             assert any(c.startswith(required_col) for c in columns)
         for alien_col in NOT_METADATA_COLUMNS:
             assert not any(c.startswith(alien_col) for c in columns)
@@ -90,7 +99,7 @@ async def test_metadata_has_required_fields_and_exists_in_paths(target_folder: P
     ids=lambda _: first_building_id_str(_[0]),
 )
 async def test_metadata_merging(target_folder: Path, buildings_partitioned: list[Collection[Building]]):
-    METADATA_COLUMNS = ["bldg_id", "upgrade", "in."]
+    METADATA_COLUMNS = ["bldg_id", "upgrade", "in.", "upgrade."]
     NOT_METADATA_COLUMNS = ["out."]
 
     for building_chunk in buildings_partitioned:
@@ -118,6 +127,12 @@ async def test_metadata_merging(target_folder: Path, buildings_partitioned: list
         lf = pl.scan_parquet(filename)
         columns = lf.collect_schema().keys()
         for required_col in METADATA_COLUMNS:
+            if required_col == "upgrade." and (
+                "upgrade=00" in str(filename)
+                or "res_2024_tmy3_1" in str(filename)
+                or ("2022" not in str(filename) and "res_2024" not in str(filename) and "res_2025" not in str(filename))
+            ):
+                continue
             assert any(c.startswith(required_col) for c in columns)
         for alien_col in NOT_METADATA_COLUMNS:
             assert not any(c.startswith(alien_col) for c in columns)
