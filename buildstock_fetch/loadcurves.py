@@ -110,42 +110,42 @@ async def _download_and_process_load_curves_for_building(
     processing_semaphore: asyncio.Semaphore,
 ) -> list[Path]:
     url = urljoin(OEDI_WEB_URL, building.load_curve_15min_path)
+    result: list[Path] = []
     async with semaphore, download(client, url, progress) as f:
         file_path = Path(cast(str, f.name))
 
-        tasks = [
-            asyncio.create_task(
-                _async_process_load_curve_aggregate(target_folder, file_path, aggregate, building, processing_semaphore)
-            )
-            for aggregate in set(curves)
-        ]
-        for task in tasks:
+        for _ in set(curves):
             progress.on_processing_started()
-            task.add_done_callback(lambda _: progress.on_processing_finished())
-        result = await asyncio.gather(*tasks, return_exceptions=False)
+
+        for aggregate in set(curves):
+            if aggregate == "load_curve_15min":
+                continue
+            async with processing_semaphore:
+                processing_result = await asyncio.to_thread(
+                    _process_load_curve_aggregate,
+                    target_folder,
+                    file_path,
+                    aggregate,
+                    building,
+                )
+            result.append(processing_result)
+            progress.on_processing_finished()
+
+        if "load_curve_15min" in curves:
+            target_path = target_folder / building.file_path("load_curve_15min")
+            target_path.parent.mkdir(exist_ok=True, parents=True)
+            _ = await asyncio.to_thread(shutil.move, file_path, target_path)
+            progress.on_processing_finished()
+
         progress.on_building_finished()
         return result
 
 
-async def _async_process_load_curve_aggregate(
-    target_folder: Path,
-    file_path: Path,
-    aggregate: LoadCurve,
-    building: Building,
-    semaphore: asyncio.Semaphore,
-) -> Path:
-    async with semaphore:
-        return await asyncio.to_thread(_process_load_curve_aggregate, target_folder, file_path, aggregate, building)
-
-
 def _process_load_curve_aggregate(
-    target_folder: Path, file_path: Path, aggregate: LoadCurve, building: Building
+    target_folder: Path, file_path: Path, aggregate: LoadCurveAggregate, building: Building
 ) -> Path:
     target_path = target_folder / building.file_path(aggregate)
     target_path.parent.mkdir(exist_ok=True, parents=True)
-    if aggregate == "load_curve_15min":
-        _ = shutil.copy2(file_path, target_path)
-        return target_path
     aggregation_rules = _load_aggregation_rules(building.release)
 
     bucket = _TIME_BUCKET[aggregate]
