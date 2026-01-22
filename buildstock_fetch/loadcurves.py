@@ -135,6 +135,7 @@ async def _download_and_process_load_curves_for_building(
             target_path = target_folder / building.file_path("load_curve_15min")
             target_path.parent.mkdir(exist_ok=True, parents=True)
             _ = await asyncio.to_thread(shutil.move, file_path, target_path)
+            result.append(target_path)
             progress.on_processing_finished()
 
         progress.on_building_finished()
