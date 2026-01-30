@@ -58,7 +58,8 @@ lint = [
   "types-requests>=2.31.0",
   "types-boto3>=1.33.0",
   "pandas-stubs>=2.2.0",
-  "ty>=0.0.1a33",
+  "pyarrow-stubs>=17.0.0",
+  "ty>=0.0.14",
 ]
 
 # Development utilities dependencies (only for utils/ directory)
@@ -185,6 +186,7 @@ per_rule_ignores.DEP002 = [
   "types-requests",
   "types-boto3",
   "pandas-stubs",
+  "pyarrow-stubs",
   # Development utilities (only used in utils/)
   "boto3",
   "botocore",

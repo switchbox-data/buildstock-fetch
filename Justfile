@@ -10,8 +10,6 @@ check:
     uv lock --locked
     echo "🚀 Linting, formatting, and type checking code"
     prek run -a
-    echo "🚀 Static type checking: Running mypy"
-    uv run mypy
 
 # Check for obsolete dependencies
 check-deps:
