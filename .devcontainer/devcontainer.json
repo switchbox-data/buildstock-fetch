@@ -32,7 +32,10 @@
             "extensions": [
                 "ms-python.python",
                 "nefrob.vscode-just-syntax",
-                "tamasfe.even-better-toml"
+                "tamasfe.even-better-toml",
+                "davidanson.vscode-markdownlint",
+                "foxundermoon.shell-format",
+                "dprint.dprint"
             ],
             // Configure tool-specific settings.
             "settings": {
@@ -43,6 +46,15 @@
                 "python.testing.pytestPath": "/workspaces/buildstock-fetch/.venv/bin/pytest",
                 "terminal.integrated.env.linux": {
                     "PATH": "/workspaces/buildstock-fetch/.venv/bin:${env:PATH}"
+                },
+                "shellformat.flag": "-i 2",
+                "[shellscript]": {
+                    "editor.defaultFormatter": "foxundermoon.shell-format",
+                    "editor.formatOnSave": true
+                },
+                "[markdown]": {
+                    "editor.defaultFormatter": "dprint.dprint",
+                    "editor.formatOnSave": true
                 }
             }
         }

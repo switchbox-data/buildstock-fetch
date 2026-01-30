@@ -13,7 +13,7 @@ uv pip install -e .
 uv pip install -e ".[lint]"
 
 # Add the virtual environment to PATH so CLI commands are available
-echo 'export PATH="/workspaces/buildstock-fetch/.venv/bin:$PATH"' >> ~/.bashrc
+echo 'export PATH="/workspaces/buildstock-fetch/.venv/bin:$PATH"' >>~/.bashrc
 
 # Install prek
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/j178/prek/releases/download/v0.2.11/prek-installer.sh | sh
