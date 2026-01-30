@@ -47,8 +47,13 @@ Documentation = "https://switchbox-data.github.io/buildstock-fetch/"
 bsf = "buildstock_fetch.cli.main:app"
 
 [dependency-groups]
-# Core testing dependencies
-test = ["pytest>=7.2.0", "pytest-asyncio>=1.3.0", "pytest-recording>=0.13.4", "tox-uv>=1.11.3"]
+#Core testing dependencies
+test = [
+  "pytest>=7.2.0",
+  "pytest-asyncio>=1.3.0",
+  "pytest-recording>=0.13.4",
+  "tox-uv>=1.11.3",
+]
 
 # Documentation dependencies
 docs = [
@@ -223,6 +228,3 @@ per_rule_ignores.DEP003 = [
   "types_aiobotocore_s3",
   "aiobotocore",
 ]
-
-[dependency-groups]
-dev = []
