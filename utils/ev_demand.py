@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Final, Optional
+from typing import Any, Final
 
 import numpy as np
 import polars as pl
@@ -73,10 +73,10 @@ class InvalidDateFormatError(ValueError):
 class EVDemandConfig:
     state: str
     release: str
-    metadata_path: Optional[str] = None
-    pums_path: Optional[str] = None
+    metadata_path: str | None = None
+    pums_path: str | None = None
     nhts_path: str = f"{BASEPATH}/ev_data/inputs/NHTS_v2_1_trip_surveys.csv"
-    output_dir: Optional[Path] = None
+    output_dir: Path | None = None
 
     def __post_init__(self) -> None:
         if self.metadata_path is None:
@@ -138,7 +138,7 @@ class EVDemandCalculator:
         end_date: datetime,
         max_vehicles: int = 2,
         random_state: int = 42,
-        max_workers: Optional[int] = None,
+        max_workers: int | None = None,
     ):
         """
         Initialize the EV demand calculator.
@@ -166,7 +166,7 @@ class EVDemandCalculator:
         self.end_date = end_date
         self.num_days = (self.end_date - self.start_date).days + 1
 
-        self.vehicle_ownership_model: Optional[Any] = None
+        self.vehicle_ownership_model: Any | None = None
         self.random_state = random_state
         self.max_workers = max_workers
 
@@ -174,7 +174,7 @@ class EVDemandCalculator:
         self.veh_assign_features = ["occupants", "income", "metro"]
 
         # Cache for NHTS data to avoid repeated filtering
-        self._nhts_cache: Optional[dict] = None
+        self._nhts_cache: dict | None = None
 
         # Yuksel and Michalek (2015) polynomial coefficients for energy consumption
         # c(T) = sum(a_n * T^n) for n=0 to 5, units: kWh/mi/°F^n
@@ -312,7 +312,7 @@ class EVDemandCalculator:
 
         return cache
 
-    def predict_num_vehicles(self, metadata_df: Optional[pl.DataFrame] = None) -> pl.DataFrame:
+    def predict_num_vehicles(self, metadata_df: pl.DataFrame | None = None) -> pl.DataFrame:
         """
         Predict number of vehicles for each household in the metadata using the fitted model.
         If the model hasn't been fitted yet, it will be fitted automatically using the PUMS data.
@@ -517,7 +517,7 @@ class EVDemandCalculator:
         return profiles
 
     def generate_daily_schedules(
-        self, profile: VehicleProfile, rng: Optional[np.random.RandomState] = None
+        self, profile: VehicleProfile, rng: np.random.RandomState | None = None
     ) -> pl.DataFrame:
         """Generate trip schedules for all days in the date range as a DataFrame."""
         if rng is None:
@@ -643,8 +643,8 @@ class EVDemandCalculator:
     def _generate_annual_trip_schedule(
         self,
         profile_params: dict[tuple[str, int], VehicleProfile],
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> pl.DataFrame:
         """
         Generate an annual trip schedule for each vehicle based on sampled parameters.

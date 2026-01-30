@@ -1,18 +1,25 @@
+import asyncio
 import importlib.metadata
+import logging
 import pprint
 import re
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import Annotated, NamedTuple, cast, get_args
+from typing import Annotated, Literal, NamedTuple, cast, get_args
 
+import psutil
 import questionary
 import typer
+from async_timer.timer import Timer
 from rich.console import Console
+from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
 from typing_extensions import Never
 
-from buildstock_fetch.building import BuildingID
-from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
+from buildstock_fetch.building_ import Building
+from buildstock_fetch.main_new import download_and_process_all, list_buildings
+from buildstock_fetch.releases import RELEASES, BuildstockReleases
 from buildstock_fetch.types import (
     FileType,
     ReleaseVersion,
@@ -26,7 +33,6 @@ from buildstock_fetch.types import (
 )
 
 from .inputs import InputsFinal, InputsMaybe
-from .releases import BuildstockReleases
 
 # File types that haven't been implemented yet
 UNAVAILABLE_FILE_TYPES: list[str] = []
@@ -56,7 +62,10 @@ def _show_app_version(value: bool) -> None:
 class BuildingsGroup(NamedTuple):
     state: USStateCode
     upgrade_id: UpgradeID
-    buildings: list[BuildingID]
+    buildings: list[Building]
+
+
+LogLevelStr = Literal["critical", "error", "warning", "info", "debug"]
 
 
 @app.command()
@@ -107,10 +116,25 @@ def main(  # noqa: C901
             help="Number of building IDs to download across all upgrades. Use 0 for all buildings.",
         ),
     ] = None,
-    threads: Annotated[
-        int, typer.Option("--threads", "-t", help="Number of files to download at the same time", min=1, max=50)
+    tasks: Annotated[
+        int, typer.Option("--tasks", "-t", help="Number of files to download at the same time", min=1, max=100)
     ] = 15,
+    connections: Annotated[int | None, typer.Option("--connections", help="Number of http connections")] = None,
+    processing_tasks: Annotated[
+        int | None, typer.Option("--processing_tasks", help="Number of processing tasks")
+    ] = None,
+    loglevel: LogLevelStr = "error",
+    logmem: Annotated[bool, typer.Option("--logmem", help="Log memory usage")] = False,
 ) -> None:
+    log_levels: dict[LogLevelStr, int] = {
+        "critical": logging.CRITICAL,
+        "error": logging.ERROR,
+        "warning": logging.WARNING,
+        "info": logging.INFO,
+        "debug": logging.DEBUG,
+    }
+    logging.basicConfig(level=log_levels[loglevel], handlers=[RichHandler()])
+
     states = _parse_and_validate_states(states_raw) if states_raw else None
     file_types = _parse_and_validate_file_types(file_types_raw) if file_types_raw else None
     upgrade_ids = _parse_and_validate_upgrade_ids(upgrade_id_raw) if upgrade_id_raw else None
@@ -135,7 +159,7 @@ def main(  # noqa: C901
         console.print("This tool allows you to fetch data from the NREL BuildStock API.")
         console.print("Please select the release information and file type you would like to fetch:")
 
-    releases = BuildstockReleases.from_json()
+    releases = BuildstockReleases.load()
 
     if inputs.product is None:
         inputs.product = select_product(releases, inputs)
@@ -164,11 +188,12 @@ def main(  # noqa: C901
     inputs_final = InputsFinal.from_finalized_maybe(inputs)
 
     if not inputs_finalized:
-        verify_inputs(inputs_final)
-        display_cli_args(inputs_final, threads, sample)
+        if not verify_inputs(inputs_final):
+            cancel()
+        display_cli_args(inputs_final, tasks, connections, processing_tasks, sample)
 
     display_download_parameters(inputs_final)
-    release = releases.filter_one(inputs)
+    release = releases.filter_one(**inputs.as_filter())
 
     if "trip_schedules" in inputs.file_types:
         for state in inputs.states:
@@ -177,48 +202,58 @@ def main(  # noqa: C901
 
     building_groups = fetch_building_groups(inputs_final)
     if sample is not None:
-        buildings = set()
+        buildings: set[Building] = set()
         for group in building_groups:
             buildings |= set(group.buildings[: -1 if sample == "all" else sample])
     else:
         buildings = get_buildings_sample(building_groups)
-
-    fetch_bldg_data(
-        list(buildings),
-        tuple(inputs_final.file_types),
+    callee = download_and_process_all(
         inputs_final.output_directory,
-        max_workers=threads,
-        weather_states=[state for state in inputs_final.states if state in release.weather_map_available_states],
+        buildings,
+        inputs_final.file_types,
+        max_tasks=tasks,
+        max_connections=connections,
+        max_processing_tasks=processing_tasks,
     )
+
+    if logmem:
+        asyncio.run(run_with_logmem(callee))
+    else:
+        _ = asyncio.run(callee)
+
+
+async def run_with_logmem(callee: Awaitable) -> None:  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]
+    async with Timer(10, print_memory_info):  # pyright: ignore[reportUnknownArgumentType]
+        _ = await callee  # pyright: ignore[reportUnknownVariableType]
 
 
 def select_product(releases: BuildstockReleases, inputs: InputsMaybe) -> ResCom:
-    available_releases = releases.filter_at_least_one(inputs)
+    available_releases = releases.filter_at_least_one(**inputs.as_filter())
     products = sorted(available_releases.products)
     products.reverse()
-    result = questionary.select("Select product type", choices=products).ask()
+    result = cast(ResCom | None, questionary.select("Select product type", choices=products).ask())
     return cast(ResCom, result) or cancel()
 
 
 def select_release_year(releases: BuildstockReleases, inputs: InputsMaybe) -> ReleaseYear:
-    available_releases = releases.filter_at_least_one(inputs)
-    years = sorted(available_releases.release_years)
+    available_releases = releases.filter_at_least_one(**inputs.as_filter())
+    years = sorted(available_releases.years)
     years.reverse()
-    result = questionary.select("Select release year:", choices=years).ask()
+    result = cast(ReleaseYear | None, questionary.select("Select release year:", choices=years).ask())
     return cast(ReleaseYear, result) or cancel()
 
 
 def select_weather_file(releases: BuildstockReleases, inputs: InputsMaybe) -> Weather:
-    available_releases = releases.filter_at_least_one(inputs)
+    available_releases = releases.filter_at_least_one(**inputs.as_filter())
     desired_order = ["tmy3", "amy2018", "amy2012"]
     weathers = sorted(available_releases.weathers, key=lambda _: desired_order.index(_))
-    result = questionary.select("Select weather file", choices=weathers).ask()
+    result = cast(Weather | None, questionary.select("Select weather file", choices=weathers).ask())
     return cast(Weather, result) or cancel()
 
 
 def select_release_version(releases: BuildstockReleases, inputs: InputsMaybe) -> ReleaseVersion:
-    available_releases = releases.filter_at_least_one(inputs)
-    versions = set(available_releases.release_versions)
+    available_releases = releases.filter_at_least_one(**inputs.as_filter())
+    versions = set(available_releases.versions)
     if (
         inputs.product == "resstock"
         and inputs.weather_file == "tmy3"
@@ -228,25 +263,28 @@ def select_release_version(releases: BuildstockReleases, inputs: InputsMaybe) ->
         versions.remove("1")
     desired_order = ["2", "1.1", "1"]
     versions_sorted = sorted(versions, key=lambda _: desired_order.index(_))
-    result = questionary.select("Select release version:", choices=versions_sorted).ask()
+    result = cast(ReleaseVersion | None, questionary.select("Select release version:", choices=versions_sorted).ask())
     return cast(ReleaseVersion, result) or cancel()
 
 
 def select_upgrade_ids(releases: BuildstockReleases, inputs: InputsMaybe) -> set[UpgradeID]:
-    release = releases.filter_one(inputs)
-    upgrades_sorted = sorted(release.upgrades, key=lambda _: int(_.id))
+    release = releases.filter_one(**inputs.as_filter())
+    upgrades_sorted = sorted(release.upgrades_with_descriptions, key=lambda _: int(_.id))
     choices = [
         questionary.Choice(
             title=f"{upgrade.id}: {upgrade.description}" if upgrade.description else str(upgrade.id), value=upgrade.id
         )
         for upgrade in upgrades_sorted
     ]
-    result = questionary.checkbox(
-        "Select upgrade ids:",
-        choices=choices,
-        instruction="Use spacebar to select/deselect options, 'a' to select all, 'i' to invert selection, enter to confirm",
-        validate=lambda answer: "You must select at least one upgrade id" if len(answer) == 0 else True,
-    ).ask()
+    result = cast(
+        list[UpgradeID],
+        questionary.checkbox(
+            "Select upgrade ids:",
+            choices=choices,
+            instruction="Use spacebar to select/deselect options, 'a' to select all, 'i' to invert selection, enter to confirm",
+            validate=lambda answer: "You must select at least one upgrade id" if len(answer) == 0 else True,
+        ).ask(),
+    )
     if not result:
         cancel()
     return set(result)
@@ -254,20 +292,23 @@ def select_upgrade_ids(releases: BuildstockReleases, inputs: InputsMaybe) -> set
 
 def select_states() -> set[USStateCode]:
     states = sorted(get_args(USStateCode))
-    result = questionary.checkbox(
-        "Select states:",
-        choices=states,
-        instruction="Use spacebar to select/deselect options, enter to confirm",
-        validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
-    ).ask()
+    result = cast(
+        list[USStateCode],
+        questionary.checkbox(
+            "Select states:",
+            choices=states,
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+            validate=lambda answer: "You must select at least one state" if len(answer) == 0 else True,
+        ).ask(),
+    )
     if not result:
         cancel()
     return set(result)
 
 
 def select_file_types(releases: BuildstockReleases, inputs: InputsMaybe) -> set[FileType]:
-    available_releases = releases.filter_at_least_one(inputs)
-    choices = []
+    available_releases = releases.filter_at_least_one(**inputs.as_filter())
+    choices: list[questionary.Choice] = []
     if "metadata" in available_releases.file_types:
         choices.append(_category_choice("Metadata"))
         choices.append(_filetype_choice("metadata"))
@@ -295,25 +336,31 @@ def select_file_types(releases: BuildstockReleases, inputs: InputsMaybe) -> set[
         choices.append(_category_choice("Weather"))
         choices.append(_filetype_choice("weather"))
 
-    result = questionary.checkbox(
-        "Select file type:",
-        choices=choices,
-        instruction="Use spacebar to select/deselect options, enter to confirm",
-        validate=lambda answer: "You must select at least one file type" if len(answer) == 0 else True,
-    ).ask()
+    result = cast(
+        list[FileType],
+        questionary.checkbox(
+            "Select file type:",
+            choices=choices,
+            instruction="Use spacebar to select/deselect options, enter to confirm",
+            validate=lambda answer: "You must select at least one file type" if len(answer) == 0 else True,
+        ).ask(),
+    )
     if not result:
         cancel()
     return set(result)
 
 
 def select_output_directory() -> Path:
-    result = questionary.path(
-        "Select output directory:",
-        default=str(Path.cwd() / "data"),
-        only_directories=True,
-        validate=_validate_output_directory,
-    ).ask()
-    return Path(cast(str, result))
+    result = cast(
+        str,
+        questionary.path(
+            "Select output directory:",
+            default=str(Path.cwd() / "data"),
+            only_directories=True,
+            validate=_validate_output_directory,
+        ).ask(),
+    )
+    return Path(result)
 
 
 def verify_inputs(inputs: InputsFinal) -> bool:
@@ -334,7 +381,7 @@ def verify_inputs(inputs: InputsFinal) -> bool:
     console.print(Panel(table, border_style="green"))
 
     try:
-        result = questionary.confirm("Are these selections correct?", default=True).ask()
+        result = cast(bool | None, questionary.confirm("Are these selections correct?", default=True).ask())
     except KeyboardInterrupt:
         cancel()
 
@@ -347,21 +394,24 @@ def verify_inputs(inputs: InputsFinal) -> bool:
     return bool(result)
 
 
-def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[BuildingID]:
+def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[Building]:
     total_buildings = sum(len(_.buildings) for _ in building_groups)
     console.print(f"\nThere are {total_buildings} files for this release")
     for group in building_groups:
         console.print(f"  • State {group.state}, Upgrade {group.upgrade_id}: {len(group.buildings)} buildings")
 
-    choice = questionary.select(
-        "Would you like to download all files or a sample of them?",
-        choices=["Download all files", "Download a sample"],
-    ).ask()
+    choice = cast(
+        str | None,
+        questionary.select(
+            "Would you like to download all files or a sample of them?",
+            choices=["Download all files", "Download a sample"],
+        ).ask(),
+    )
 
     if not choice:
         cancel()
 
-    result = set()
+    result: set[Building] = set()
     if choice == "Download all files":
         for group in building_groups:
             result |= set(group.buildings)
@@ -369,11 +419,14 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[BuildingI
 
     for group in building_groups:
         total_for_state_upgrade = len(group.buildings)
-        sample_size_str = questionary.text(
-            f"Enter the number of files to download for State {group.state}, Upgrade {group.upgrade_id} (0-{total_for_state_upgrade}):",
-            validate=lambda text, max_val=total_for_state_upgrade: (text.isdigit() and 0 <= int(text) <= max_val)
-            or f"Please enter a number between 0 and {max_val}",
-        ).ask()
+        sample_size_str = cast(
+            str | None,
+            questionary.text(
+                f"Enter the number of files to download for State {group.state}, Upgrade {group.upgrade_id} (0-{total_for_state_upgrade}):",
+                validate=lambda text, max_val=total_for_state_upgrade: (text.isdigit() and 0 <= int(text) <= max_val)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+                or f"Please enter a number between 0 and {max_val}",
+            ).ask(),
+        )
 
         if sample_size_str is None:
             cancel()
@@ -394,7 +447,9 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[BuildingI
     return result
 
 
-def display_cli_args(inputs: InputsFinal, threads: int, sample: Sample | None) -> None:
+def display_cli_args(
+    inputs: InputsFinal, tasks: int, connections: int | None, processing_tasks: int | None, sample: Sample | None
+) -> None:
     console.print("[blue]Paste this in the command line to launch the script again with the same arguments[/]")
     display = (
         "bsf \\\n\t"
@@ -406,8 +461,12 @@ def display_cli_args(inputs: InputsFinal, threads: int, sample: Sample | None) -
         f'--file_type "{" ".join(sorted(inputs.file_types, key=get_args(FileType).index))}"\\\n\t'
         f'--upgrade_id "{" ".join(map(str, sorted(inputs.upgrade_ids)))}"\\\n\t'
         f'--output_directory "{inputs.output_directory.as_posix()}"\\\n\t'
-        f"--threads {threads}"
+        f"--tasks {tasks}"
     )
+    if connections is not None:
+        display += f"\\\n\t--connections {connections}"
+    if processing_tasks is not None:
+        display += f"\\\n\t--processing-tasks {processing_tasks}"
     if sample is not None:
         display += f"\\\n\t--sample {0 if sample == 'all' else sample}"
     console.print(display)
@@ -430,21 +489,20 @@ def display_download_parameters(inputs: InputsFinal) -> None:
 
 
 def fetch_building_groups(inputs: InputsFinal) -> list[BuildingsGroup]:
+    release = RELEASES.filter_one(**inputs.as_filter())
     return [
         BuildingsGroup(
-            state,  # type: ignore[invalid-argument-type]  # sorted() loses Literal type, but value is USStateCode
-            upgrade_id,
-            fetch_bldg_ids(
-                inputs.product, inputs.release_year, inputs.weather_file, inputs.release_version, state, str(upgrade_id)
-            ),
+            state, # type: ignore[invalid-argument-type]  # sorted() loses Literal type, but value is USStateCode
+            upgrade,
+            list_buildings(release.key, state, upgrade),
         )
         for state in sorted(inputs.states)
-        for upgrade_id in sorted(inputs.upgrade_ids)
+        for upgrade in sorted(inputs.upgrade_ids)
     ]
 
 
 def _category_choice(name: str) -> questionary.Choice:
-    return questionary.Choice(title=f"--- {name} ---", value=None, disabled=True)  # type: ignore[arg-type]
+    return questionary.Choice(title=f"--- {name} ---", value=None, disabled=True)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
 
 def _filetype_choice(file_type: FileType) -> questionary.Choice:
@@ -454,7 +512,7 @@ def _filetype_choice(file_type: FileType) -> questionary.Choice:
 def _validate_output_directory(output_directory: str) -> bool | str:
     try:
         path = Path(output_directory)
-        path.resolve()
+        _ = path.resolve()
     except (OSError, ValueError):
         return "Please enter a valid directory path"
     else:
@@ -466,7 +524,7 @@ def _parse_and_validate_states(value: str) -> set[USStateCode]:
     bad_states = [state for state in states if not is_valid_state_code(state)]
     if bad_states:
         raise typer.BadParameter(message=", ".join(bad_states), param_hint="states")
-    return cast(set[USStateCode], states)
+    return set(cast(list[USStateCode], states))
 
 
 def _parse_and_validate_file_types(value: str) -> set[FileType]:
@@ -493,6 +551,12 @@ def _validate_sample(value: int) -> Sample:
 def cancel(result: int = 0, message: str = "Operation cancelled by user.") -> Never:
     console.print(f"\n[red]{message}[/red]")
     raise typer.Exit(result) from None
+
+
+def print_memory_info() -> None:
+    process = psutil.Process()
+    rss_mb = cast(int, process.memory_info().rss) / (1024 * 1024)
+    print(f"RSS Memory Usage = {rss_mb:.2f} MB")
 
 
 if __name__ == "__main__":

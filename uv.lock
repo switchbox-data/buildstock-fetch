@@ -431,6 +431,9 @@ test = [
     { name = "tox-uv", specifier = ">=1.11.3" },
 ]
 
+[package.metadata.requires-dev]
+dev = []
+
 [[package]]
 name = "cachetools"
 version = "6.2.4"

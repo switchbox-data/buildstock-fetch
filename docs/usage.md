@@ -129,7 +129,7 @@ You can provide only some of the arguments, in which case the app will launch in
 
 ### Specifying the number of concurrent downloads
 
-By default, `bsf` will limit the number of concurrent downloads to 15. You may increase or decrease that number by providing `--threads <number>` command-line argument (i.e. `--threads: 5` will limit concurrent downloads to 5 files at a time)
+By default, `bsf` will limit the number of concurrent downloads to 15. You may increase or decrease that number by providing `--tasks <number>` command-line argument (i.e. `--tasks: 5` will limit concurrent downloads to 5 files at a time)
 
 ### Output Structure
 
