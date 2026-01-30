@@ -201,9 +201,15 @@ def _read_parquet_with_columns(
         # Read only selected columns using lazy evaluation (memory efficient)
         # Use streaming for large files to reduce memory footprint
         if selected_columns and set(selected_columns) != set(available_columns):
-            df = lazy_df.select(selected_columns).collect(streaming=True)
+            try:
+                df = lazy_df.select(selected_columns).collect(engine="streaming")
+            except TypeError:
+                df = lazy_df.select(selected_columns).collect(streaming=True)
         else:
-            df = lazy_df.collect(streaming=True)
+            try:
+                df = lazy_df.collect(engine="streaming")
+            except TypeError:
+                df = lazy_df.collect(streaming=True)
     finally:
         # Clean up temp file immediately
         with contextlib.suppress(Exception):
@@ -529,8 +535,8 @@ def convert_state_names_to_abbreviations(data_dir: Path, skip_sorting: bool = Fa
     # Walk through all directories and rename state directories
     for root, dirs, _files in os.walk(parquet_dir):
         for dir_name in dirs:
-            if dir_name.startswith("state="):
-                state_name = dir_name[6:]  # Remove "state=" prefix
+            if dir_name.startswith("state="):  # type: ignore[unresolved-attribute]  # ty incorrectly infers Path, but dir_name is str from os.walk
+                state_name = dir_name[6:]  # type: ignore[non-subscriptable]  # Remove "state=" prefix
                 if state_name in state_mapping:
                     old_path = os.path.join(root, dir_name)
                     new_dir_name = f"state={state_mapping[state_name]}"
@@ -573,10 +579,10 @@ def find_all_parquet_files(base_file_key: str, s3_client: Any, bucket_name: str)
                     # Extract upgrade number from filename
                     parts = key.split("/")
                     filename = parts[-1]
-                    upgrade_num = _extract_upgrade_number(filename)
-                    upgrade_num = int(upgrade_num)
+                    upgrade_num_str = _extract_upgrade_number(filename)
 
-                    if upgrade_num is not None:
+                    if upgrade_num_str is not None:
+                        upgrade_num = int(upgrade_num_str)
                         upgrade_key = f"upgrade_{upgrade_num}"
                         if upgrade_key not in all_files:
                             all_files[upgrade_key] = []
@@ -610,7 +616,7 @@ def _process_single_file(
         DataFrame if successful, None otherwise
     """
     # Create S3 filesystem for this thread (thread-safe)
-    s3 = fs.S3FileSystem(anonymous=True, region="us-west-2")
+    s3 = fs.S3FileSystem(anonymous=True, region="us-west-2")  # type: ignore[possibly-missing-attribute]  # S3FileSystem exists in pyarrow.fs, ty stubs incomplete
     try:
         df = process_parquet_file(
             file_key, s3, bucket_name, res_com, weather, release_version, release_year, release_name
@@ -764,9 +770,9 @@ def _combine_files_chunked(temp_files: list[Path], temp_dir: Path, chunk_size: i
             chunk_file_list = temp_files[chunk_start : chunk_start + chunk_size]
             lazy_frames = [pl.scan_parquet(str(f)) for f in chunk_file_list]
             try:
-                chunk_df = pl.concat(lazy_frames).collect(engine="streaming")
+                chunk_df = pl.concat(lazy_frames).collect(engine="streaming")  # type: ignore[unresolved-attribute]  # LazyFrame.collect() exists, ty Polars stubs incomplete
             except TypeError:
-                chunk_df = pl.concat(lazy_frames).collect(streaming=True)
+                chunk_df = pl.concat(lazy_frames).collect(streaming=True)  # type: ignore[unresolved-attribute]  # LazyFrame.collect() exists, ty Polars stubs incomplete
             chunk_file = temp_dir / f"chunk_{chunk_start // chunk_size:04d}.parquet"
             chunk_df.write_parquet(chunk_file)
             chunk_files.append(chunk_file)
@@ -783,9 +789,9 @@ def _combine_files_chunked(temp_files: list[Path], temp_dir: Path, chunk_size: i
     # Final concatenation from chunk files
     lazy_frames = [pl.scan_parquet(str(f)) for f in chunk_files]
     try:
-        combined_df = pl.concat(lazy_frames).collect(engine="streaming")
+        combined_df = pl.concat(lazy_frames).collect(engine="streaming")  # type: ignore[unresolved-attribute]  # LazyFrame.collect() exists, ty Polars stubs incomplete
     except TypeError:
-        combined_df = pl.concat(lazy_frames).collect(streaming=True)
+        combined_df = pl.concat(lazy_frames).collect(streaming=True)  # type: ignore[unresolved-attribute]  # LazyFrame.collect() exists, ty Polars stubs incomplete
     del lazy_frames
     gc.collect()
     return combined_df
@@ -795,9 +801,9 @@ def _combine_files_direct(temp_files: list[Path]) -> pl.DataFrame:
     """Combine files directly for smaller releases."""
     lazy_frames = [pl.scan_parquet(str(f)) for f in temp_files]
     try:
-        combined_df = pl.concat(lazy_frames).collect(engine="streaming")
+        combined_df = pl.concat(lazy_frames).collect(engine="streaming")  # type: ignore[unresolved-attribute]  # LazyFrame.collect() exists, ty Polars stubs incomplete
     except TypeError:
-        combined_df = pl.concat(lazy_frames).collect(streaming=True)
+        combined_df = pl.concat(lazy_frames).collect(streaming=True)  # type: ignore[unresolved-attribute]  # LazyFrame.collect() exists, ty Polars stubs incomplete
     del lazy_frames
     gc.collect()
     return combined_df
@@ -1126,9 +1132,9 @@ if __name__ == "__main__":
                 try:
                     # Collect chunk with streaming
                     try:
-                        chunk_df = chunk_combined.collect(engine="streaming")
+                        chunk_df = chunk_combined.collect(engine="streaming")  # type: ignore[possibly-missing-attribute]  # LazyFrame.collect() exists, ty Polars stubs incomplete
                     except TypeError:
-                        chunk_df = chunk_combined.collect(streaming=True)
+                        chunk_df = chunk_combined.collect(streaming=True)  # type: ignore[possibly-missing-attribute]  # LazyFrame.collect() exists, ty Polars stubs incomplete
 
                     # Convert to PyArrow table
                     chunk_table = chunk_df.to_arrow()

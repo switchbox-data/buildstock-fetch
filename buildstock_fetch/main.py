@@ -243,7 +243,7 @@ def _download_with_progress_metadata(
     # Create S3 filesystem for anonymous access
     # This allows Polars to read directly from S3 without downloading the entire file
     # Polars can use PyArrow's filesystem for efficient S3 access
-    s3_filesystem = fs.S3FileSystem(anonymous=True, region="us-west-2")
+    s3_filesystem = fs.S3FileSystem(anonymous=True, region="us-west-2")  # type: ignore[possibly-missing-attribute]  # S3FileSystem exists in pyarrow.fs, ty stubs incomplete
 
     for url in urls:
         s3_path = _convert_url_to_s3_path(url)
@@ -371,7 +371,7 @@ def _download_with_progress_metadata_fallback(url: str, output_file: Path, progr
             new_file = pl.scan_parquet(temp_path)
             combined_file = pl.concat([existing_file, new_file])
             # Remove duplicate rows based on bldg_id column
-            deduplicated_file = combined_file.collect().unique(subset=["bldg_id"], keep="first")
+            deduplicated_file = combined_file.collect().unique(subset=["bldg_id"], keep="first")  # type: ignore[unresolved-attribute]  # LazyFrame.collect() exists, ty Polars stubs incomplete
             deduplicated_file.write_parquet(output_file)
             gc.collect()
             os.remove(temp_path)

@@ -440,7 +440,7 @@ def display_download_parameters(inputs: InputsFinal) -> None:
 def fetch_building_groups(inputs: InputsFinal) -> list[BuildingsGroup]:
     return [
         BuildingsGroup(
-            state,
+            state,  # type: ignore[invalid-argument-type]  # sorted() loses Literal type, but value is USStateCode
             upgrade_id,
             fetch_bldg_ids(
                 inputs.product, inputs.release_year, inputs.weather_file, inputs.release_version, state, str(upgrade_id)

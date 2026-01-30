@@ -316,7 +316,7 @@ def test_generate_trip_schedules(predict_vehicles, sample_profiles, generate_sch
     assert result["departure_hour"].to_list() == schedule_data["departure_hour"]
     assert result["arrival_hour"].to_list() == schedule_data["arrival_hour"]
     assert result["miles_driven"].to_list() == schedule_data["miles_driven"]
-    assert [d.strftime("%Y-%m-%d") for d in result["date"]] == [d.strftime("%Y-%m-%d") for d in schedule_data["date"]]
+    assert [d.strftime("%Y-%m-%d") for d in result["date"]] == [d.strftime("%Y-%m-%d") for d in schedule_data["date"]]  # type: ignore[possibly-missing-attribute]  # date column contains datetime objects
 
     # Verify mock calls
     predict_vehicles.assert_called_once()
