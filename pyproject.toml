@@ -89,8 +89,7 @@ build-backend = "setuptools.build_meta"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["buildstock_fetch*"]
+include = ["buildstock_fetch", "buildstock_fetch.*"]
 
 [tool.setuptools.package-data]
 "buildstock_fetch" = [
