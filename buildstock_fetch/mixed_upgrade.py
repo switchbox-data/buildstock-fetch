@@ -101,6 +101,7 @@ class MixedUpgradeScenario:
 
     Args:
         data_path: Path to the data directory (local path or S3 path).
+        pathway_scenario_name: Name of the pathway scenario. will be used to create subdirectories when writing out the metadata and load curves.
         release: A BuildstockRelease or release key string specifying the release.
         states: Optional state code or list of state codes to filter data.
             If None, auto-detects states present on disk.
@@ -121,6 +122,7 @@ class MixedUpgradeScenario:
         ... )
         >>> mus = MixedUpgradeScenario(
         ...     data_path="./data",
+        ...     pathway_scenario_name="rapid_adoption",
         ...     release="res_2024_tmy3_2",
         ...     states="NY",
         ...     sample_n=1000,
@@ -134,6 +136,7 @@ class MixedUpgradeScenario:
     def __init__(
         self,
         data_path: str | Path,
+        pathway_scenario_name: str,
         release: ReleaseKey | BuildstockRelease,
         states: USStateCode | Collection[USStateCode] | None = None,
         sample_n: int | None = None,
@@ -564,3 +567,9 @@ class MixedUpgradeScenario:
         print(
             f"Exported scenario for {len(self.sampled_bldgs)} buildings across {self.num_years} years to {output_path}"
         )
+
+    def save_metadata_parquet(self, path: Path | None = None) -> None:
+        pass
+
+    def save_hourly_load_parquet(self, path: Path | None = None) -> None:
+        pass
