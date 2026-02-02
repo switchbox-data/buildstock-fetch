@@ -148,6 +148,7 @@ class MixedUpgradeScenario:
 
         validate_scenario(scenario)
         self.scenario = scenario
+        self.pathway_scenario_name = pathway_scenario_name
         self._upgrade_ids = tuple(scenario)
         self.num_years = len(next(iter(scenario.values())))
 
@@ -568,8 +569,45 @@ class MixedUpgradeScenario:
             f"Exported scenario for {len(self.sampled_bldgs)} buildings across {self.num_years} years to {output_path}"
         )
 
+    def _resolve_scenario_root(self, path: Path | None) -> Path:
+        """Resolve scenario root directory based on optional base path."""
+        base_path = self.data_path if path is None else Path(path)
+        return base_path / self.pathway_scenario_name
+
     def save_metadata_parquet(self, path: Path | None = None) -> None:
-        pass
+        """Save mixed upgrade metadata to a partitioned parquet dataset.
+
+        Output structure:
+            <path>/<scenario_name>/year=<year_int>/metadata.parquet
+
+        Args:
+            path: Optional base path to write to. Defaults to the release path.
+        """
+        scenario_root = self._resolve_scenario_root(path)
+        for year_idx in range(self.num_years):
+            year_dir = scenario_root / f"year={year_idx}"
+            year_dir.mkdir(parents=True, exist_ok=True)
+            output_file = year_dir / "metadata.parquet"
+            df = self.read_metadata(years=[year_idx]).collect()
+            df.write_parquet(output_file)
 
     def save_hourly_load_parquet(self, path: Path | None = None) -> None:
-        pass
+        """Save mixed upgrade hourly load curves to partitioned parquet datasets.
+
+        Output structure:
+            <path>/<scenario_name>/year=<year_int>/<bldg_id>-<upgrade_id>.parquet
+
+        Args:
+            path: Optional base path to write to. Defaults to the release path.
+        """
+        scenario_root = self._resolve_scenario_root(path)
+        for year_idx in range(self.num_years):
+            year_dir = scenario_root / f"year={year_idx}"
+            year_dir.mkdir(parents=True, exist_ok=True)
+            df = self.read_load_curve_hourly(years=[year_idx]).collect()
+            if df.is_empty():
+                continue
+            for key, group in df.partition_by(["bldg_id", "upgrade_id"], as_dict=True).items():
+                bldg_id, upgrade_id = key
+                output_file = year_dir / f"{int(bldg_id)}-{int(upgrade_id)}.parquet"
+                group.write_parquet(output_file)
