@@ -1,7 +1,7 @@
 """Shared pytest fixtures for all test modules."""
 
-import shutil
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -10,27 +10,18 @@ from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
 
 @pytest.fixture(scope="function")
 def cleanup_downloads():
-    """Fixture to clean up downloaded data before and after tests.
+    """Fixture to provide a temporary directory for test downloads.
 
     This fixture:
-    1. Removes any existing 'data' directory before the test runs
-    2. Yields control to the test
-    3. Removes the 'data' directory after the test completes
+    1. Creates a temporary directory for test data
+    2. Yields the path to the test
+    3. Automatically cleans up the temporary directory after the test completes
 
-    This ensures each test starts with a clean slate and doesn't leave
-    downloaded files behind.
+    This ensures each test starts with a clean slate and doesn't interfere with
+    any work-in-progress data in the working directory.
     """
-    # Setup - clean up any existing files before test
-    data_dir = Path("data")
-
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
-
-    yield
-
-    # Teardown - clean up downloaded files after test
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
+    with TemporaryDirectory() as tmpdir:
+        yield Path(tmpdir)
 
 
 @pytest.fixture(scope="module")

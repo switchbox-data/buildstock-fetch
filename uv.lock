@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10, <4.0"
 resolution-markers = [
     "python_full_version >= '3.11'",
@@ -95,6 +95,7 @@ dependencies = [
     { name = "botocore" },
     { name = "polars" },
     { name = "pyarrow" },
+    { name = "pytest" },
     { name = "questionary" },
     { name = "requests" },
     { name = "rich" },
@@ -167,6 +168,7 @@ requires-dist = [
     { name = "pandas-stubs", marker = "extra == 'lint'", specifier = ">=2.2.0" },
     { name = "polars", specifier = ">=0.20.0" },
     { name = "pyarrow", specifier = ">=14.0.1" },
+    { name = "pytest", specifier = ">=9.0.1" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.2.0" },
     { name = "questionary", specifier = ">=1.11.0" },
     { name = "requests", specifier = ">=2.32.3" },

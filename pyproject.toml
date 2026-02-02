@@ -27,6 +27,7 @@ dependencies = [
   "botocore>=1.33.0",
   "pyarrow>=14.0.1",
   "typedload>=2.39",
+  "pytest>=9.0.1",
 ]
 
 [project.urls]

@@ -49,6 +49,47 @@ class ScenarioDataNotFoundError(DataNotFoundError):
 
 
 @final
+class ScenarioParameterRequiredError(ValueError):
+    """Raised when scenario parameter is not provided to MixedUpgradeScenario."""
+
+    @override
+    def __str__(self) -> str:
+        return "scenario parameter is required for MixedUpgradeScenario"
+
+
+@final
+class BaselineMetadataNotFoundError(DataNotFoundError):
+    """Raised when baseline metadata is not found on disk."""
+
+    @override
+    def __str__(self) -> str:
+        return "No baseline (upgrade 0) metadata found. Please download baseline data using bsf."
+
+
+@final
+class NoBuildingsAvailableError(ValueError):
+    """Raised when no buildings are available for sampling."""
+
+    @override
+    def __str__(self) -> str:
+        return "No buildings available for sampling. Please check that metadata exists."
+
+
+@final
+class YearOutOfRangeError(ValueError):
+    """Raised when a year index is out of range."""
+
+    def __init__(self, year_idx: int, max_year: int) -> None:
+        self.year_idx = year_idx
+        self.max_year = max_year
+        super().__init__()
+
+    @override
+    def __str__(self) -> str:
+        return f"Year index {self.year_idx} is out of range. Valid range: [0, {self.max_year}]"
+
+
+@final
 class MixedUpgradeScenario:
     """Class for orchestrating multi-year adoption trajectories across multiple upgrade scenarios.
 
@@ -100,7 +141,7 @@ class MixedUpgradeScenario:
         scenario: dict[int, list[float]] | None = None,
     ) -> None:
         if scenario is None:
-            raise ValueError("scenario parameter is required for MixedUpgradeScenario")
+            raise ScenarioParameterRequiredError()
 
         validate_scenario(scenario)
         self.scenario = scenario
@@ -138,16 +179,14 @@ class MixedUpgradeScenario:
             # No sampling: fall back to full baseline bldg_id list.
             metadata_files = self.downloaded_data.filter(file_type="metadata", suffix=".parquet", upgrade="0")
             if not metadata_files:
-                raise DataNotFoundError(
-                    "No baseline (upgrade 0) metadata found. Please download baseline data using bsf."
-                )
+                raise BaselineMetadataNotFoundError()
             first_file = min(metadata_files, key=lambda x: x.file_path)
             df = pl.scan_parquet(first_file.file_path).select("bldg_id").collect()
             all_bldg_ids = df["bldg_id"].unique().to_list()
             self.sampled_bldgs = frozenset(all_bldg_ids)
 
         if not self.sampled_bldgs:
-            raise ValueError("No buildings available for sampling. Please check that metadata exists.")
+            raise NoBuildingsAvailableError()
 
         num_upgrades = len(scenario)
         print(f"Sampled {len(self.sampled_bldgs)} buildings from baseline (upgrade 0)")
@@ -220,7 +259,7 @@ class MixedUpgradeScenario:
 
         for year_idx in years:
             if not 0 <= year_idx < self.num_years:
-                raise ValueError(f"Year index {year_idx} is out of range. Valid range: [0, {self.num_years - 1}]")
+                raise YearOutOfRangeError(year_idx, self.num_years - 1)
 
         return years
 
@@ -296,6 +335,59 @@ class MixedUpgradeScenario:
             f" (example IDs: {missing[:sample_size]})" if sample_size else "",
         )
 
+    def _read_for_upgrade(
+        self,
+        file_type: FileType,
+        upgrade_id: int,
+        bldg_ids: Iterable[int],
+        year_idx: int,
+        available_ids_by_upgrade: dict[int, frozenset[int]],
+    ) -> pl.LazyFrame | None:
+        """Read data for a specific upgrade and set of building IDs."""
+        bldg_ids_list = list(bldg_ids)
+        if not bldg_ids_list:
+            return None
+        if available_ids_by_upgrade:
+            available_ids = available_ids_by_upgrade.get(upgrade_id, frozenset())
+            self._warn_on_missing_ids(file_type, upgrade_id, year_idx, bldg_ids_list, available_ids)
+        lf = self.baseline_reader.read_parquets(
+            file_type, upgrades=str(upgrade_id), building_ids=bldg_ids_list
+        )
+        if file_type == "metadata":
+            lf = lf.rename({"upgrade": "upgrade_id"})
+        else:
+            lf = lf.with_columns(pl.lit(upgrade_id).alias("upgrade_id"))
+        return lf.with_columns(pl.lit(year_idx).alias("year"))
+
+    def _process_year(
+        self,
+        file_type: FileType,
+        year_idx: int,
+        bldgs: list[int],
+        allocations: dict[int, list[int]],
+        total: int,
+        available_ids_by_upgrade: dict[int, frozenset[int]],
+    ) -> pl.LazyFrame | None:
+        """Process data for a single year, reading all upgrades and baseline."""
+        year_dfs: list[pl.LazyFrame] = []
+        total_adopted = 0
+
+        for uid in self._upgrade_ids:
+            target = int(self.scenario[uid][year_idx] * total)
+            total_adopted += target
+            lf = self._read_for_upgrade(file_type, uid, allocations[uid][:target], year_idx, available_ids_by_upgrade)
+            if lf is not None:
+                year_dfs.append(lf)
+
+        # Baseline = remaining buildings after all upgrade allocations.
+        lf = self._read_for_upgrade(file_type, 0, bldgs[total_adopted:], year_idx, available_ids_by_upgrade)
+        if lf is not None:
+            year_dfs.append(lf)
+
+        if year_dfs:
+            return pl.concat(year_dfs, how="vertical_relaxed")
+        return None
+
     def _read_data_for_scenario(self, file_type: FileType, years: list[int] | None = None):
         """Read data across upgrades and years without full materialization."""
         years = sorted(self._validate_years(years))
@@ -305,42 +397,11 @@ class MixedUpgradeScenario:
         bldgs, allocations = self._allocation_plan
         total = len(bldgs)
 
-        def read_for(upgrade_id: int, bldg_ids: Iterable[int], year_idx: int):
-            bldg_ids_list = list(bldg_ids)
-            if not bldg_ids_list:
-                return None
-            if available_ids_by_upgrade:
-                available_ids = available_ids_by_upgrade.get(upgrade_id, frozenset())
-                self._warn_on_missing_ids(file_type, upgrade_id, year_idx, bldg_ids_list, available_ids)
-            lf = self.baseline_reader.read_parquets(
-                file_type, upgrades=str(upgrade_id), building_ids=bldg_ids_list
-            )
-            if file_type == "metadata":
-                lf = lf.rename({"upgrade": "upgrade_id"})
-            else:
-                lf = lf.with_columns(pl.lit(upgrade_id).alias("upgrade_id"))
-            return lf.with_columns(pl.lit(year_idx).alias("year"))
-
         all_year_dfs: list[pl.LazyFrame] = []
         for year_idx in years:
-            # Read upgrades first, then baseline remainder for the year.
-            year_dfs: list[pl.LazyFrame] = []
-            total_adopted = 0
-
-            for uid in self._upgrade_ids:
-                target = int(self.scenario[uid][year_idx] * total)
-                total_adopted += target
-                lf = read_for(uid, allocations[uid][:target], year_idx)
-                if lf is not None:
-                    year_dfs.append(lf)
-
-            # Baseline = remaining buildings after all upgrade allocations.
-            lf = read_for(0, bldgs[total_adopted:], year_idx)
-            if lf is not None:
-                year_dfs.append(lf)
-
-            if year_dfs:
-                all_year_dfs.append(pl.concat(year_dfs, how="vertical_relaxed"))
+            year_df = self._process_year(file_type, year_idx, bldgs, allocations, total, available_ids_by_upgrade)
+            if year_df is not None:
+                all_year_dfs.append(year_df)
 
         if not all_year_dfs:
             return pl.LazyFrame({"bldg_id": [], "upgrade_id": [], "year": []})
