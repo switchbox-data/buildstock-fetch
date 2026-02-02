@@ -2,18 +2,11 @@ from typing import Any, Literal, NewType, TypeAlias, get_args
 
 from typing_extensions import TypeIs
 
-__all__ = [
-    "ReleaseYear",
-    "ResCom",
-    "Weather",
-]
-
-
 ReleaseKey = Literal[
-    "com_2021_amy2018_1",
-    "com_2021_tmy3_1",
     "res_2021_amy2018_1",
     "res_2021_tmy3_1",
+    "com_2021_amy2018_1",
+    "com_2021_tmy3_1",
     "res_2022_amy2012_1",
     "res_2022_amy2012_1.1",
     "res_2022_amy2018_1",
@@ -22,17 +15,17 @@ ReleaseKey = Literal[
     "res_2022_tmy3_1.1",
     "com_2023_amy2018_1",
     "com_2023_amy2018_2",
-    "com_2024_amy2018_1",
-    "com_2024_amy2018_2",
     "res_2024_amy2018_2",
     "res_2024_tmy3_1",
     "res_2024_tmy3_2",
+    "com_2024_amy2018_1",
+    "com_2024_amy2018_2",
+    "res_2025_amy2012_1",
+    "res_2025_amy2018_1",
     "com_2025_amy2012_2",
     "com_2025_amy2018_1",
     "com_2025_amy2018_2",
     "com_2025_amy2018_3",
-    "res_2025_amy2012_1",
-    "res_2025_amy2018_1",
 ]
 
 UpgradeID = NewType("UpgradeID", str)

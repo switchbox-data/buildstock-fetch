@@ -8,6 +8,11 @@ import pytest
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
 
 
+@pytest.fixture(scope="session")
+def vcr_config():
+    return {"record_mode": "new_episodes"}
+
+
 @pytest.fixture(scope="function")
 def cleanup_downloads():
     """Fixture to provide a temporary directory for test downloads.

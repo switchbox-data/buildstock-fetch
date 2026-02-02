@@ -1,3 +1,6 @@
+# cassetes
+tests/cassettes
+
 docs/source
 /data/
 tests/data/

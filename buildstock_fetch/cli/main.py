@@ -1,19 +1,25 @@
+import asyncio
 import importlib.metadata
+import logging
 import pprint
 import re
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import Annotated, NamedTuple, cast, get_args
+from typing import Annotated, Literal, NamedTuple, cast, get_args
 
+import psutil
 import questionary
 import typer
+from async_timer.timer import Timer
 from rich.console import Console
+from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
 from typing_extensions import Never
 
-from buildstock_fetch.building import BuildingID
-from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
-from buildstock_fetch.releases import BuildstockReleases
+from buildstock_fetch.building_ import Building
+from buildstock_fetch.main_new import download_and_process_all, list_buildings
+from buildstock_fetch.releases import RELEASES, BuildstockReleases
 from buildstock_fetch.types import (
     FileType,
     ReleaseVersion,
@@ -56,7 +62,10 @@ def _show_app_version(value: bool) -> None:
 class BuildingsGroup(NamedTuple):
     state: USStateCode
     upgrade_id: UpgradeID
-    buildings: list[BuildingID]
+    buildings: list[Building]
+
+
+LogLevelStr = Literal["critical", "error", "warning", "info", "debug"]
 
 
 @app.command()
@@ -107,10 +116,25 @@ def main(  # noqa: C901
             help="Number of building IDs to download across all upgrades. Use 0 for all buildings.",
         ),
     ] = None,
-    threads: Annotated[
-        int, typer.Option("--threads", "-t", help="Number of files to download at the same time", min=1, max=50)
+    tasks: Annotated[
+        int, typer.Option("--tasks", "-t", help="Number of files to download at the same time", min=1, max=100)
     ] = 15,
+    connections: Annotated[int | None, typer.Option("--connections", help="Number of http connections")] = None,
+    processing_tasks: Annotated[
+        int | None, typer.Option("--processing_tasks", help="Number of processing tasks")
+    ] = None,
+    loglevel: LogLevelStr = "error",
+    logmem: Annotated[bool, typer.Option("--logmem", help="Log memory usage")] = False,
 ) -> None:
+    log_levels: dict[LogLevelStr, int] = {
+        "critical": logging.CRITICAL,
+        "error": logging.ERROR,
+        "warning": logging.WARNING,
+        "info": logging.INFO,
+        "debug": logging.DEBUG,
+    }
+    logging.basicConfig(level=log_levels[loglevel], handlers=[RichHandler()])
+
     states = _parse_and_validate_states(states_raw) if states_raw else None
     file_types = _parse_and_validate_file_types(file_types_raw) if file_types_raw else None
     upgrade_ids = _parse_and_validate_upgrade_ids(upgrade_id_raw) if upgrade_id_raw else None
@@ -166,7 +190,7 @@ def main(  # noqa: C901
     if not inputs_finalized:
         if not verify_inputs(inputs_final):
             cancel()
-        display_cli_args(inputs_final, threads, sample)
+        display_cli_args(inputs_final, tasks, connections, processing_tasks, sample)
 
     display_download_parameters(inputs_final)
     release = releases.filter_one(**inputs.as_filter())
@@ -178,19 +202,29 @@ def main(  # noqa: C901
 
     building_groups = fetch_building_groups(inputs_final)
     if sample is not None:
-        buildings: set[BuildingID] = set()
+        buildings: set[Building] = set()
         for group in building_groups:
             buildings |= set(group.buildings[: -1 if sample == "all" else sample])
     else:
         buildings = get_buildings_sample(building_groups)
-
-    _unused = fetch_bldg_data(
-        list(buildings),
-        tuple(inputs_final.file_types),
+    callee = download_and_process_all(
         inputs_final.output_directory,
-        max_workers=threads,
-        weather_states=[state for state in inputs_final.states if state in release.weather_map_available_states],
+        buildings,
+        inputs_final.file_types,
+        max_tasks=tasks,
+        max_connections=connections,
+        max_processing_tasks=processing_tasks,
     )
+
+    if logmem:
+        asyncio.run(run_with_logmem(callee))
+    else:
+        _ = asyncio.run(callee)
+
+
+async def run_with_logmem(callee: Awaitable) -> None:  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]
+    async with Timer(10, print_memory_info):  # pyright: ignore[reportUnknownArgumentType]
+        _ = await callee  # pyright: ignore[reportUnknownVariableType]
 
 
 def select_product(releases: BuildstockReleases, inputs: InputsMaybe) -> ResCom:
@@ -368,7 +402,7 @@ def verify_inputs(inputs: InputsFinal) -> bool:
     return bool(result)
 
 
-def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[BuildingID]:
+def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[Building]:
     total_buildings = sum(len(_.buildings) for _ in building_groups)
     console.print(f"\nThere are {total_buildings} files for this release")
     for group in building_groups:
@@ -385,7 +419,7 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[BuildingI
     if not choice:
         cancel()
 
-    result: set[BuildingID] = set()
+    result: set[Building] = set()
     if choice == "Download all files":
         for group in building_groups:
             result |= set(group.buildings)
@@ -421,7 +455,9 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[BuildingI
     return result
 
 
-def display_cli_args(inputs: InputsFinal, threads: int, sample: Sample | None) -> None:
+def display_cli_args(
+    inputs: InputsFinal, tasks: int, connections: int | None, processing_tasks: int | None, sample: Sample | None
+) -> None:
     console.print("[blue]Paste this in the command line to launch the script again with the same arguments[/]")
     display = (
         "bsf \\\n\t"
@@ -433,8 +469,12 @@ def display_cli_args(inputs: InputsFinal, threads: int, sample: Sample | None) -
         f'--file_type "{" ".join(sorted(inputs.file_types, key=get_args(FileType).index))}"\\\n\t'
         f'--upgrade_id "{" ".join(map(str, sorted(inputs.upgrade_ids)))}"\\\n\t'
         f'--output_directory "{inputs.output_directory.as_posix()}"\\\n\t'
-        f"--threads {threads}"
+        f"--tasks {tasks}"
     )
+    if connections is not None:
+        display += f"\\\n\t--connections {connections}"
+    if processing_tasks is not None:
+        display += f"\\\n\t--processing-tasks {processing_tasks}"
     if sample is not None:
         display += f"\\\n\t--sample {0 if sample == 'all' else sample}"
     console.print(display)
@@ -457,16 +497,15 @@ def display_download_parameters(inputs: InputsFinal) -> None:
 
 
 def fetch_building_groups(inputs: InputsFinal) -> list[BuildingsGroup]:
+    release = RELEASES.filter_one(**inputs.as_filter())
     return [
         BuildingsGroup(
             state,
-            upgrade_id,
-            fetch_bldg_ids(
-                inputs.product, inputs.release_year, inputs.weather_file, inputs.release_version, state, str(upgrade_id)
-            ),
+            upgrade,
+            list_buildings(release.key, state, upgrade),
         )
         for state in sorted(inputs.states)
-        for upgrade_id in sorted(inputs.upgrade_ids)
+        for upgrade in sorted(inputs.upgrade_ids)
     ]
 
 
@@ -520,6 +559,12 @@ def _validate_sample(value: int) -> Sample:
 def cancel(result: int = 0, message: str = "Operation cancelled by user.") -> Never:
     console.print(f"\n[red]{message}[/red]")
     raise typer.Exit(result) from None
+
+
+def print_memory_info() -> None:
+    process = psutil.Process()
+    rss_mb = cast(int, process.memory_info().rss) / (1024 * 1024)
+    print(f"RSS Memory Usage = {rss_mb:.2f} MB")
 
 
 if __name__ == "__main__":

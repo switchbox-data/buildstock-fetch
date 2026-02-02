@@ -246,7 +246,19 @@ class BuildStockRead:
         upgrades = self._validate_upgrades(file_type, upgrades)
 
         files = self.downloaded_data.filter(file_type=file_type, suffix=".parquet", upgrade=upgrades)
-        lf = pl.scan_parquet([_.file_path for _ in files])
+        # Scan each file separately and concatenate with diagonal alignment to handle schema mismatches
+        # This ensures that if one file has columns another doesn't, missing columns are filled with nulls
+        file_paths = [file.file_path for file in files]
+        if not file_paths:
+            # Return an empty LazyFrame if no files found
+            lf = pl.LazyFrame()
+        elif len(file_paths) == 1:
+            # Single file - no need for concatenation
+            lf = pl.scan_parquet(file_paths[0])
+        else:
+            # Multiple files - scan each separately and concatenate with diagonal alignment
+            lazy_frames = [pl.scan_parquet(file_path) for file_path in file_paths]
+            lf = pl.concat(lazy_frames, how="diagonal")
         lf = self._apply_sampling_filter(lf)
 
         # Apply building_ids filter if specified

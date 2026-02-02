@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 import boto3
 import polars as pl
@@ -188,10 +188,9 @@ def _extract_metadata_columns_to_keep(metadata_file: Path) -> list[str]:
     schema = pl.scan_parquet(metadata_file).collect_schema()
 
     columns_to_keep = []
+    keep = ["upgrade", "bldg_id", "metadata_index"]
     for col in schema:
-        if any(keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index", "weight"]) or col.startswith(
-            "in."
-        ):
+        if any(keyword in col for keyword in keep) or col.startswith("in.") or col.startswith("upgrade."):
             columns_to_keep.append(col)
     return columns_to_keep
 
@@ -286,9 +285,11 @@ def _download_with_progress_metadata(
                     column_names = pq_metadata.schema.names
                     columns_to_keep = []
                     for col in column_names:
-                        if any(
-                            keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index"]
-                        ) or col.startswith("in."):
+                        if (
+                            any(keyword in col for keyword in ["upgrade", "bldg_id", "metadata_index"])
+                            or col.startswith("in.")
+                            or col.startswith("upgrade.")
+                        ):
                             columns_to_keep.append(col)
                     # Polars will use predicate pushdown to only read relevant row groups
                     df = (
@@ -402,7 +403,11 @@ def _process_single_metadata_file(metadata_file: Path) -> None:
     # and remove columns that start with "in."
     columns_to_keep = []
     for col in schema:
-        if any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("in."):
+        if (
+            any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"])
+            or col.startswith("in.")
+            or col.startswith("upgrade.")
+        ):
             columns_to_keep.append(col)
 
     # Use streaming operations to avoid loading entire file into memory
@@ -502,7 +507,7 @@ def _aggregate_load_curve_aggregate(
     aggregation_rules = pl.read_csv(load_curve_map)
 
     # Create a dictionary mapping column names to their aggregation functions
-    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"]))
+    column_aggregations = dict(zip(aggregation_rules["name"], aggregation_rules["Aggregate_function"], strict=True))
 
     # Ensure timestamp column exists and convert to datetime if needed
     if "timestamp" not in load_curve.columns:
@@ -591,9 +596,9 @@ def download_bldg_data(
     bldg_id: BuildingID,
     file_type: RequestedFileTypes,
     output_dir: Path,
-    progress: Optional[Progress] = None,
-    task_id: Optional[TaskID] = None,
-) -> dict[str, Union[Path, None]]:
+    progress: Progress | None = None,
+    task_id: TaskID | None = None,
+) -> dict[str, Path | None]:
     """Download and extract building data for a single building. Only HPXML and schedule files are supported.
 
     Args:
@@ -615,7 +620,7 @@ def download_bldg_data(
     temp_dir = output_dir / f"temp_{str(bldg_id.bldg_id).zfill(7)}_{bldg_id.upgrade_id}"
     temp_dir.mkdir(exist_ok=True)
 
-    downloaded_paths: dict[str, Optional[Path]] = {
+    downloaded_paths: dict[str, Path | None] = {
         "hpxml": None,
         "schedule": None,
     }
@@ -718,7 +723,7 @@ def download_15min_load_curve(bldg_id: BuildingID, output_dir: Path) -> Path:
 
 
 def download_15min_load_curve_with_progress(
-    bldg_id: BuildingID, output_dir: Path, progress: Optional[Progress] = None, task_id: Optional[TaskID] = None
+    bldg_id: BuildingID, output_dir: Path, progress: Progress | None = None, task_id: TaskID | None = None
 ) -> Path:
     """Download the 15 min load profile timeseries for a given building with progress tracking.
 
@@ -793,8 +798,8 @@ def _add_time_aggregation_columns(load_curve_aggregate: pl.DataFrame, aggregate_
 def download_aggregate_time_step_load_curve_with_progress(
     bldg_id: BuildingID,
     output_dir: Path,
-    progress: Optional[Progress],
-    task_id: Optional[TaskID],
+    progress: Progress | None,
+    task_id: TaskID | None,
     aggregate_time_step: str,
 ) -> Path:
     """Download the aggregate time step load profile timeseries for a given building with progress tracking."""
@@ -929,8 +934,10 @@ def _process_annual_load_curve_file(file_path: Path) -> None:
     columns_to_keep = []
     for col in schema:
         if (
-            any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("out.")
-        ) and not col.startswith("in."):
+            (any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("out."))
+            and not col.startswith("in.")
+            and not col.startswith("upgrade.")
+        ):
             columns_to_keep.append(col)
 
     # Use streaming operations to avoid loading entire file into memory
@@ -1500,7 +1507,7 @@ def _download_metadata(
 
 
 def download_annual_load_curve_with_progress(
-    bldg_id: BuildingID, output_dir: Path, progress: Optional[Progress] = None, task_id: Optional[TaskID] = None
+    bldg_id: BuildingID, output_dir: Path, progress: Progress | None = None, task_id: TaskID | None = None
 ) -> Path:
     """Download the annual load curve for a given building with progress tracking.
 
@@ -1744,7 +1751,7 @@ def _download_weather_files_parallel(
     downloaded_paths: list[Path],
     failed_downloads: list[str],
     console: Console,
-    weather_states: Union[list[str], None] = None,
+    weather_states: list[str] | None = None,
 ) -> None:
     """Download weather files in parallel with progress tracking."""
     # Initialize weather_states to empty list if None
@@ -1842,7 +1849,7 @@ def fetch_bldg_data(
     file_type: tuple[str, ...],
     output_dir: Path,
     max_workers: int = 5,
-    weather_states: Union[list[str], None] = None,
+    weather_states: list[str] | None = None,
 ) -> tuple[list[Path], list[str]]:
     """Download building data for a given list of building ids
 
@@ -1931,7 +1938,7 @@ def _execute_downloads(
     downloaded_paths: list[Path],
     failed_downloads: list[str],
     console: Console,
-    weather_states: Union[list[str], None] = None,
+    weather_states: list[str] | None = None,
 ) -> None:
     """Execute all requested downloads based on file type configuration."""
     # Initialize weather_states to empty list if None

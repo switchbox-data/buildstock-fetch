@@ -79,6 +79,17 @@ class InputsFinal:
     upgrade_ids: set[UpgradeID]
     output_directory: Path
 
+    def as_filter(self) -> ReleaseFilter:
+        return {
+            "product": self.product,
+            "year": self.release_year,
+            "weather": self.weather_file,
+            "version": self.release_version,
+            "states": self.states,
+            "file_types": self.file_types,
+            "upgrades": self.upgrade_ids,
+        }
+
     @classmethod
     def from_finalized_maybe(cls, inputs: InputsMaybe) -> Self:
         if inputs.product is None:

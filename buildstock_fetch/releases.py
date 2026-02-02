@@ -61,6 +61,9 @@ class BuildstockReleaseDefinitionRaw:
     trip_schedule_states: frozenset[USStateCode] = field(default_factory=frozenset)
 
 
+BuildstockReleasesRaw = dict[ReleaseKey, BuildstockReleaseDefinitionRaw]
+
+
 class UpgradeDescriptionsRaw(TypedDict):
     upgrade_descriptions: dict[str, str]
 
@@ -141,14 +144,14 @@ class BuildstockReleases:
     releases: frozenset[BuildstockRelease]
 
     def __iter__(self) -> Iterator[BuildstockRelease]:
-        yield from self.releases
+        yield from sorted(self.releases, key=lambda _: _.key)
 
     @classmethod
     def load(cls, filepath: Path | None = None, upgrades_filepath: Path | None = None) -> Self:
         filepath = filepath or Path(BUILDSTOCK_RELEASES_FILE)
         content = filepath.read_text()
         json_ = json.loads(content)  # pyright: ignore[reportAny]
-        releases_dict = typedload.load(json_, dict[ReleaseKey, BuildstockReleaseDefinitionRaw])
+        releases_dict = typedload.load(json_, BuildstockReleasesRaw)
 
         upgrades_filepath = upgrades_filepath or Path(UPGRADES_LOOKUP_FILE)
         upgrades_content = upgrades_filepath.read_text()
@@ -187,7 +190,7 @@ class BuildstockReleases:
     def __len__(self) -> int:
         return len(self.releases)
 
-    def __getitem__(self, key: str) -> BuildstockRelease:
+    def __getitem__(self, key: ReleaseKey) -> BuildstockRelease:
         return next(_ for _ in self.releases if _.key == key)
 
     @property
