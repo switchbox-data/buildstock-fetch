@@ -8,10 +8,13 @@ upgrades over time.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Collection, Iterable
 from functools import cached_property
 from pathlib import Path
 from random import Random
+
+import polars as pl
 from typing_extensions import final, override
 
 from buildstock_fetch.explore import DownloadedData, filter_downloads
@@ -138,7 +141,6 @@ class MixedUpgradeScenario:
                 raise DataNotFoundError(
                     "No baseline (upgrade 0) metadata found. Please download baseline data using bsf."
                 )
-            import polars as pl
             first_file = min(metadata_files, key=lambda x: x.file_path)
             df = pl.scan_parquet(first_file.file_path).select("bldg_id").collect()
             all_bldg_ids = df["bldg_id"].unique().to_list()
@@ -182,7 +184,7 @@ class MixedUpgradeScenario:
 
         return bldgs, allocations
 
-    @property
+    @cached_property
     def materialized_scenario(self) -> dict[int, dict[int, int]]:
         """Materialize building allocations for all years in the scenario."""
         bldgs, allocations = self._allocation_plan
@@ -255,7 +257,11 @@ class MixedUpgradeScenario:
         for info in self.downloaded_data.filter(file_type=file_type):
             try:
                 upgrade_id = int(info.upgrade)
-                bldg_id = int(info.filename.split("-", 1)[0])
+                # Use regex to extract 7-digit building IDs
+                match = re.match(r"^(\d{7})-", info.filename)
+                if not match:
+                    continue
+                bldg_id = int(match.group(1))
             except (TypeError, ValueError):
                 continue
             if upgrade_id in available:
@@ -292,8 +298,6 @@ class MixedUpgradeScenario:
 
     def _read_data_for_scenario(self, file_type: FileType, years: list[int] | None = None):
         """Read data across upgrades and years without full materialization."""
-        import polars as pl
-
         years = sorted(self._validate_years(years))
         self._validate_data_availability(file_type)
         available_ids_by_upgrade = self._available_bldg_ids_by_upgrade(file_type)
@@ -475,8 +479,6 @@ class MixedUpgradeScenario:
             >>> mus.export_scenario_to_cairo("./scenario.csv")
             Exported scenario for 1000 buildings across 3 years to ./scenario.csv
         """
-        import polars as pl
-
         self._validate_data_availability("metadata")
         bldgs, allocations = self._allocation_plan
         sorted_bldg_ids = sorted(self.sampled_bldgs)
