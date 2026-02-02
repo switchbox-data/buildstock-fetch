@@ -350,9 +350,7 @@ class MixedUpgradeScenario:
         if available_ids_by_upgrade:
             available_ids = available_ids_by_upgrade.get(upgrade_id, frozenset())
             self._warn_on_missing_ids(file_type, upgrade_id, year_idx, bldg_ids_list, available_ids)
-        lf = self.baseline_reader.read_parquets(
-            file_type, upgrades=str(upgrade_id), building_ids=bldg_ids_list
-        )
+        lf = self.baseline_reader.read_parquets(file_type, upgrades=str(upgrade_id), building_ids=bldg_ids_list)
         if file_type == "metadata":
             lf = lf.rename({"upgrade": "upgrade_id"})
         else:
@@ -561,4 +559,6 @@ class MixedUpgradeScenario:
         output_path = Path(output_path)
         df.write_csv(output_path)
 
-        print(f"Exported scenario for {len(self.sampled_bldgs)} buildings across {self.num_years} years to {output_path}")
+        print(
+            f"Exported scenario for {len(self.sampled_bldgs)} buildings across {self.num_years} years to {output_path}"
+        )
