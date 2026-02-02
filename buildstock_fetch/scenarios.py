@@ -16,7 +16,6 @@ Example:
 from typing_extensions import final, override
 
 
-@final
 class InvalidScenarioError(ValueError):
     """Base class for scenario validation errors."""
 

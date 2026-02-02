@@ -177,7 +177,9 @@ class MixedUpgradeScenario:
             self.sampled_bldgs: frozenset[int] = sampled
         else:
             # No sampling: fall back to full baseline bldg_id list.
-            metadata_files = self.downloaded_data.filter(file_type="metadata", suffix=".parquet", upgrade="0")
+            metadata_files = self.downloaded_data.filter(
+                file_type="metadata", suffix=".parquet", upgrade=normalize_upgrade_id("0")
+            )
             if not metadata_files:
                 raise BaselineMetadataNotFoundError()
             first_file = min(metadata_files, key=lambda x: x.file_path)
@@ -207,7 +209,7 @@ class MixedUpgradeScenario:
     def _allocation_plan(self) -> tuple[list[int], dict[int, list[int]]]:
         bldgs = list(self.sampled_bldgs)
         self.random.shuffle(bldgs)
-        allocations = {uid: [] for uid in self._upgrade_ids}
+        allocations: dict[int, list[int]] = {uid: [] for uid in self._upgrade_ids}
         next_idx = 0
         total = len(bldgs)
 
@@ -272,7 +274,7 @@ class MixedUpgradeScenario:
         Raises:
             ScenarioDataNotFoundError: If data for any scenario upgrade is missing.
         """
-        required_upgrades = {normalize_upgrade_id(str(uid)) for uid in self._upgrade_ids} | {"0"}
+        required_upgrades = {normalize_upgrade_id(str(uid)) for uid in self._upgrade_ids} | {normalize_upgrade_id("0")}
         missing_upgrades = required_upgrades - self.downloaded_data.filter(file_type=file_type).upgrades()
         if missing_upgrades:
             raise ScenarioDataNotFoundError(file_type, missing_upgrades)
@@ -386,7 +388,7 @@ class MixedUpgradeScenario:
             return pl.concat(year_dfs, how="vertical_relaxed")
         return None
 
-    def _read_data_for_scenario(self, file_type: FileType, years: list[int] | None = None):
+    def _read_data_for_scenario(self, file_type: FileType, years: list[int] | None = None) -> pl.LazyFrame:
         """Read data across upgrades and years without full materialization."""
         years = sorted(self._validate_years(years))
         self._validate_data_availability(file_type)
@@ -406,7 +408,7 @@ class MixedUpgradeScenario:
 
         return pl.concat(all_year_dfs, how="vertical_relaxed")
 
-    def read_metadata(self, years: list[int] | None = None):
+    def read_metadata(self, years: list[int] | None = None) -> pl.LazyFrame:
         """Read metadata for specified years in the scenario.
 
         Returns a LazyFrame containing metadata for all buildings and years in the
@@ -437,7 +439,7 @@ class MixedUpgradeScenario:
         """
         return self._read_data_for_scenario("metadata", years)
 
-    def read_load_curve_15min(self, years: list[int] | None = None):
+    def read_load_curve_15min(self, years: list[int] | None = None) -> pl.LazyFrame:
         """Read 15-minute load curve data for specified years in the scenario.
 
         Args:
@@ -457,7 +459,7 @@ class MixedUpgradeScenario:
         """
         return self._read_data_for_scenario("load_curve_15min", years)
 
-    def read_load_curve_hourly(self, years: list[int] | None = None):
+    def read_load_curve_hourly(self, years: list[int] | None = None) -> pl.LazyFrame:
         """Read hourly load curve data for specified years in the scenario.
 
         Args:
@@ -477,7 +479,7 @@ class MixedUpgradeScenario:
         """
         return self._read_data_for_scenario("load_curve_hourly", years)
 
-    def read_load_curve_daily(self, years: list[int] | None = None):
+    def read_load_curve_daily(self, years: list[int] | None = None) -> pl.LazyFrame:
         """Read daily load curve data for specified years in the scenario.
 
         Args:
@@ -497,7 +499,7 @@ class MixedUpgradeScenario:
         """
         return self._read_data_for_scenario("load_curve_daily", years)
 
-    def read_load_curve_annual(self, years: list[int] | None = None):
+    def read_load_curve_annual(self, years: list[int] | None = None) -> pl.LazyFrame:
         """Read annual load curve data for specified years in the scenario.
 
         Args:
