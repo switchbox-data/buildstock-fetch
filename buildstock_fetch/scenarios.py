@@ -225,7 +225,7 @@ def _validate_list_lengths(scenario: dict[int, list[float]]) -> int:
     """Validate that all adoption lists have the same length and return num_years."""
     num_years_list = [len(fractions) for fractions in scenario.values()]
     if len(set(num_years_list)) > 1:
-        raise InconsistentListLengthsError(dict(zip(scenario.keys(), num_years_list)))
+        raise InconsistentListLengthsError(dict(zip(scenario.keys(), num_years_list, strict=False)))
 
     num_years = num_years_list[0]
     if num_years == 0:
