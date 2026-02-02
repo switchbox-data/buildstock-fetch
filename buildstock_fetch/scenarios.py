@@ -13,7 +13,7 @@ Example:
     >>> # Returns: {4: [0.06, 0.18, 0.30], 8: [0.04, 0.12, 0.20]}
 """
 
-from typing_extensions import final, override
+from typing_extensions import final
 
 
 @final
@@ -50,7 +50,7 @@ def validate_scenario(scenario: dict[int, list[float]]) -> None:
         raise InvalidScenarioError("Scenario cannot be empty")
 
     # Check that all upgrade IDs are non-negative integers
-    for upgrade_id in scenario.keys():
+    for upgrade_id in scenario:
         if not isinstance(upgrade_id, int) or upgrade_id < 0:
             raise InvalidScenarioError(f"Upgrade ID must be a non-negative integer, got: {upgrade_id}")
 
@@ -90,7 +90,7 @@ def validate_scenario(scenario: dict[int, list[float]]) -> None:
         if total_adoption > 1.0 + 1e-6:
             raise InvalidScenarioError(
                 f"Total adoption in year {year_idx} exceeds 1.0: {total_adoption:.6f}. "
-                f"Per-upgrade: {dict((uid, scenario[uid][year_idx]) for uid in scenario)}"
+                f"Per-upgrade: {{uid: scenario[uid][year_idx] for uid in scenario}}"
             )
 
 
