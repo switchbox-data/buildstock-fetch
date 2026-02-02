@@ -11,6 +11,7 @@ nav:
   - Home: index.md
   - Modules: modules.md
   - Usage: usage.md
+  - Mixed Upgrade Scenarios: mixed_upgrades.md
 
 plugins:
   - search
