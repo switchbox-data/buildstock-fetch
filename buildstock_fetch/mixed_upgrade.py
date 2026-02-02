@@ -298,8 +298,8 @@ class MixedUpgradeScenario:
         for info in self.downloaded_data.filter(file_type=file_type):
             try:
                 upgrade_id = int(info.upgrade)
-                # Use regex to extract 7-digit building IDs
-                match = re.match(r"^(\d{7})-", info.filename)
+                # Extract leading building ID (any digit length) from filename
+                match = re.match(r"^(\d+)-", info.filename)
                 if not match:
                     continue
                 bldg_id = int(match.group(1))
