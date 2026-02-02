@@ -38,39 +38,43 @@ def integration_test_data():
     - Release: res_2024_tmy3_2
     - Upgrades: 0, 4, 8
 
-    Uses a temporary directory to avoid interfering with work-in-progress data.
-    The temporary directory is cleaned up automatically after tests complete.
+    Data is stored in tests/data/ and outputs go to tests/outputs/.
+    This data is NOT cleaned up automatically to allow inspection and reuse.
     """
-    tmpdir = TemporaryDirectory()
-    try:
-        tmp_path = Path(tmpdir.name)
-        test_data_dir = tmp_path / "data"
-        test_outputs_dir = tmp_path / "outputs"
-        test_data_dir.mkdir(parents=True, exist_ok=True)
-        test_outputs_dir.mkdir(parents=True, exist_ok=True)
-        # Fetch building IDs for NY and AL
-        ny_bldg_ids_upgrade0 = fetch_bldg_ids(
-            product="resstock",
-            release_year="2024",
-            weather_file="tmy3",
-            release_version="2",
-            state="NY",
-            upgrade_id="0",
-        )
+    # Create directories
+    test_data_dir = Path("tests/data")
+    test_outputs_dir = Path("tests/outputs")
+    test_data_dir.mkdir(parents=True, exist_ok=True)
+    test_outputs_dir.mkdir(parents=True, exist_ok=True)
 
-        al_bldg_ids_upgrade0 = fetch_bldg_ids(
-            product="resstock",
-            release_year="2024",
-            weather_file="tmy3",
-            release_version="2",
-            state="AL",
-            upgrade_id="0",
-        )
+    # Check if data already exists by looking for expected directories
+    expected_metadata_dir = test_data_dir / "res_2024_tmy3_2" / "metadata"
+    expected_load_curve_dir = test_data_dir / "res_2024_tmy3_2" / "load_curve_15min"
+    data_exists = expected_metadata_dir.exists() and expected_load_curve_dir.exists()
 
-        # Select first 5 from each state
-        ny_bldgs = ny_bldg_ids_upgrade0[:5]
-        al_bldgs = al_bldg_ids_upgrade0[:5]
+    # Fetch building IDs for NY and AL
+    ny_bldg_ids_upgrade0 = fetch_bldg_ids(
+        product="resstock",
+        release_year="2024",
+        weather_file="tmy3",
+        release_version="2",
+        state="NY",
+        upgrade_id="0",
+    )
+    al_bldg_ids_upgrade0 = fetch_bldg_ids(
+        product="resstock",
+        release_year="2024",
+        weather_file="tmy3",
+        release_version="2",
+        state="AL",
+        upgrade_id="0",
+    )
 
+    # Select first 5 from each state
+    ny_bldgs = ny_bldg_ids_upgrade0[:5]
+    al_bldgs = al_bldg_ids_upgrade0[:5]
+
+    if not data_exists:
         # Create building IDs for all upgrade combinations
         bldg_ids_to_download = []
         for upgrade in ["0", "4", "8"]:
@@ -107,12 +111,10 @@ def integration_test_data():
             max_workers=5,
         )
 
-        # Return building info for tests to use
-        yield {
-            "ny_bldg_ids": [b.bldg_id for b in ny_bldgs],
-            "al_bldg_ids": [b.bldg_id for b in al_bldgs],
-            "data_path": test_data_dir,
-            "outputs_path": test_outputs_dir,
-        }
-    finally:
-        tmpdir.cleanup()
+    # Return building info for tests to use
+    yield {
+        "ny_bldg_ids": [b.bldg_id for b in ny_bldgs],
+        "al_bldg_ids": [b.bldg_id for b in al_bldgs],
+        "data_path": test_data_dir,
+        "outputs_path": test_outputs_dir,
+    }
