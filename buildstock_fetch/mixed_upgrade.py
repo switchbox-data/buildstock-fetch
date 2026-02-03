@@ -101,7 +101,7 @@ class MixedUpgradeScenario:
 
     Args:
         data_path: Path to the data directory (local path or S3 path).
-        pathway_scenario_name: Name of the pathway scenario. will be used to create subdirectories when writing out the metadata and load curves.
+        scenario_name: Name of the pathway scenario. will be used to create subdirectories when writing out the metadata and load curves.
         release: A BuildstockRelease or release key string specifying the release.
         states: Optional state code or list of state codes to filter data.
             If None, auto-detects states present on disk.
@@ -122,7 +122,7 @@ class MixedUpgradeScenario:
         ... )
         >>> mus = MixedUpgradeScenario(
         ...     data_path="./data",
-        ...     pathway_scenario_name="rapid_adoption",
+        ...     scenario_name="rapid_adoption",
         ...     release="res_2024_tmy3_2",
         ...     states="NY",
         ...     sample_n=1000,
@@ -136,7 +136,7 @@ class MixedUpgradeScenario:
     def __init__(
         self,
         data_path: str | Path,
-        pathway_scenario_name: str,
+        scenario_name: str,
         release: ReleaseKey | BuildstockRelease,
         states: USStateCode | Collection[USStateCode] | None = None,
         sample_n: int | None = None,
@@ -148,7 +148,7 @@ class MixedUpgradeScenario:
 
         validate_scenario(scenario)
         self.scenario = scenario
-        self.pathway_scenario_name = pathway_scenario_name
+        self.scenario_name = scenario_name
         self._upgrade_ids = tuple(scenario)
         self.num_years = len(next(iter(scenario.values())))
 
@@ -572,7 +572,7 @@ class MixedUpgradeScenario:
     def _resolve_scenario_root(self, path: Path | None) -> Path:
         """Resolve scenario root directory based on optional base path."""
         base_path = (self.data_path / self.release.key) if path is None else Path(path)
-        return base_path / self.pathway_scenario_name
+        return base_path / self.scenario_name
 
     def save_metadata_parquet(self, path: Path | None = None) -> None:
         """Save mixed upgrade metadata to a partitioned parquet dataset.
@@ -581,7 +581,7 @@ class MixedUpgradeScenario:
             <path>/<scenario_name>/year=<year_int>/metadata.parquet
 
         Args:
-            path: Optional base path to write to. Defaults to the release path.
+            path: Optional base path to write to. Defaults to data_path/release.
         """
         scenario_root = self._resolve_scenario_root(path)
         for year_idx in range(self.num_years):
