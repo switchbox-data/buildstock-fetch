@@ -137,7 +137,7 @@ def _get_upgrade_ids(s3_client: Any, bucket_name: str, model_path: str) -> list[
                     upgrade_num = upgrade_dir.split("=")[1]
                     upgrade_ids.append(upgrade_num)
 
-    return sorted(upgrade_ids, key=int)  # Sort numerically
+    return sorted(upgrade_ids, key=int)  # type: ignore[return-value]  # Sort numerically, list contains str
 
 
 def _check_has_upgrade_files(paginator: Any, bucket_name: str, dir_path: str) -> bool:
@@ -210,7 +210,7 @@ def _get_upgrade_ids_from_metadata(s3_client: Any, bucket_name: str, metadata_pa
         return first_subdir is not None and search_directory(first_subdir)
 
     search_directory(metadata_path + "/")
-    return sorted(upgrade_ids, key=int)
+    return sorted(upgrade_ids, key=int)  # type: ignore[return-value]  # list contains str
 
 
 def _process_zip_file(

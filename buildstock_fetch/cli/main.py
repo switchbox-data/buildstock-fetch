@@ -322,11 +322,7 @@ def select_file_types(releases: BuildstockReleases, inputs: InputsMaybe) -> set[
     )
     if set(end_use_load_curves) & available_releases.file_types:
         choices.append(_category_choice("End Use Load Curves"))
-        choices.extend(
-            _filetype_choice(ft)  # type: ignore[arg-type]
-            for ft in end_use_load_curves
-            if ft in available_releases.file_types
-        )
+        choices.extend(_filetype_choice(ft) for ft in end_use_load_curves if ft in available_releases.file_types)
 
     simulation_files = (
         "hpxml",
@@ -334,11 +330,7 @@ def select_file_types(releases: BuildstockReleases, inputs: InputsMaybe) -> set[
     )
     if set(simulation_files) & available_releases.file_types:
         choices.append(_category_choice("Simulation Files"))
-        choices.extend(
-            _filetype_choice(ft)  # type: ignore[arg-type]
-            for ft in simulation_files
-            if ft in available_releases.file_types
-        )
+        choices.extend(_filetype_choice(ft) for ft in simulation_files if ft in available_releases.file_types)
 
     if "weather" in available_releases.file_types:
         choices.append(_category_choice("Weather"))
@@ -500,7 +492,7 @@ def fetch_building_groups(inputs: InputsFinal) -> list[BuildingsGroup]:
     release = RELEASES.filter_one(**inputs.as_filter())
     return [
         BuildingsGroup(
-            state,
+            state, # type: ignore[invalid-argument-type]  # sorted() loses Literal type, but value is USStateCode
             upgrade,
             list_buildings(release.key, state, upgrade),
         )

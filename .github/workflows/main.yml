@@ -31,9 +31,8 @@ jobs:
         run: |
           uv lock --locked
           prek run -a
-          uv run mypy
 
-  tests-and-type-check:
+  tests:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -53,9 +52,6 @@ jobs:
 
       - name: Run tests
         run: uv run python -m  pytest --disable-recording tests
-
-      - name: Check typing
-        run: uv run mypy
 
 
 

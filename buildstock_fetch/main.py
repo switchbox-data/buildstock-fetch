@@ -374,7 +374,7 @@ def _download_with_progress_metadata_fallback(url: str, output_file: Path, progr
             new_file = pl.scan_parquet(temp_path)
             combined_file = pl.concat([existing_file, new_file])
             # Remove duplicate rows based on bldg_id column
-            deduplicated_file = combined_file.collect().unique(subset=["bldg_id"], keep="first")
+            deduplicated_file = combined_file.collect().unique(subset=["bldg_id"], keep="first")  # type: ignore[unresolved-attribute]
             deduplicated_file.write_parquet(output_file)
             gc.collect()
             os.remove(temp_path)

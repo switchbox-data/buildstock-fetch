@@ -14,6 +14,7 @@ To install the buildstock-fetch CLI tool, we recommend using [uv](https://docs.a
 ```bash
 uv tool install buildstock-fetch
 ```
+
 or
 
 ```bash
@@ -41,7 +42,6 @@ bsf --product resstock --release_year 2022 --weather_file tmy3 --release_version
 ```
 
 For more details about the usage, see [Usage](https://switchbox-data.github.io/buildstock-fetch/usage/)
-
 
 ## Installing the Python library
 

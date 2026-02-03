@@ -18,6 +18,7 @@ We recommend using [uv](https://docs.astral.sh/uv/getting-started/installation/)
 ```bash
 uv tool install buildstock-fetch
 ```
+
 or
 
 ```bash
@@ -90,6 +91,7 @@ just install
 Using a system package manager (like `brew` or `apt`), you'll also need to manually install `just` and `quarto`.
 
 ### Adding a package
+
 To add a python package to the project:
 
 ```bash

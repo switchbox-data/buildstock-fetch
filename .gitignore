@@ -159,3 +159,5 @@ utils/ev_data/outputs/
 
 # Temporary release files
 utils/temp_releases/
+
+.ruff_cache/

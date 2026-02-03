@@ -77,7 +77,7 @@ pip3 install git+https://github.com/switchbox-data/buildstock-fetch.git@main
 
 ## Quick Start
 
-To download data with BuildStock Fetch, you must specify the following variables: product type, release year, weather file type, release version, upgrade scenarios, state, types of files to download, and output directory. Once these inputs have been specified, BuildStock Fetch will first resolved the individual `bldg_ids` correspond to this  selection, and then download the requested files pertaining to each building unit to the specified output directory.
+To download data with BuildStock Fetch, you must specify the following variables: product type, release year, weather file type, release version, upgrade scenarios, state, types of files to download, and output directory. Once these inputs have been specified, BuildStock Fetch will first resolved the individual `bldg_ids` correspond to this selection, and then download the requested files pertaining to each building unit to the specified output directory.
 
 ### Interactive Mode
 
@@ -243,16 +243,16 @@ Select output directory: ./data
 
 ### Command Line Options
 
-| Option | Short | Description | Example |
-|--------|-------|-------------|---------|
-| `--product` | `-p` | Product type (resstock/comstock) | `--product resstock` |
-| `--release_year` | `-y` | Release year | `--release_year 2022` |
-| `--weather_file` | `-w` | Weather file type | `--weather_file tmy3` |
-| `--release_version` | `-r` | Release version | `--release_version 1` |
-| `--states` | `-s` | States (space-separated) | `--states "CA NY TX"` |
-| `--file_type` | `-f` | File types (space-separated) | `--file_type "metadata hpxml"` |
-| `--upgrade_id` | `-u` | Upgrade IDs (space-separated) | `--upgrade_id "0 1 2"` |
-| `--output_directory` | `-o` | Output directory | `--output_directory ./data` |
+| Option               | Short | Description                      | Example                        |
+| -------------------- | ----- | -------------------------------- | ------------------------------ |
+| `--product`          | `-p`  | Product type (resstock/comstock) | `--product resstock`           |
+| `--release_year`     | `-y`  | Release year                     | `--release_year 2022`          |
+| `--weather_file`     | `-w`  | Weather file type                | `--weather_file tmy3`          |
+| `--release_version`  | `-r`  | Release version                  | `--release_version 1`          |
+| `--states`           | `-s`  | States (space-separated)         | `--states "CA NY TX"`          |
+| `--file_type`        | `-f`  | File types (space-separated)     | `--file_type "metadata hpxml"` |
+| `--upgrade_id`       | `-u`  | Upgrade IDs (space-separated)    | `--upgrade_id "0 1 2"`         |
+| `--output_directory` | `-o`  | Output directory                 | `--output_directory ./data`    |
 
 You can also run
 

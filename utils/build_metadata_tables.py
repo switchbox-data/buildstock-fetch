@@ -14,7 +14,7 @@ import boto3
 import polars as pl
 import pyarrow as pa
 import pyarrow.dataset as ds
-import pyarrow.fs as fs  # type: ignore[import-untyped]
+import pyarrow.fs as fs
 from botocore import UNSIGNED
 from botocore.config import Config
 
@@ -202,9 +202,15 @@ def _read_parquet_with_columns(
         # Read only selected columns using lazy evaluation (memory efficient)
         # Use streaming for large files to reduce memory footprint
         if selected_columns and set(selected_columns) != set(available_columns):
-            df = lazy_df.select(selected_columns).collect(streaming=True)
+            try:
+                df = lazy_df.select(selected_columns).collect(engine="streaming")
+            except TypeError:
+                df = lazy_df.select(selected_columns).collect(streaming=True)
         else:
-            df = lazy_df.collect(streaming=True)
+            try:
+                df = lazy_df.collect(engine="streaming")
+            except TypeError:
+                df = lazy_df.collect(streaming=True)
     finally:
         # Clean up temp file immediately
         with contextlib.suppress(Exception):
@@ -574,10 +580,10 @@ def find_all_parquet_files(base_file_key: str, s3_client: Any, bucket_name: str)
                     # Extract upgrade number from filename
                     parts = key.split("/")
                     filename = parts[-1]
-                    upgrade_num = _extract_upgrade_number(filename)
-                    upgrade_num = int(upgrade_num)
+                    upgrade_num_str = _extract_upgrade_number(filename)
 
-                    if upgrade_num is not None:
+                    if upgrade_num_str is not None:
+                        upgrade_num = int(upgrade_num_str)
                         upgrade_key = f"upgrade_{upgrade_num}"
                         if upgrade_key not in all_files:
                             all_files[upgrade_key] = []
@@ -765,9 +771,9 @@ def _combine_files_chunked(temp_files: list[Path], temp_dir: Path, chunk_size: i
             chunk_file_list = temp_files[chunk_start : chunk_start + chunk_size]
             lazy_frames = [pl.scan_parquet(str(f)) for f in chunk_file_list]
             try:
-                chunk_df = pl.concat(lazy_frames).collect(engine="streaming")
+                chunk_df = pl.concat(lazy_frames).collect(engine="streaming")  # type: ignore[unresolved-attribute]
             except TypeError:
-                chunk_df = pl.concat(lazy_frames).collect(streaming=True)
+                chunk_df = pl.concat(lazy_frames).collect(streaming=True)  # type: ignore[unresolved-attribute]
             chunk_file = temp_dir / f"chunk_{chunk_start // chunk_size:04d}.parquet"
             chunk_df.write_parquet(chunk_file)
             chunk_files.append(chunk_file)
@@ -784,9 +790,9 @@ def _combine_files_chunked(temp_files: list[Path], temp_dir: Path, chunk_size: i
     # Final concatenation from chunk files
     lazy_frames = [pl.scan_parquet(str(f)) for f in chunk_files]
     try:
-        combined_df = pl.concat(lazy_frames).collect(engine="streaming")
+        combined_df = pl.concat(lazy_frames).collect(engine="streaming")  # type: ignore[unresolved-attribute]
     except TypeError:
-        combined_df = pl.concat(lazy_frames).collect(streaming=True)
+        combined_df = pl.concat(lazy_frames).collect(streaming=True)  # type: ignore[unresolved-attribute]
     del lazy_frames
     gc.collect()
     return combined_df
@@ -796,9 +802,9 @@ def _combine_files_direct(temp_files: list[Path]) -> pl.DataFrame:
     """Combine files directly for smaller releases."""
     lazy_frames = [pl.scan_parquet(str(f)) for f in temp_files]
     try:
-        combined_df = pl.concat(lazy_frames).collect(engine="streaming")
+        combined_df = pl.concat(lazy_frames).collect(engine="streaming")  # type: ignore[unresolved-attribute]
     except TypeError:
-        combined_df = pl.concat(lazy_frames).collect(streaming=True)
+        combined_df = pl.concat(lazy_frames).collect(streaming=True)  # type: ignore[unresolved-attribute]
     del lazy_frames
     gc.collect()
     return combined_df
@@ -1127,9 +1133,9 @@ if __name__ == "__main__":
                 try:
                     # Collect chunk with streaming
                     try:
-                        chunk_df = chunk_combined.collect(engine="streaming")
+                        chunk_df = chunk_combined.collect(engine="streaming")  # type: ignore[possibly-missing-attribute]
                     except TypeError:
-                        chunk_df = chunk_combined.collect(streaming=True)
+                        chunk_df = chunk_combined.collect(streaming=True)  # type: ignore[possibly-missing-attribute]
 
                     # Convert to PyArrow table
                     chunk_table = chunk_df.to_arrow()

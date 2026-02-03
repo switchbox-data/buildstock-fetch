@@ -26,3 +26,24 @@ repos:
         exclude: uv.lock
       - id: check-merge-conflict
       - id: check-case-conflict
+
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.10.0-1
+    hooks:
+      - id: shfmt
+        args: ['-w', '-i', '2']
+
+  - repo: local
+    hooks:
+      - id: dprint
+        name: dprint (markdown)
+        entry: dprint fmt
+        language: python
+        types: [markdown]
+        additional_dependencies: [dprint-py]
+
+      - id: ty
+        name: ty check
+        entry: uv run ty check .
+        language: system
+        pass_filenames: false

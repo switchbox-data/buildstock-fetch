@@ -10,8 +10,8 @@ from typing import Any, Final
 
 import numpy as np
 import polars as pl
-from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
-from sklearn.preprocessing import LabelEncoder, StandardScaler  # type: ignore[import-untyped]
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
