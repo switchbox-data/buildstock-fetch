@@ -5,13 +5,13 @@ A Python CLI tool for downloading building energy simulation data from the Natio
 ## Table of Contents
 
 - [Background](#background)
+- [Key Features](#key-features)
+- [Data source](#data-source)
+- [Available datasets](#available-datasets)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Usage Examples](#usage-examples)
 - [Command Line Interface](#command-line-interface)
-- [Data Sources](#data-sources)
-- [Contributing](#contributing)
-- [References](#references)
 
 ## Background
 

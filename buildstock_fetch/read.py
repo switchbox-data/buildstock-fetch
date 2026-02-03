@@ -124,7 +124,7 @@ class BuildStockRead:
         states: Optional State or list of States to filter data.
             If None, auto-detects states present on disk.
         sample_n: Optional number of buildings to sample.
-        seed: Optional random seed for reproducible sampling.
+        random: Optional random state for reproducible sampling (Random instance or int seed).
 
     Example:
         >>> from buildstock_fetch.read import BuildStockRead
