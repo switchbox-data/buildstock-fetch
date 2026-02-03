@@ -571,7 +571,7 @@ class MixedUpgradeScenario:
 
     def _resolve_scenario_root(self, path: Path | None) -> Path:
         """Resolve scenario root directory based on optional base path."""
-        base_path = self.data_path if path is None else Path(path)
+        base_path = (self.data_path / self.release.key) if path is None else Path(path)
         return base_path / self.pathway_scenario_name
 
     def save_metadata_parquet(self, path: Path | None = None) -> None:
