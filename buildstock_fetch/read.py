@@ -252,8 +252,6 @@ class BuildStockRead:
         # This ensures that if one file has columns another doesn't, missing columns are filled with nulls
         file_paths = [file.file_path for file in files]
 
-        print(file_paths)  # DEBUG NOCOMMIT
-
         if not file_paths:
             # Return an empty LazyFrame if no files found
             lf = pl.LazyFrame()
