@@ -131,6 +131,8 @@ class MixedUpgradeScenario:
         ... )
         >>> metadata = mus.read_metadata().collect()
         >>> mus.export_scenario_to_cairo("./scenario.csv")
+        >>> mus.save_metadata_parquet() # writes to disk or S3
+        >>> mus.save_hourly_load_parquet() # writes to disk or S3
     """
 
     def __init__(
@@ -572,7 +574,7 @@ class MixedUpgradeScenario:
     def _resolve_scenario_root(self, path: Path | None) -> Path:
         """Resolve scenario root directory based on optional base path."""
         base_path = (self.data_path / self.release.key) if path is None else Path(path)
-        return base_path / self.scenario_name
+        return base_path / "mixed_upgrade" / self.scenario_name
 
     def save_metadata_parquet(self, path: Path | None = None) -> None:
         """Save mixed upgrade metadata to a partitioned parquet dataset.
@@ -581,7 +583,7 @@ class MixedUpgradeScenario:
             <path>/<scenario_name>/year=<year_int>/metadata.parquet
 
         Args:
-            path: Optional base path to write to. Defaults to data_path/release.
+            path: Optional base path to write to. Defaults to data_path/release/mixed_upgrade.
         """
         scenario_root = self._resolve_scenario_root(path)
         for year_idx in range(self.num_years):
@@ -595,7 +597,7 @@ class MixedUpgradeScenario:
         """Save mixed upgrade hourly load curves to partitioned parquet datasets.
 
         Output structure:
-            <path>/<scenario_name>/year=<year_int>/<bldg_id>-<upgrade_id>.parquet
+            <path>/mixed_upgrade/<scenario_name>/year=<year_int>/<bldg_id>-<upgrade_id>.parquet
 
         Args:
             path: Optional base path to write to. Defaults to the release path.
