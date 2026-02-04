@@ -1,5 +1,7 @@
+from pathlib import Path
 from typing import Any, Literal, NewType, TypeAlias, get_args
 
+from cloudpathlib import S3Path
 from typing_extensions import TypeIs
 
 ReleaseKey = Literal[
@@ -100,6 +102,14 @@ USStateCode = Literal[
     "WI",
     "WY",
 ]
+
+
+def is_s3_path(path: Path | S3Path | str) -> bool:
+    if isinstance(path, S3Path):
+        return True
+    if isinstance(path, Path):
+        return False
+    return path.startswith("s3:/") or path.startswith("data.sb")
 
 
 def is_valid_state_code(value: Any) -> TypeIs[USStateCode]:  # pyright: ignore[reportAny, reportExplicitAny]

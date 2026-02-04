@@ -6,6 +6,7 @@ from random import Random
 from typing import cast
 
 import polars as pl
+from cloudpathlib import S3Path
 from typing_extensions import final, override
 
 from buildstock_fetch.explore import DownloadedData, filter_downloads
@@ -15,6 +16,7 @@ from buildstock_fetch.types import (
     ReleaseKey,
     UpgradeID,
     USStateCode,
+    is_s3_path,
     is_valid_state_code,
     normalize_upgrade_id,
 )
@@ -139,13 +141,13 @@ class BuildStockRead:
 
     def __init__(
         self,
-        data_path: Path | str,
+        data_path: Path | S3Path | str,
         release: ReleaseKey | BuildstockRelease,
         states: USStateCode | Collection[USStateCode] | None = None,
         sample_n: int | None = None,
         random: Random | int | None = None,
     ) -> None:
-        self.data_path = Path(data_path)
+        self.data_path = S3Path(cast(str, data_path)) if is_s3_path(data_path) else Path(cast(str, data_path))
         self.release = release if isinstance(release, BuildstockRelease) else BuildstockReleases.load()[release]
 
         self.states: list[USStateCode] | None
@@ -192,7 +194,7 @@ class BuildStockRead:
             min_upgrade = min(state_files, key=lambda f: int(f.upgrade)).upgrade
             files_to_read.extend([f for f in state_files if f.upgrade == min_upgrade])
 
-        df = pl.scan_parquet([f.file_path for f in files_to_read]).select("bldg_id").collect()
+        df = pl.scan_parquet([str(f.file_path) for f in files_to_read]).select("bldg_id").collect()
         all_building_ids = cast(list[int], df["bldg_id"].unique().to_list())
 
         if self.sample_n > len(all_building_ids):
@@ -249,15 +251,20 @@ class BuildStockRead:
         # Scan each file separately and concatenate with diagonal alignment to handle schema mismatches
         # This ensures that if one file has columns another doesn't, missing columns are filled with nulls
         file_paths = [file.file_path for file in files]
+
+        print(file_paths)  # DEBUG NOCOMMIT
+
         if not file_paths:
             # Return an empty LazyFrame if no files found
             lf = pl.LazyFrame()
         elif len(file_paths) == 1:
             # Single file - no need for concatenation
-            lf = pl.scan_parquet(file_paths[0])
+            # Note that S3Path objects cannot be passed to scan_parquet, so we convert to strings
+            lf = pl.scan_parquet(str(file_paths[0]))
         else:
             # Multiple files - scan each separately and concatenate with diagonal alignment
-            lazy_frames = [pl.scan_parquet(file_path) for file_path in file_paths]
+            # Note that S3Path objects cannot be passed to scan_parquet, so we convert to strings
+            lazy_frames = [pl.scan_parquet(str(file_path)) for file_path in file_paths]
             lf = pl.concat(lazy_frames, how="diagonal")
         lf = self._apply_sampling_filter(lf)
 

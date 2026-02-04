@@ -284,6 +284,7 @@ dependencies = [
     { name = "async-timer" },
     { name = "boto3" },
     { name = "botocore" },
+    { name = "cloudpathlib" },
     { name = "httpx" },
     { name = "polars" },
     { name = "psutil" },
@@ -362,6 +363,7 @@ requires-dist = [
     { name = "botocore", specifier = ">=1.33.0" },
     { name = "botocore", marker = "extra == 'dev-utils'", specifier = ">=1.33.0" },
     { name = "buildstock-fetch", extras = ["test", "docs", "lint", "dev-utils"], marker = "extra == 'dev'" },
+    { name = "cloudpathlib", specifier = ">=0.23.0" },
     { name = "deptry", marker = "extra == 'lint'", specifier = ">=0.23.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.4.2" },
@@ -493,6 +495,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/656b739db8587d7b5dfa22e22ed02566950fbfbcdc20311993483657a5c0/click-8.3.1.tar.gz", hash = "sha256:12ff4785d337a1bb490bb7e9c2b1ee5da3112e94a8622f26a6c77f5d2fc6842a", size = 295065, upload-time = "2025-11-15T20:45:42.706Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/98/78/01c019cdb5d6498122777c1a43056ebb3ebfeef2076d9d026bfe15583b2b/click-8.3.1-py3-none-any.whl", hash = "sha256:981153a64e25f12d547d3426c367a4857371575ee7ad18df2a6183ab0545b2a6", size = 108274, upload-time = "2025-11-15T20:45:41.139Z" },
+]
+
+[[package]]
+name = "cloudpathlib"
+version = "0.23.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f4/18/2ac35d6b3015a0c74e923d94fc69baf8307f7c3233de015d69f99e17afa8/cloudpathlib-0.23.0.tar.gz", hash = "sha256:eb38a34c6b8a048ecfd2b2f60917f7cbad4a105b7c979196450c2f541f4d6b4b", size = 53126, upload-time = "2025-10-07T22:47:56.278Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ae/8a/c4bb04426d608be4a3171efa2e233d2c59a5c8937850c10d098e126df18e/cloudpathlib-0.23.0-py3-none-any.whl", hash = "sha256:8520b3b01468fee77de37ab5d50b1b524ea6b4a8731c35d1b7407ac0cd716002", size = 62755, upload-time = "2025-10-07T22:47:54.905Z" },
 ]
 
 [[package]]
