@@ -207,9 +207,7 @@ class MixedUpgradeScenario:
             self.sampled_bldgs: frozenset[int] = sampled
         else:
             # No sampling: fall back to full baseline bldg_id list.
-            metadata_files = self.downloaded_data.filter(
-                file_type="metadata", suffix=".parquet", upgrade=normalize_upgrade_id("0")
-            )
+            metadata_files = self.downloaded_metadata.filter(suffix=".parquet", upgrade=normalize_upgrade_id("0"))
             if not metadata_files:
                 raise BaselineMetadataNotFoundError()
             first_file = min(metadata_files, key=lambda x: x.file_path)
@@ -225,13 +223,14 @@ class MixedUpgradeScenario:
         print(f"Materialized {self.num_years} years of adoption across {num_upgrades} upgrades")
 
     @cached_property
-    def downloaded_data(self) -> DownloadedData:
-        """Cached property for downloaded data discovery."""
+    def downloaded_metadata(self) -> DownloadedData:
+        """Cached property for metadata file discovery only."""
         return DownloadedData(
             filter_downloads(
                 self.data_path,
                 release_key=(self.release.key,),
                 state=self.states,
+                file_type="metadata",
             )
         )
 
@@ -295,6 +294,28 @@ class MixedUpgradeScenario:
 
         return years
 
+    def _scan_available_upgrades(self, file_type: FileType) -> frozenset[UpgradeID]:
+        """Scan parquet directories to discover available upgrades for a file type.
+
+        Uses directory structure scanning rather than file system traversal for performance.
+
+        Args:
+            file_type: Type of data to check (e.g., 'load_curve_hourly').
+
+        Returns:
+            Set of available upgrade IDs found in the directory structure.
+        """
+        base_path = self.data_path / self.release.key / file_type
+
+        available_upgrades = set()
+        for state_dir in base_path.iterdir():
+            if self.states is None or state_dir.name.removeprefix("state=") in self.states:
+                for upgrade_dir in state_dir.iterdir():
+                    upgrade_id = upgrade_dir.name.removeprefix("upgrade=")
+                    available_upgrades.add(normalize_upgrade_id(upgrade_id))
+
+        return frozenset(available_upgrades)
+
     def _validate_data_availability(self, file_type: FileType) -> None:
         """Validate that all required upgrade data exists on disk.
 
@@ -305,7 +326,15 @@ class MixedUpgradeScenario:
             ScenarioDataNotFoundError: If data for any scenario upgrade is missing.
         """
         required_upgrades = {normalize_upgrade_id(str(uid)) for uid in self._upgrade_ids} | {normalize_upgrade_id("0")}
-        missing_upgrades = required_upgrades - self.downloaded_data.filter(file_type=file_type).upgrades()
+
+        if file_type == "metadata":
+            # Use file system discovery for metadata
+            missing_upgrades = required_upgrades - self.downloaded_metadata.upgrades()
+        else:
+            # Use parquet directory scanning for load curves
+            available_upgrades = self._scan_available_upgrades(file_type)
+            missing_upgrades = required_upgrades - available_upgrades
+
         if missing_upgrades:
             raise ScenarioDataNotFoundError(file_type, missing_upgrades)
 
@@ -319,24 +348,32 @@ class MixedUpgradeScenario:
         }
         if file_type not in per_building_types:
             return {}
+
         cached = self._available_bldg_ids_cache.get(file_type)
         if cached is not None:
             return cached
 
         needed_upgrades = {0, *self._upgrade_ids}
         available: dict[int, set[int]] = {uid: set() for uid in needed_upgrades}
-        for info in self.downloaded_data.filter(file_type=file_type):
-            try:
-                upgrade_id = int(info.upgrade)
-                # Extract leading building ID (any digit length) from filename
-                match = re.match(r"^(\d+)-", info.filename)
-                if not match:
-                    continue
-                bldg_id = int(match.group(1))
-            except (TypeError, ValueError):
-                continue
-            if upgrade_id in available:
-                available[upgrade_id].add(bldg_id)
+
+        # Scan parquet directory structure directly
+        base_path = self.data_path / self.release.key / file_type
+        for state_dir in base_path.iterdir():
+            if self.states is None or state_dir.name.removeprefix("state=") in self.states:
+                for upgrade_dir in state_dir.iterdir():
+                    try:
+                        upgrade_id = int(upgrade_dir.name.removeprefix("upgrade="))
+                        if upgrade_id not in available:
+                            continue
+
+                        # List files and extract building IDs from filenames
+                        for file_path in upgrade_dir.glob("*.parquet"):
+                            match = re.match(r"^(\d+)-", file_path.name)
+                            if match:
+                                bldg_id = int(match.group(1))
+                                available[upgrade_id].add(bldg_id)
+                    except (ValueError, AttributeError):
+                        continue
 
         cached = {uid: frozenset(ids) for uid, ids in available.items()}
         self._available_bldg_ids_cache[file_type] = cached
