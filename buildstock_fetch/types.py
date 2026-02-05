@@ -1,5 +1,7 @@
+from pathlib import Path
 from typing import Any, Literal, NewType, TypeAlias, get_args
 
+from cloudpathlib import S3Path
 from typing_extensions import TypeIs
 
 ReleaseKey = Literal[
@@ -28,6 +30,7 @@ ReleaseKey = Literal[
     "com_2025_amy2018_3",
 ]
 
+# TODO: This should be int64; hive partition handles the zero-padding and treats as int64
 UpgradeID = NewType("UpgradeID", str)
 ReleaseYear: TypeAlias = Literal["2021", "2022", "2023", "2024", "2025"]
 ResCom: TypeAlias = Literal["resstock", "comstock"]
@@ -100,6 +103,14 @@ USStateCode = Literal[
     "WI",
     "WY",
 ]
+
+
+def is_s3_path(path: Path | S3Path | str) -> bool:
+    if isinstance(path, S3Path):
+        return True
+    if isinstance(path, Path):
+        return False
+    return path.startswith("s3:/") or path.startswith("data.sb")
 
 
 def is_valid_state_code(value: Any) -> TypeIs[USStateCode]:  # pyright: ignore[reportAny, reportExplicitAny]
