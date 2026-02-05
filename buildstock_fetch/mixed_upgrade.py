@@ -15,6 +15,7 @@ from pathlib import Path
 from random import Random
 
 import polars as pl
+from cloudpathlib import S3Path
 from typing_extensions import final, override
 
 from buildstock_fetch.explore import DownloadedData, filter_downloads
@@ -26,9 +27,27 @@ from buildstock_fetch.types import (
     ReleaseKey,
     UpgradeID,
     USStateCode,
+    is_s3_path,
     is_valid_state_code,
     normalize_upgrade_id,
 )
+
+
+def _resolve_path(path: Path | S3Path | str) -> Path | S3Path:
+    """Normalize path to Path or S3Path for local or S3 backend.
+
+    Note: Pass S3 URLs as strings (e.g., "s3://bucket/key") not Path objects,
+    since pathlib normalizes "s3://" to "s3:/" which breaks S3Path.
+    """
+    from typing import cast
+
+    if isinstance(path, S3Path):
+        return path
+
+    if is_s3_path(path):
+        return S3Path(cast(str, path))
+
+    return Path(cast(str, path))
 
 
 @final
@@ -137,7 +156,7 @@ class MixedUpgradeScenario:
 
     def __init__(
         self,
-        data_path: str | Path,
+        data_path: Path | S3Path | str,
         scenario_name: str,
         release: ReleaseKey | BuildstockRelease,
         states: USStateCode | Collection[USStateCode] | None = None,
@@ -154,7 +173,6 @@ class MixedUpgradeScenario:
         self._upgrade_ids = tuple(scenario)
         self.num_years = len(next(iter(scenario.values())))
 
-        self.data_path = Path(data_path)
         self.release = release if isinstance(release, BuildstockRelease) else BuildstockReleases.load()[release]
 
         if states is None:
@@ -169,14 +187,20 @@ class MixedUpgradeScenario:
         self.sample_n = sample_n
         self._available_bldg_ids_cache: dict[str, dict[int, frozenset[int]]] = {}
 
+        # Normalize the path first so BuildStockRead recognizes S3 URLs in Path objects
+        normalized_data_path = _resolve_path(data_path)
+
         # Baseline reader handles state detection and optional sampling.
         self.baseline_reader = BuildStockRead(
-            data_path=data_path,
+            data_path=normalized_data_path,
             release=self.release,
             states=self.states,
             sample_n=sample_n,
             random=self.random,
+            metadata_variant="standard",  # Always use standard variant for mixed upgrades
         )
+        # Reuse the normalized path from BuildStockRead (supports both local and S3)
+        self.data_path = self.baseline_reader.data_path
 
         sampled = self.baseline_reader.sampled_buildings
         if sampled is not None:
@@ -524,14 +548,14 @@ class MixedUpgradeScenario:
         """
         return self._read_data_for_scenario("load_curve_annual", years)
 
-    def export_scenario_to_cairo(self, output_path: str | Path) -> None:
+    def export_scenario_to_cairo(self, output_path: str | Path | S3Path) -> None:
         """Export scenario to CAIRO-compatible CSV format.
 
         Creates a CSV file with one row per building and one column per year.
         Each cell contains the upgrade ID for that building in that year.
 
         Args:
-            output_path: Path where the CSV file should be written.
+            output_path: Path where the CSV file should be written (local or S3).
 
         Output format:
             bldg_id,year_0,year_1,year_2
@@ -564,19 +588,17 @@ class MixedUpgradeScenario:
                         col[idx[bldg_id]] = uid
 
         df = pl.DataFrame({"bldg_id": sorted_bldg_ids, **year_cols})
-        output_path = Path(output_path)
-        df.write_csv(output_path)
+        resolved = _resolve_path(output_path)
+        df.write_csv(str(resolved))
 
-        print(
-            f"Exported scenario for {len(self.sampled_bldgs)} buildings across {self.num_years} years to {output_path}"
-        )
+        print(f"Exported scenario for {len(self.sampled_bldgs)} buildings across {self.num_years} years to {resolved}")
 
-    def _resolve_scenario_root(self, path: Path | None) -> Path:
+    def _resolve_scenario_root(self, path: Path | S3Path | str | None) -> Path | S3Path:
         """Resolve scenario root directory based on optional base path."""
-        base_path = (self.data_path / self.release.key) if path is None else Path(path)
+        base_path = self.data_path / self.release.key if path is None else _resolve_path(path)
         return base_path / "mixed_upgrade" / self.scenario_name
 
-    def save_metadata_parquet(self, path: Path | None = None) -> None:
+    def save_metadata_parquet(self, path: Path | S3Path | str | None = None) -> None:
         """Save mixed upgrade metadata to a partitioned parquet dataset.
 
         Output structure:
@@ -588,12 +610,12 @@ class MixedUpgradeScenario:
         scenario_root = self._resolve_scenario_root(path)
         for year_idx in range(self.num_years):
             year_dir = scenario_root / f"year={year_idx}"
-            year_dir.mkdir(parents=True, exist_ok=True)
+            if isinstance(year_dir, Path):
+                year_dir.mkdir(parents=True, exist_ok=True)
             output_file = year_dir / "metadata.parquet"
-            df = self.read_metadata(years=[year_idx]).collect()
-            df.write_parquet(output_file)
+            self.read_metadata(years=[year_idx]).sink_parquet(str(output_file))
 
-    def save_hourly_load_parquet(self, path: Path | None = None) -> None:
+    def save_hourly_load_parquet(self, path: Path | S3Path | str | None = None) -> None:
         """Save mixed upgrade hourly load curves to partitioned parquet datasets.
 
         Output structure:
@@ -605,11 +627,12 @@ class MixedUpgradeScenario:
         scenario_root = self._resolve_scenario_root(path)
         for year_idx in range(self.num_years):
             year_dir = scenario_root / f"year={year_idx}"
-            year_dir.mkdir(parents=True, exist_ok=True)
+            if isinstance(year_dir, Path):
+                year_dir.mkdir(parents=True, exist_ok=True)
             df = self.read_load_curve_hourly(years=[year_idx]).collect()
             if df.is_empty():
                 continue
             for key, group in df.partition_by(["bldg_id", "upgrade_id"], as_dict=True).items():
                 bldg_id, upgrade_id = key
                 output_file = year_dir / f"{int(bldg_id)}-{int(upgrade_id)}.parquet"
-                group.write_parquet(output_file)
+                group.write_parquet(str(output_file))
