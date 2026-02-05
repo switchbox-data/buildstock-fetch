@@ -168,12 +168,13 @@ class BuildStockRead:
         self.sample_n = sample_n
 
     @cached_property
-    def downloaded_data(self) -> DownloadedData:
+    def downloaded_metadata(self) -> DownloadedData:
         return DownloadedData(
             filter_downloads(
                 self.data_path,
                 release_key=(self.release.key,),
                 state=self.states,
+                file_type="metadata",
             )
         )
 
@@ -181,7 +182,7 @@ class BuildStockRead:
     def sampled_buildings(self) -> frozenset[int] | None:
         if self.sample_n is None:
             return None
-        metadata_files = self.downloaded_data.filter(file_type="metadata", suffix=".parquet")
+        metadata_files = self.downloaded_metadata.filter(file_type="metadata", suffix=".parquet")
         if not metadata_files:
             raise MetadataNotFoundError(self.release, self.states)
 
@@ -258,7 +259,7 @@ class BuildStockRead:
         if file_type == "metadata":
             lf = self._read_metadata_with_diagonal_concat(file_type)
         else:
-            lf = pl.scan_parquet(str(self.data_path / self.release.key / file_type))
+            lf = pl.scan_parquet(str(self.data_path / self.release.key / file_type) + "/")
 
         # Apply all filters using Polars (states, upgrades, building_ids, sampled_buildings)
         # Polars automatically infers state/upgrade columns from hive partitioning
@@ -306,10 +307,9 @@ class BuildStockRead:
             lf = lf.filter(pl.col("state").is_in(self.states))
 
         # Apply upgrade filter if upgrades are specified
-        # Hive partitions store upgrades as zero-padded strings (e.g., "00", "01")
-        # So we need to zero-pad our upgrade IDs for comparison
+        # Hive partitions treats upgrades as int64
         if upgrades:
-            upgrade_values = [str(upgrade).zfill(2) for upgrade in upgrades]
+            upgrade_values = [int(upgrade) for upgrade in upgrades]
             lf = lf.filter(pl.col("upgrade").is_in(upgrade_values))
 
         # Apply row-level filters - combine multiple bldg_id filters for efficiency
