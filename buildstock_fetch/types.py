@@ -30,6 +30,7 @@ ReleaseKey = Literal[
     "com_2025_amy2018_3",
 ]
 
+# TODO: This should be int64; hive partition handles the zero-padding and treats as int64
 UpgradeID = NewType("UpgradeID", str)
 ReleaseYear: TypeAlias = Literal["2021", "2022", "2023", "2024", "2025"]
 ResCom: TypeAlias = Literal["resstock", "comstock"]

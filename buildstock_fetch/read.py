@@ -270,7 +270,7 @@ class BuildStockRead:
     def _read_metadata_with_diagonal_concat(self, file_type: FileType) -> pl.LazyFrame:
         """Read all metadata files and concat diagonally, then filters will be applied."""
         # Get all metadata files (not filtered by state/upgrade - we'll filter with Polars)
-        files = self.downloaded_data.filter(file_type=file_type, suffix=".parquet")
+        files = self.downloaded_metadata.filter(file_type=file_type, suffix=".parquet")
         file_paths = [str(file.file_path) for file in files]
 
         if not file_paths:
@@ -287,8 +287,8 @@ class BuildStockRead:
     def _apply_filters(
         self,
         lf: pl.LazyFrame,
-        upgrades: frozenset[UpgradeID],
-        building_ids: Collection[int] | None,
+        upgrades: frozenset[UpgradeID] | None = None,
+        building_ids: Collection[int] | None = None,
     ) -> pl.LazyFrame:
         """Apply all filters (states, upgrades, building_ids, sampled_buildings) using Polars.
 
@@ -327,6 +327,18 @@ class BuildStockRead:
 
         return lf
 
+    def _available_upgrades(self, file_type: FileType) -> frozenset[UpgradeID]:
+        if file_type == "metadata":
+            return self.downloaded_metadata.filter(state=self.states, file_type=file_type).upgrades()
+
+        state_upgrade_ids = []
+        for state_path in (self.data_path / self.release.key / file_type).iterdir():
+            # Note: This is a little weird if multiple states. Currently returns intersection,
+            # so only upgrades available in all states are returned.
+            if self.states is None or state_path.name.removeprefix("state=") in self.states:
+                state_upgrade_ids.append({u.name.removeprefix("upgrade=") for u in state_path.iterdir()})
+        return frozenset(normalize_upgrade_id(_) for _ in set.intersection(*state_upgrade_ids))
+
     def _validate_upgrades(
         self, file_type: FileType, upgrades: str | Collection[str] | None = None
     ) -> frozenset[UpgradeID]:
@@ -345,7 +357,7 @@ class BuildStockRead:
         if upgrades and (invalid_upgrades := [_ for _ in upgrades if _ not in self.release.upgrades]):
             raise InvalidUpgradeForRelease(self.release, *cast(tuple[UpgradeID, ...], tuple(invalid_upgrades)))
 
-        available_upgrades = self.downloaded_data.filter(state=self.states, file_type=file_type).upgrades()
+        available_upgrades = self._available_upgrades(file_type)
         if not available_upgrades:
             raise NoUpgradesFoundError(self.release)
 
