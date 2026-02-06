@@ -332,14 +332,14 @@ class BuildStockRead:
             return self.downloaded_metadata.filter(state=self.states, file_type=file_type).upgrades()
 
         state_upgrade_ids = []
-        try:
-            for state_path in (self.data_path / self.release.key / file_type).iterdir():
-                # Note: This is a little weird if multiple states. Currently returns intersection,
-                # so only upgrades available in all states are returned.
-                if self.states is None or state_path.name.removeprefix("state=") in self.states:
-                    state_upgrade_ids.append({u.name.removeprefix("upgrade=") for u in state_path.iterdir()})
-        except Exception as e:
-            raise NoUpgradesFoundError(self.release) from e
+        target_path = self.data_path / self.release.key / file_type
+        if not target_path.exists():
+            raise NoUpgradesFoundError(self.release)
+        for state_path in target_path.iterdir():
+            # Note: This is a little weird if multiple states. Currently returns intersection,
+            # so only upgrades available in all states are returned.
+            if self.states is None or state_path.name.removeprefix("state=") in self.states:
+                state_upgrade_ids.append({u.name.removeprefix("upgrade=") for u in state_path.iterdir()})
         return frozenset(normalize_upgrade_id(_) for _ in set.intersection(*state_upgrade_ids))
 
     def _validate_upgrades(
