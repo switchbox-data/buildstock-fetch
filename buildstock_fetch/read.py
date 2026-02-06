@@ -3,7 +3,7 @@ from collections.abc import Collection
 from functools import cached_property
 from pathlib import Path
 from random import Random
-from typing import cast
+from typing import Literal, cast
 
 import polars as pl
 from cloudpathlib import S3Path
@@ -127,6 +127,8 @@ class BuildStockRead:
             If None, auto-detects states present on disk.
         sample_n: Optional number of buildings to sample.
         random: Optional random state for reproducible sampling (Random instance or int seed).
+        metadata_variant: Metadata file variant to use. "standard" for metadata.parquet,
+            "sb" for metadata-sb.parquet (Switchbox-specific). Defaults to "standard".
 
     Example:
         >>> from buildstock_fetch.read import BuildStockRead
@@ -146,6 +148,7 @@ class BuildStockRead:
         states: USStateCode | Collection[USStateCode] | None = None,
         sample_n: int | None = None,
         random: Random | int | None = None,
+        metadata_variant: Literal["standard", "sb"] = "standard",
     ) -> None:
         self.data_path = S3Path(cast(str, data_path)) if is_s3_path(data_path) else Path(cast(str, data_path))
         self.release = release if isinstance(release, BuildstockRelease) else BuildstockReleases.load()[release]
@@ -166,6 +169,7 @@ class BuildStockRead:
             self.random = Random(random)
 
         self.sample_n = sample_n
+        self.metadata_variant = metadata_variant
 
     @cached_property
     def downloaded_metadata(self) -> DownloadedData:
@@ -183,6 +187,12 @@ class BuildStockRead:
         if self.sample_n is None:
             return None
         metadata_files = self.downloaded_metadata.filter(file_type="metadata", suffix=".parquet")
+        if not metadata_files:
+            raise MetadataNotFoundError(self.release, self.states)
+
+        # Select only the chosen metadata variant
+        metadata_filename = "metadata-sb.parquet" if self.metadata_variant == "sb" else "metadata.parquet"
+        metadata_files = DownloadedData(f for f in metadata_files if f.filename == metadata_filename)
         if not metadata_files:
             raise MetadataNotFoundError(self.release, self.states)
 
@@ -271,6 +281,12 @@ class BuildStockRead:
         """Read all metadata files and concat diagonally, then filters will be applied."""
         # Get all metadata files (not filtered by state/upgrade - we'll filter with Polars)
         files = self.downloaded_metadata.filter(file_type=file_type, suffix=".parquet")
+
+        # For metadata files, filter to chosen variant
+        if file_type == "metadata":
+            metadata_filename = "metadata-sb.parquet" if self.metadata_variant == "sb" else "metadata.parquet"
+            files = DownloadedData(f for f in files if f.filename == metadata_filename)
+
         file_paths = [str(file.file_path) for file in files]
 
         if not file_paths:

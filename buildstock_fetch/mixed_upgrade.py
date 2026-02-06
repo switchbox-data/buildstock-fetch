@@ -15,6 +15,7 @@ from pathlib import Path
 from random import Random
 
 import polars as pl
+from cloudpathlib import S3Path
 from typing_extensions import final, override
 
 from buildstock_fetch.explore import DownloadedData, filter_downloads
@@ -26,9 +27,27 @@ from buildstock_fetch.types import (
     ReleaseKey,
     UpgradeID,
     USStateCode,
+    is_s3_path,
     is_valid_state_code,
     normalize_upgrade_id,
 )
+
+
+def _resolve_path(path: Path | S3Path | str) -> Path | S3Path:
+    """Normalize path to Path or S3Path for local or S3 backend.
+
+    Note: Pass S3 URLs as strings (e.g., "s3://bucket/key") not Path objects,
+    since pathlib normalizes "s3://" to "s3:/" which breaks S3Path.
+    """
+    from typing import cast
+
+    if isinstance(path, S3Path):
+        return path
+
+    if is_s3_path(path):
+        return S3Path(cast(str, path))
+
+    return Path(cast(str, path))
 
 
 @final
@@ -101,6 +120,7 @@ class MixedUpgradeScenario:
 
     Args:
         data_path: Path to the data directory (local path or S3 path).
+        scenario_name: Name of the pathway scenario. will be used to create subdirectories when writing out the metadata and load curves.
         release: A BuildstockRelease or release key string specifying the release.
         states: Optional state code or list of state codes to filter data.
             If None, auto-detects states present on disk.
@@ -121,6 +141,7 @@ class MixedUpgradeScenario:
         ... )
         >>> mus = MixedUpgradeScenario(
         ...     data_path="./data",
+        ...     scenario_name="rapid_adoption",
         ...     release="res_2024_tmy3_2",
         ...     states="NY",
         ...     sample_n=1000,
@@ -129,11 +150,14 @@ class MixedUpgradeScenario:
         ... )
         >>> metadata = mus.read_metadata().collect()
         >>> mus.export_scenario_to_cairo("./scenario.csv")
+        >>> mus.save_metadata_parquet() # writes to disk or S3
+        >>> mus.save_hourly_load_parquet() # writes to disk or S3
     """
 
     def __init__(
         self,
-        data_path: str | Path,
+        data_path: Path | S3Path | str,
+        scenario_name: str,
         release: ReleaseKey | BuildstockRelease,
         states: USStateCode | Collection[USStateCode] | None = None,
         sample_n: int | None = None,
@@ -145,10 +169,10 @@ class MixedUpgradeScenario:
 
         validate_scenario(scenario)
         self.scenario = scenario
+        self.scenario_name = scenario_name
         self._upgrade_ids = tuple(scenario)
         self.num_years = len(next(iter(scenario.values())))
 
-        self.data_path = Path(data_path)
         self.release = release if isinstance(release, BuildstockRelease) else BuildstockReleases.load()[release]
 
         if states is None:
@@ -163,23 +187,27 @@ class MixedUpgradeScenario:
         self.sample_n = sample_n
         self._available_bldg_ids_cache: dict[str, dict[int, frozenset[int]]] = {}
 
+        # Normalize the path first so BuildStockRead recognizes S3 URLs in Path objects
+        normalized_data_path = _resolve_path(data_path)
+
         # Baseline reader handles state detection and optional sampling.
         self.baseline_reader = BuildStockRead(
-            data_path=data_path,
+            data_path=normalized_data_path,
             release=self.release,
             states=self.states,
             sample_n=sample_n,
             random=self.random,
+            metadata_variant="standard",  # Always use standard variant for mixed upgrades
         )
+        # Reuse the normalized path from BuildStockRead (supports both local and S3)
+        self.data_path = self.baseline_reader.data_path
 
         sampled = self.baseline_reader.sampled_buildings
         if sampled is not None:
             self.sampled_bldgs: frozenset[int] = sampled
         else:
             # No sampling: fall back to full baseline bldg_id list.
-            metadata_files = self.downloaded_data.filter(
-                file_type="metadata", suffix=".parquet", upgrade=normalize_upgrade_id("0")
-            )
+            metadata_files = self.downloaded_metadata.filter(suffix=".parquet", upgrade=normalize_upgrade_id("0"))
             if not metadata_files:
                 raise BaselineMetadataNotFoundError()
             first_file = min(metadata_files, key=lambda x: x.file_path)
@@ -195,13 +223,14 @@ class MixedUpgradeScenario:
         print(f"Materialized {self.num_years} years of adoption across {num_upgrades} upgrades")
 
     @cached_property
-    def downloaded_data(self) -> DownloadedData:
-        """Cached property for downloaded data discovery."""
+    def downloaded_metadata(self) -> DownloadedData:
+        """Cached property for metadata file discovery only."""
         return DownloadedData(
             filter_downloads(
                 self.data_path,
                 release_key=(self.release.key,),
                 state=self.states,
+                file_type="metadata",
             )
         )
 
@@ -265,6 +294,28 @@ class MixedUpgradeScenario:
 
         return years
 
+    def _scan_available_upgrades(self, file_type: FileType) -> frozenset[UpgradeID]:
+        """Scan parquet directories to discover available upgrades for a file type.
+
+        Uses directory structure scanning rather than file system traversal for performance.
+
+        Args:
+            file_type: Type of data to check (e.g., 'load_curve_hourly').
+
+        Returns:
+            Set of available upgrade IDs found in the directory structure.
+        """
+        base_path = self.data_path / self.release.key / file_type
+
+        available_upgrades = set()
+        for state_dir in base_path.iterdir():
+            if self.states is None or state_dir.name.removeprefix("state=") in self.states:
+                for upgrade_dir in state_dir.iterdir():
+                    upgrade_id = upgrade_dir.name.removeprefix("upgrade=")
+                    available_upgrades.add(normalize_upgrade_id(upgrade_id))
+
+        return frozenset(available_upgrades)
+
     def _validate_data_availability(self, file_type: FileType) -> None:
         """Validate that all required upgrade data exists on disk.
 
@@ -275,7 +326,15 @@ class MixedUpgradeScenario:
             ScenarioDataNotFoundError: If data for any scenario upgrade is missing.
         """
         required_upgrades = {normalize_upgrade_id(str(uid)) for uid in self._upgrade_ids} | {normalize_upgrade_id("0")}
-        missing_upgrades = required_upgrades - self.downloaded_data.filter(file_type=file_type).upgrades()
+
+        if file_type == "metadata":
+            # Use file system discovery for metadata
+            missing_upgrades = required_upgrades - self.downloaded_metadata.upgrades()
+        else:
+            # Use parquet directory scanning for load curves
+            available_upgrades = self._scan_available_upgrades(file_type)
+            missing_upgrades = required_upgrades - available_upgrades
+
         if missing_upgrades:
             raise ScenarioDataNotFoundError(file_type, missing_upgrades)
 
@@ -289,24 +348,32 @@ class MixedUpgradeScenario:
         }
         if file_type not in per_building_types:
             return {}
+
         cached = self._available_bldg_ids_cache.get(file_type)
         if cached is not None:
             return cached
 
         needed_upgrades = {0, *self._upgrade_ids}
         available: dict[int, set[int]] = {uid: set() for uid in needed_upgrades}
-        for info in self.downloaded_data.filter(file_type=file_type):
-            try:
-                upgrade_id = int(info.upgrade)
-                # Extract leading building ID (any digit length) from filename
-                match = re.match(r"^(\d+)-", info.filename)
-                if not match:
-                    continue
-                bldg_id = int(match.group(1))
-            except (TypeError, ValueError):
-                continue
-            if upgrade_id in available:
-                available[upgrade_id].add(bldg_id)
+
+        # Scan parquet directory structure directly
+        base_path = self.data_path / self.release.key / file_type
+        for state_dir in base_path.iterdir():
+            if self.states is None or state_dir.name.removeprefix("state=") in self.states:
+                for upgrade_dir in state_dir.iterdir():
+                    try:
+                        upgrade_id = int(upgrade_dir.name.removeprefix("upgrade="))
+                        if upgrade_id not in available:
+                            continue
+
+                        # List files and extract building IDs from filenames
+                        for file_path in upgrade_dir.glob("*.parquet"):
+                            match = re.match(r"^(\d+)-", file_path.name)
+                            if match:
+                                bldg_id = int(match.group(1))
+                                available[upgrade_id].add(bldg_id)
+                    except (ValueError, AttributeError):
+                        continue
 
         cached = {uid: frozenset(ids) for uid, ids in available.items()}
         self._available_bldg_ids_cache[file_type] = cached
@@ -518,14 +585,14 @@ class MixedUpgradeScenario:
         """
         return self._read_data_for_scenario("load_curve_annual", years)
 
-    def export_scenario_to_cairo(self, output_path: str | Path) -> None:
+    def export_scenario_to_cairo(self, output_path: str | Path | S3Path) -> None:
         """Export scenario to CAIRO-compatible CSV format.
 
         Creates a CSV file with one row per building and one column per year.
         Each cell contains the upgrade ID for that building in that year.
 
         Args:
-            output_path: Path where the CSV file should be written.
+            output_path: Path where the CSV file should be written (local or S3).
 
         Output format:
             bldg_id,year_0,year_1,year_2
@@ -558,9 +625,51 @@ class MixedUpgradeScenario:
                         col[idx[bldg_id]] = uid
 
         df = pl.DataFrame({"bldg_id": sorted_bldg_ids, **year_cols})
-        output_path = Path(output_path)
-        df.write_csv(output_path)
+        resolved = _resolve_path(output_path)
+        df.write_csv(str(resolved))
 
-        print(
-            f"Exported scenario for {len(self.sampled_bldgs)} buildings across {self.num_years} years to {output_path}"
-        )
+        print(f"Exported scenario for {len(self.sampled_bldgs)} buildings across {self.num_years} years to {resolved}")
+
+    def _resolve_scenario_root(self, path: Path | S3Path | str | None) -> Path | S3Path:
+        """Resolve scenario root directory based on optional base path."""
+        base_path = self.data_path / self.release.key if path is None else _resolve_path(path)
+        return base_path / "mixed_upgrade" / self.scenario_name
+
+    def save_metadata_parquet(self, path: Path | S3Path | str | None = None) -> None:
+        """Save mixed upgrade metadata to a partitioned parquet dataset.
+
+        Output structure:
+            <path>/<scenario_name>/year=<year_int>/metadata.parquet
+
+        Args:
+            path: Optional base path to write to. Defaults to data_path/release/mixed_upgrade.
+        """
+        scenario_root = self._resolve_scenario_root(path)
+        for year_idx in range(self.num_years):
+            year_dir = scenario_root / f"year={year_idx}"
+            if isinstance(year_dir, Path):
+                year_dir.mkdir(parents=True, exist_ok=True)
+            output_file = year_dir / "metadata.parquet"
+            self.read_metadata(years=[year_idx]).sink_parquet(str(output_file))
+
+    def save_hourly_load_parquet(self, path: Path | S3Path | str | None = None) -> None:
+        """Save mixed upgrade hourly load curves to partitioned parquet datasets.
+
+        Output structure:
+            <path>/mixed_upgrade/<scenario_name>/year=<year_int>/<bldg_id>-<upgrade_id>.parquet
+
+        Args:
+            path: Optional base path to write to. Defaults to the release path.
+        """
+        scenario_root = self._resolve_scenario_root(path)
+        for year_idx in range(self.num_years):
+            year_dir = scenario_root / f"year={year_idx}"
+            if isinstance(year_dir, Path):
+                year_dir.mkdir(parents=True, exist_ok=True)
+            df = self.read_load_curve_hourly(years=[year_idx]).collect()
+            if df.is_empty():
+                continue
+            for key, group in df.partition_by(["bldg_id", "upgrade_id"], as_dict=True).items():
+                bldg_id, upgrade_id = key
+                output_file = year_dir / f"{int(bldg_id)}-{int(upgrade_id)}.parquet"
+                group.write_parquet(str(output_file))

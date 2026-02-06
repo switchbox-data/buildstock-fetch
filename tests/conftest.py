@@ -33,7 +33,7 @@ def cleanup_downloads():
 def integration_test_data():
     """Download shared test data for integration tests.
 
-    Downloads metadata and 15min load curves for:
+    Downloads metadata, hourly and 15min load curves for:
     - 10 buildings (5 from NY, 5 from AL)
     - Release: res_2024_tmy3_2
     - Upgrades: 0, 4, 8
@@ -50,7 +50,10 @@ def integration_test_data():
     # Check if data already exists by looking for expected directories
     expected_metadata_dir = test_data_dir / "res_2024_tmy3_2" / "metadata"
     expected_load_curve_dir = test_data_dir / "res_2024_tmy3_2" / "load_curve_15min"
-    data_exists = expected_metadata_dir.exists() and expected_load_curve_dir.exists()
+    expected_hourly_load_curve_dir = test_data_dir / "res_2024_tmy3_2" / "load_curve_hourly"
+    data_exists = (
+        expected_metadata_dir.exists() and expected_load_curve_dir.exists() and expected_hourly_load_curve_dir.exists()
+    )
 
     # Fetch building IDs for NY and AL
     ny_bldg_ids_upgrade0 = fetch_bldg_ids(
@@ -106,7 +109,7 @@ def integration_test_data():
         # Download metadata and load curves
         fetch_bldg_data(
             bldg_ids=bldg_ids_to_download,
-            file_type=("metadata", "load_curve_15min"),
+            file_type=("metadata", "load_curve_hourly", "load_curve_15min"),
             output_dir=test_data_dir,
             max_workers=5,
         )

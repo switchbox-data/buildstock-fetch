@@ -6,6 +6,8 @@ import pytest
 from buildstock_fetch.mixed_upgrade import MixedUpgradeScenario, ScenarioDataNotFoundError
 from buildstock_fetch.scenarios import InvalidScenarioError, uniform_adoption
 
+SCENARIO_NAME = "test_scenario"
+
 
 # Tests that don't require data downloads
 class TestScenarioInitialization:
@@ -14,13 +16,23 @@ class TestScenarioInitialization:
     def test_requires_scenario_parameter(self):
         """Test that scenario parameter is required."""
         with pytest.raises(ValueError, match="scenario parameter is required"):
-            MixedUpgradeScenario(data_path="./data", release="res_2024_tmy3_2", scenario=None)
+            MixedUpgradeScenario(
+                data_path="./data",
+                scenario_name=SCENARIO_NAME,
+                release="res_2024_tmy3_2",
+                scenario=None,
+            )
 
     def test_validates_scenario_on_init(self):
         """Test that invalid scenarios are rejected during initialization."""
         bad_scenario = {4: [0.3, 0.2, 0.4]}  # Non-monotonic
         with pytest.raises(InvalidScenarioError, match="must be non-decreasing"):
-            MixedUpgradeScenario(data_path="./data", release="res_2024_tmy3_2", scenario=bad_scenario)
+            MixedUpgradeScenario(
+                data_path="./data",
+                scenario_name=SCENARIO_NAME,
+                release="res_2024_tmy3_2",
+                scenario=bad_scenario,
+            )
 
 
 # Tests that use shared integration test data
@@ -32,6 +44,7 @@ class TestScenarioMaterialization:
         scenario = {4: [0.1, 0.2], 8: [0.05, 0.10]}
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -48,6 +61,7 @@ class TestScenarioMaterialization:
 
         mus1 = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -56,6 +70,7 @@ class TestScenarioMaterialization:
         )
         mus2 = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -72,6 +87,7 @@ class TestScenarioMaterialization:
         scenario = {4: [0.2, 0.4, 0.6], 8: [0.1, 0.2, 0.3]}
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -92,6 +108,7 @@ class TestScenarioMaterialization:
         scenario = {4: [0.1, 0.2, 0.3]}
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -111,6 +128,7 @@ class TestMixedUpgradeReading:
         scenario = {4: [0.2, 0.4]}
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -131,6 +149,7 @@ class TestMixedUpgradeReading:
         scenario = {4: [0.2, 0.4, 0.6]}
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -149,6 +168,7 @@ class TestMixedUpgradeReading:
         scenario = {4: [0.2, 0.4]}
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -171,6 +191,7 @@ class TestMixedUpgradeReading:
         scenario = {4: [0.1, 0.2]}
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -186,6 +207,7 @@ class TestMixedUpgradeReading:
         scenario = {9: [0.2, 0.4]}  # Upgrade 9 not downloaded
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -201,6 +223,7 @@ class TestMixedUpgradeReading:
         scenario = {4: [0.2, 0.4]}
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states=["NY", "AL"],
             sample_n=10,
@@ -225,6 +248,7 @@ class TestScenarioExport:
         scenario = {4: [0.2, 0.4, 0.6]}
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -243,6 +267,43 @@ class TestScenarioExport:
         assert "year_2" in df.columns
         assert df.height > 0
 
+    def test_save_metadata_parquet_creates_year_partitions(self, integration_test_data, tmp_path):
+        scenario = {4: [0.1, 0.2]}
+        mus = MixedUpgradeScenario(
+            data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
+            release="res_2024_tmy3_2",
+            states="NY",
+            sample_n=5,
+            random=42,
+            scenario=scenario,
+        )
+
+        mus.save_metadata_parquet(path=tmp_path)
+
+        assert (tmp_path / "mixed_upgrade" / SCENARIO_NAME / "year=0" / "metadata.parquet").exists()
+        assert (tmp_path / "mixed_upgrade" / SCENARIO_NAME / "year=1" / "metadata.parquet").exists()
+
+    def test_save_hourly_load_parquet_creates_files(self, integration_test_data, tmp_path):
+        scenario = {4: [0.1, 0.2]}
+        mus = MixedUpgradeScenario(
+            data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
+            release="res_2024_tmy3_2",
+            states="NY",
+            sample_n=5,
+            random=42,
+            scenario=scenario,
+        )
+
+        mus.save_hourly_load_parquet(path=tmp_path)
+
+        year0_dir = tmp_path / "mixed_upgrade" / SCENARIO_NAME / "year=0"
+        year1_dir = tmp_path / "mixed_upgrade" / SCENARIO_NAME / "year=1"
+        assert year0_dir.exists()
+        assert year1_dir.exists()
+        assert list(year0_dir.glob("*.parquet"))
+
 
 class TestMixedUpgradeIntegration:
     """Integration tests for MixedUpgradeScenario."""
@@ -253,6 +314,7 @@ class TestMixedUpgradeIntegration:
 
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states="NY",
             sample_n=10,
@@ -281,6 +343,7 @@ class TestMixedUpgradeIntegration:
 
         mus = MixedUpgradeScenario(
             data_path=str(integration_test_data["data_path"]),
+            scenario_name=SCENARIO_NAME,
             release="res_2024_tmy3_2",
             states=["NY", "AL"],
             sample_n=10,
