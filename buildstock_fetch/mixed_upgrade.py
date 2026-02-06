@@ -183,7 +183,7 @@ class MixedUpgradeScenario:
             if not metadata_files:
                 raise BaselineMetadataNotFoundError()
             first_file = min(metadata_files, key=lambda x: x.file_path)
-            df = pl.scan_parquet(first_file.file_path).select("bldg_id").collect()
+            df = pl.scan_parquet(str(first_file.file_path)).select("bldg_id").collect()
             all_bldg_ids = df["bldg_id"].unique().to_list()
             self.sampled_bldgs = frozenset(all_bldg_ids)
 
