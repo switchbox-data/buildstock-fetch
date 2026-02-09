@@ -48,7 +48,7 @@ def first_building_id_str(buildings: Collection[Building]) -> str:
     ids=first_building_id_str,
 )
 async def test_metadata_has_required_fields_and_exists_in_paths(target_folder: Path, buildings: Collection[Building]):
-    METADATA_COLUMNS = ["bldg_id", "upgrade", "in.", "upgrade."]
+    METADATA_COLUMNS = ["bldg_id", "upgrade", "in.", "upgrade.", "weight"]
     NOT_METADATA_COLUMNS = ["out."]
     await download_and_process_all(target_folder, buildings, ["metadata"])
     filenames: set[Path] = set()
@@ -99,7 +99,7 @@ async def test_metadata_has_required_fields_and_exists_in_paths(target_folder: P
     ids=lambda _: first_building_id_str(_[0]),
 )
 async def test_metadata_merging(target_folder: Path, buildings_partitioned: list[Collection[Building]]):
-    METADATA_COLUMNS = ["bldg_id", "upgrade", "in.", "upgrade."]
+    METADATA_COLUMNS = ["bldg_id", "upgrade", "in.", "upgrade.", "weight"]
     NOT_METADATA_COLUMNS = ["out."]
 
     for building_chunk in buildings_partitioned:
@@ -169,7 +169,7 @@ RELEASES_WITH_LOAD_CURVES: list[ReleaseKey] = [
     ids=first_building_id_str,
 )
 async def test_load_curve_annual(target_folder: Path, buildings: Collection[Building]):
-    ANNUAL_LOAD_CURVE_COLUMNS = ["bldg_id", "upgrade", "out."]
+    ANNUAL_LOAD_CURVE_COLUMNS = ["bldg_id", "upgrade", "out.", "weight"]
     NOT_ANNUAL_LOAD_CURVE_COLUMNS = ["in."]
     await download_and_process_all(target_folder, buildings, ["load_curve_annual"])
     filenames: set[Path] = set()
@@ -214,7 +214,7 @@ async def test_load_curve_annual(target_folder: Path, buildings: Collection[Buil
     ids=lambda _: first_building_id_str(_[0]),
 )
 async def test_annual_load_curves_merging(target_folder: Path, buildings_partitioned: list[Collection[Building]]):
-    ANNUAL_LOAD_CURVE_COLUMNS = ["bldg_id", "upgrade", "out."]
+    ANNUAL_LOAD_CURVE_COLUMNS = ["bldg_id", "upgrade", "out.", "weight"]
     NOT_ANNUAL_LOAD_CURVE_COLUMNS = ["in."]
 
     for building_chunk in buildings_partitioned:

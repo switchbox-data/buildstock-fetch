@@ -118,7 +118,8 @@ def _compact_metadata(lf: pl.LazyFrame) -> pl.LazyFrame:
         col
         for col in schema
         if (
-            any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index", "weight"])
+            any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"])
+            or col == "weight"
             or col.startswith("out.")
         )
         and not col.startswith("in.")
