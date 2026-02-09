@@ -1,6 +1,6 @@
 [project]
 name = "buildstock-fetch"
-version = "1.6.3"
+version = "1.6.4"
 description = "This library simplifies downloading building characteristics and load curve data from NREL's ResStock and ComStock projects."
 authors = [{ name = "Switchbox", email = "hello@switch.box" }]
 readme = "README.md"
@@ -37,6 +37,7 @@ dependencies = [
   "async-timer>=1.1.6",
   "psutil>=7.2.1",
   "cloudpathlib>=0.23.0",
+  "prek>=0.3.2",
 ]
 
 [project.urls]

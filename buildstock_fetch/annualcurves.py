@@ -117,7 +117,10 @@ def _compact_metadata(lf: pl.LazyFrame) -> pl.LazyFrame:
     columns_to_keep = [
         col
         for col in schema
-        if (any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index"]) or col.startswith("out."))
+        if (
+            any(keyword in col for keyword in ["bldg_id", "upgrade", "metadata_index", "weight"])
+            or col.startswith("out.")
+        )
         and not col.startswith("in.")
         and not col.startswith("upgrade.")
     ]
