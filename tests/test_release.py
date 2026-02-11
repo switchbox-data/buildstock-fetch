@@ -95,9 +95,9 @@ def test_slow_run_all_tests():
             pypi_library_version = version_result.stdout.strip()
 
     # Only run these tests if the local library version is different from the PyPI library version
-    if local_library_version == pypi_library_version:
+    """if local_library_version == pypi_library_version:
         assert True
-        return
+        return"""
 
     # Create a temporary directory for the test environment
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -117,7 +117,7 @@ def test_slow_run_all_tests():
         temp_test_dir.mkdir()
 
         # Copy specific test files
-        specific_tests = ["test_main.py", "test_main_cli.py"]
+        specific_tests = ["test_main_.py", "test_main_cli.py", "test_building.py", "test_types.py", "test_read.py", "test_mixed_upgrade.py", "test_scenarios.py"]
         for test_name in specific_tests:
             test_file = test_dir / test_name
             if test_file.exists():
