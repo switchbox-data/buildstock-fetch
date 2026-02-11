@@ -118,6 +118,11 @@ def test_slow_run_all_tests():
         temp_test_dir = temp_path / "tests"
         temp_test_dir.mkdir()
 
+        # Copy conftest.py first (needed for fixtures)
+        conftest_file = test_dir / "conftest.py"
+        if conftest_file.exists():
+            shutil.copy2(conftest_file, temp_test_dir)
+
         # Copy specific test files
         specific_tests = [
             "test_main_.py",
