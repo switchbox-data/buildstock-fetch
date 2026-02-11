@@ -94,12 +94,10 @@ def test_slow_run_all_tests():
 
             pypi_library_version = version_result.stdout.strip()
 
-    """# Only run these tests if the local library version is different from the PyPI library version
+    # Only run these tests if the local library version is different from the PyPI library version
     if local_library_version == pypi_library_version:
         assert True
-        return"""
-    print("local_library_version", local_library_version)
-    print("pypi_library_version", pypi_library_version)
+        return
 
     # Create a temporary directory for the test environment
     with tempfile.TemporaryDirectory() as temp_dir:
