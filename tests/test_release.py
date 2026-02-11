@@ -59,7 +59,7 @@ def test_package_functionality():
 def test_slow_run_all_tests():
     """Run all tests in the test directory using pytest with the PyPI-installed package."""
 
-    """# Get the local library version
+    # Get the local library version
     local_library_version = importlib.metadata.version("buildstock-fetch")
 
     # Get the PyPI version by querying PyPI API
@@ -94,10 +94,12 @@ def test_slow_run_all_tests():
 
             pypi_library_version = version_result.stdout.strip()
 
-    # Only run these tests if the local library version is different from the PyPI library version
+    """# Only run these tests if the local library version is different from the PyPI library version
     if local_library_version == pypi_library_version:
         assert True
         return"""
+    print("local_library_version", local_library_version)
+    print("pypi_library_version", pypi_library_version)
 
     # Create a temporary directory for the test environment
     with tempfile.TemporaryDirectory() as temp_dir:
