@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://switchbox-data.github.io/buildstock-fetch/</loc>
+         <lastmod>2026-02-12</lastmod>
+    </url>
+    <url>
+         <loc>https://switchbox-data.github.io/buildstock-fetch/mixed_upgrades/</loc>
+         <lastmod>2026-02-12</lastmod>
+    </url>
+    <url>
+         <loc>https://switchbox-data.github.io/buildstock-fetch/modules/</loc>
+         <lastmod>2026-02-12</lastmod>
+    </url>
+    <url>
+         <loc>https://switchbox-data.github.io/buildstock-fetch/usage/</loc>
+         <lastmod>2026-02-12</lastmod>
+    </url>
+</urlset>
