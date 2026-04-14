@@ -50,6 +50,7 @@ def test_weather_station_map_quality(weather_station_map):
 
 
 # Test the dataframe that was already built
+@pytest.mark.network
 def test_resolve_weather_station_id(weather_station_map):
     # Randomly select 10 buildings to test
     product = "resstock"
@@ -71,6 +72,8 @@ def test_resolve_weather_station_id(weather_station_map):
         )
 
 
+@pytest.mark.network
+@pytest.mark.slow
 def test_weather_station_mapping():
     product = "resstock"
     release_year = "2022"

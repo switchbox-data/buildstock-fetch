@@ -7,8 +7,10 @@ import polars as pl
 from buildstock_fetch.constants import WEATHER_FILE_DIR
 from buildstock_fetch.releases import RELEASES, BuildstockRelease
 from buildstock_fetch.types import FileType, ReleaseKey, UpgradeID, USStateCode
+from xxhash import xxh64
 
 _weather_map_df: pl.DataFrame | None = None
+_NUM_BUCKETS = 32
 
 
 @final
@@ -251,14 +253,20 @@ class Building:
             return str(weather_station_name) if weather_station_name is not None else None  # pyright: ignore[reportAny]
         return None
 
+    @property
+    def bucket(self) -> int:
+        return xxh64(str(self.id)).intdigest() % _NUM_BUCKETS
+
     def file_path(self, file_type: FileType) -> Path:
         url: str
+        bucket = str(self.bucket).zfill(4)
+        upgrade = str(self.upgrade).zfill(2)
+        bucket_with_upgrade = f"bucket_{bucket}_up{upgrade}"
         match file_type:
             case "metadata":
                 filename = "metadata.parquet"
             case "load_curve_15min" | "load_curve_hourly" | "load_curve_daily" | "load_curve_monthly":
-                url = self.load_curve_15min_path
-                filename = url.split("/")[-1]
+                filename = f"{bucket_with_upgrade}.parquet"
             case "load_curve_annual":
                 url = self.load_curve_annual_path.replace("_baseline_", "_upgrade00_")
                 filename = url.split("/")[-1]

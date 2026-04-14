@@ -7,6 +7,8 @@ from buildstock_fetch.explore import DownloadedData, filter_downloads
 from buildstock_fetch.main_new import download_and_process_all, list_buildings
 from buildstock_fetch.types import normalize_upgrade_id
 
+pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.network]
+
 
 @pytest.fixture
 def target_folder():

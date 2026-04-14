@@ -3,6 +3,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import polars as pl
 import pytest
 
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
@@ -55,36 +56,55 @@ def integration_test_data():
         expected_metadata_dir.exists() and expected_load_curve_dir.exists() and expected_hourly_load_curve_dir.exists()
     )
 
-    # Fetch building IDs for NY and AL
-    ny_bldg_ids_upgrade0 = fetch_bldg_ids(
-        product="resstock",
-        release_year="2024",
-        weather_file="tmy3",
-        release_version="2",
-        state="NY",
-        upgrade_id="0",
-    )
-    al_bldg_ids_upgrade0 = fetch_bldg_ids(
-        product="resstock",
-        release_year="2024",
-        weather_file="tmy3",
-        release_version="2",
-        state="AL",
-        upgrade_id="0",
-    )
+    def cached_bldg_ids(state: str) -> list[int]:
+        metadata_dir = test_data_dir / "res_2024_tmy3_2" / "metadata" / f"state={state}" / "upgrade=00"
+        parquet_files = sorted(metadata_dir.glob("*.parquet"))
+        if not parquet_files:
+            return []
+        return (
+            pl.scan_parquet([str(path) for path in parquet_files])
+            .select("bldg_id")
+            .unique()
+            .sort("bldg_id")
+            .limit(5)
+            .collect()["bldg_id"]
+            .to_list()
+        )
 
-    # Select first 5 from each state
-    ny_bldgs = ny_bldg_ids_upgrade0[:5]
-    al_bldgs = al_bldg_ids_upgrade0[:5]
+    if data_exists:
+        ny_bldg_ids = cached_bldg_ids("NY")
+        al_bldg_ids = cached_bldg_ids("AL")
+    else:
+        # Fetch building IDs for NY and AL
+        ny_bldg_ids_upgrade0 = fetch_bldg_ids(
+            product="resstock",
+            release_year="2024",
+            weather_file="tmy3",
+            release_version="2",
+            state="NY",
+            upgrade_id="0",
+        )
+        al_bldg_ids_upgrade0 = fetch_bldg_ids(
+            product="resstock",
+            release_year="2024",
+            weather_file="tmy3",
+            release_version="2",
+            state="AL",
+            upgrade_id="0",
+        )
+
+        # Select first 5 from each state
+        ny_bldg_ids = [b.bldg_id for b in ny_bldg_ids_upgrade0[:5]]
+        al_bldg_ids = [b.bldg_id for b in al_bldg_ids_upgrade0[:5]]
 
     if not data_exists:
         # Create building IDs for all upgrade combinations
         bldg_ids_to_download = []
         for upgrade in ["0", "4", "8"]:
-            for bldg in ny_bldgs:
+            for bldg_id in ny_bldg_ids:
                 bldg_ids_to_download.append(
-                    type(bldg)(
-                        bldg_id=bldg.bldg_id,
+                    type(ny_bldg_ids_upgrade0[0])(
+                        bldg_id=bldg_id,
                         release_number="2",
                         release_year="2024",
                         res_com="resstock",
@@ -93,10 +113,10 @@ def integration_test_data():
                         state="NY",
                     )
                 )
-            for bldg in al_bldgs:
+            for bldg_id in al_bldg_ids:
                 bldg_ids_to_download.append(
-                    type(bldg)(
-                        bldg_id=bldg.bldg_id,
+                    type(al_bldg_ids_upgrade0[0])(
+                        bldg_id=bldg_id,
                         release_number="2",
                         release_year="2024",
                         res_com="resstock",
@@ -116,8 +136,8 @@ def integration_test_data():
 
     # Return building info for tests to use
     yield {
-        "ny_bldg_ids": [b.bldg_id for b in ny_bldgs],
-        "al_bldg_ids": [b.bldg_id for b in al_bldgs],
+        "ny_bldg_ids": ny_bldg_ids,
+        "al_bldg_ids": al_bldg_ids,
         "data_path": test_data_dir,
         "outputs_path": test_outputs_dir,
     }

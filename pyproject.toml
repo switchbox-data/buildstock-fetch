@@ -38,6 +38,7 @@ dependencies = [
   "psutil>=7.2.1",
   "cloudpathlib>=0.23.0",
   "prek>=0.3.2",
+  "xxhash>=3.6.0",
 ]
 
 [project.urls]
@@ -119,7 +120,11 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-markers = ["network"]
+markers = [
+  "network: tests that access remote services or external network resources",
+  "slow: tests that are too expensive for the default fast suite",
+  "integration: end-to-end or cross-module integration tests",
+]
 asyncio_mode = "auto"
 
 [tool.ruff]

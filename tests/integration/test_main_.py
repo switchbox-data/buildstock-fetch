@@ -10,6 +10,8 @@ from buildstock_fetch.main_new import download_and_process_all, list_buildings
 from buildstock_fetch.releases import RELEASES
 from buildstock_fetch.types import FileType, ReleaseKey, normalize_upgrade_id
 
+pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.network]
+
 TEST_METADATA_MERGING_SKIP_RELEASES: set[ReleaseKey] = {"com_2025_amy2018_3"}
 TEST_METADATA_MERGING_RELEASES = RELEASES.keys - TEST_METADATA_MERGING_SKIP_RELEASES
 
