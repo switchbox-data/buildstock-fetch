@@ -266,7 +266,9 @@ class Building:
             case "metadata":
                 filename = "metadata.parquet"
             case "load_curve_15min" | "load_curve_hourly" | "load_curve_daily" | "load_curve_monthly":
-                filename = f"{bucket_with_upgrade}.parquet"
+                url = self.load_curve_15min_path
+                filename = url.split("/")[-1]
+                # filename = f"{bucket_with_upgrade}.parquet"
             case "load_curve_annual":
                 url = self.load_curve_annual_path.replace("_baseline_", "_upgrade00_")
                 filename = url.split("/")[-1]
