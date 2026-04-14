@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ import pytest
 from polars.testing import assert_frame_equal
 
 from buildstock_fetch.building_ import Building
-from buildstock_fetch.loadcurves import download_and_process_load_curves_batch
+from buildstock_fetch.loadcurves import download_and_process_load_curves_batch, group_buildings
 from buildstock_fetch.types import FileType, UpgradeID
 
 
@@ -26,17 +27,15 @@ def _make_building(*, bldg_id: int) -> Building:
 
 
 def _write_source_parquet(path: Path, *, start_hour: int, load_values: list[float], labels: list[str]) -> pl.DataFrame:
-    df = pl.DataFrame(
-        {
-            "timestamp": [
-                datetime(2024, 1, 1, start_hour, 0, 15),
-                datetime(2024, 1, 1, start_hour, 15, 15),
-                datetime(2024, 1, 1, start_hour, 30, 15),
-            ],
-            "example_load_kw": load_values,
-            "example_label": labels,
-        }
-    )
+    df = pl.DataFrame({
+        "timestamp": [
+            datetime(2024, 1, 1, start_hour, 0, 15),
+            datetime(2024, 1, 1, start_hour, 15, 15),
+            datetime(2024, 1, 1, start_hour, 30, 15),
+        ],
+        "example_load_kw": load_values,
+        "example_label": labels,
+    })
     df.write_parquet(path)
     return df
 
@@ -49,14 +48,12 @@ def _write_aggregation_source_parquet(
     load_values: list[float],
     temp_values: list[float],
 ) -> pl.DataFrame:
-    df = pl.DataFrame(
-        {
-            "timestamp": timestamps,
-            "bldg_id": [bldg_id] * len(timestamps),
-            "example_load_kw": load_values,
-            "example_temp_c": temp_values,
-        }
-    )
+    df = pl.DataFrame({
+        "timestamp": timestamps,
+        "bldg_id": [bldg_id] * len(timestamps),
+        "example_load_kw": load_values,
+        "example_temp_c": temp_values,
+    })
     df.write_parquet(path)
     return df
 
@@ -315,7 +312,8 @@ async def test_download_and_process_load_curves_batch_merges_contents_when_two_b
 
     shared_target = tmp_path / fake_file_path(building_a, "load_curve_15min")
     expected_df = (
-        pl.concat([expected_a, expected_b], how="vertical")
+        pl
+        .concat([expected_a, expected_b], how="vertical")
         .sort(["timestamp", "example_label"])
         .with_columns(pl.col("timestamp").cast(pl.Datetime))
     )
@@ -359,18 +357,16 @@ async def test_download_and_process_load_curve_hourly_aggregates_values_shifts_t
     assert written_paths == [expected_target]
 
     actual_df = pl.read_parquet(expected_target)
-    expected_df = pl.DataFrame(
-        {
-            "timestamp": [datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 1, 1, 0, 0)],
-            "example_load_kw": [10.0, 100.0],
-            "example_temp_c": [5.0, 4.0],
-            "bldg_id": [building.id, building.id],
-            "year": [2024, 2024],
-            "month": [1, 1],
-            "day": [1, 1],
-            "hour": [0, 1],
-        }
-    )
+    expected_df = pl.DataFrame({
+        "timestamp": [datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 1, 1, 0, 0)],
+        "example_load_kw": [10.0, 100.0],
+        "example_temp_c": [5.0, 4.0],
+        "bldg_id": [building.id, building.id],
+        "year": [2024, 2024],
+        "month": [1, 1],
+        "day": [1, 1],
+        "hour": [0, 1],
+    })
     expected_df = expected_df.cast(actual_df.schema)
     assert_frame_equal(actual_df, expected_df)
 
@@ -406,17 +402,15 @@ async def test_download_and_process_load_curve_daily_aggregates_values_and_adds_
     assert written_paths == [expected_target]
 
     actual_df = pl.read_parquet(expected_target)
-    expected_df = pl.DataFrame(
-        {
-            "timestamp": [datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 2, 0, 0, 0)],
-            "example_load_kw": [10.0, 100.0],
-            "example_temp_c": [5.0, 4.0],
-            "bldg_id": [building.id, building.id],
-            "year": [2024, 2024],
-            "month": [1, 1],
-            "day": [1, 2],
-        }
-    )
+    expected_df = pl.DataFrame({
+        "timestamp": [datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 2, 0, 0, 0)],
+        "example_load_kw": [10.0, 100.0],
+        "example_temp_c": [5.0, 4.0],
+        "bldg_id": [building.id, building.id],
+        "year": [2024, 2024],
+        "month": [1, 1],
+        "day": [1, 2],
+    })
     expected_df = expected_df.cast(actual_df.schema)
     assert_frame_equal(actual_df, expected_df)
 
@@ -452,15 +446,84 @@ async def test_download_and_process_load_curve_monthly_aggregates_values_and_add
     assert written_paths == [expected_target]
 
     actual_df = pl.read_parquet(expected_target)
-    expected_df = pl.DataFrame(
-        {
-            "timestamp": [datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 2, 1, 0, 0, 0)],
-            "example_load_kw": [10.0, 100.0],
-            "example_temp_c": [5.0, 4.0],
-            "bldg_id": [building.id, building.id],
-            "year": [2024, 2024],
-            "month": [1, 2],
-        }
-    )
+    expected_df = pl.DataFrame({
+        "timestamp": [datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 2, 1, 0, 0, 0)],
+        "example_load_kw": [10.0, 100.0],
+        "example_temp_c": [5.0, 4.0],
+        "bldg_id": [building.id, building.id],
+        "year": [2024, 2024],
+        "month": [1, 2],
+    })
     expected_df = expected_df.cast(actual_df.schema)
     assert_frame_equal(actual_df, expected_df)
+
+
+def test_group_buildings():
+    def b(id_: int, load_curve_15min: str, load_curve_hourly: str):
+        @dataclass(frozen=True)
+        class FakeBuilding:
+            id: int = id_
+
+            def file_path(self, file_type):
+                match file_type:
+                    case "load_curve_15min":
+                        return load_curve_15min
+                    case "load_curve_hourly":
+                        return load_curve_hourly
+                    case _:
+                        raise RuntimeError("Unexpected file type")
+
+        return FakeBuilding()
+
+    result = group_buildings(
+        [
+            b(0, "0", "0"),
+            b(1, "0", "1"),
+            b(2, "2", "0"),
+            b(3, "1", "1"),
+            b(4, "4", "4"),
+            b(5, "5", "5"),
+            b(6, "2", "2"),
+            b(7, "4", "4"),
+        ],
+        ["load_curve_15min", "load_curve_hourly"],
+    )
+    indices = [[bldg.id for bldg in groups] for groups in result]
+    expected = [
+        [0, 1, 2, 3, 6],
+        [4, 7],
+        [5],
+    ]
+    assert indices == expected
+
+
+def test_group_buildings_merges_transitively_connected_groups():
+    def b(id_: int, load_curve_15min: str, load_curve_hourly: str):
+        @dataclass(frozen=True)
+        class FakeBuilding:
+            id: int = id_
+
+            def file_path(self, file_type):
+                match file_type:
+                    case "load_curve_15min":
+                        return load_curve_15min
+                    case "load_curve_hourly":
+                        return load_curve_hourly
+                    case _:
+                        raise RuntimeError("Unexpected file type")
+
+        return FakeBuilding()
+
+    merged_result = group_buildings(
+        [
+            b(10, "a", "x"),
+            b(11, "b", "y"),
+            b(12, "a", "y"),
+        ],
+        ["load_curve_15min", "load_curve_hourly"],
+    )
+    merged_indices = [[bldg.id for bldg in groups] for groups in merged_result]
+    merged_expected = [
+        [10, 11, 12],
+    ]
+    assert merged_indices == merged_expected

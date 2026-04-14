@@ -15,7 +15,7 @@ from httpx import AsyncClient
 
 from .building_ import Building
 from .constants import LOAD_CURVE_COLUMN_AGGREGATION, OEDI_WEB_URL
-from .shared import DownloadAndProcessProgress, download, estimate_download_size
+from .shared import DownloadAndProcessProgress, download, estimate_download_size, groupby_sorted
 from .types import ReleaseKey
 
 AGGREGATION_RULES_CACHE: dict[ReleaseKey, list[pl.Expr]] = {}
@@ -46,6 +46,7 @@ async def download_and_process_load_curves_batch(
     processing_semaphore = processing_semaphore or asyncio.Semaphore(1)
     if not buildings:
         return []
+
     sample_size = min(len(buildings), 100)
     sample_download_size = await estimate_download_size(
         client,
@@ -214,3 +215,48 @@ def _load_aggregation_rules(release: ReleaseKey) -> list[pl.Expr]:
                 raise ValueError(msg)
     AGGREGATION_RULES_CACHE[release] = result
     return result
+
+
+def group_buildings(buildings: Collection[Building], load_curves: Collection[LoadCurve]) -> list[list[Building]]:  # noqa: C901
+    building_list = list(buildings)
+    if not building_list:
+        return []
+
+    curves = tuple(load_curves)
+    parent = list(range(len(building_list)))
+    rank = [0] * len(building_list)
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root == right_root:
+            return
+        if rank[left_root] < rank[right_root]:
+            parent[left_root] = right_root
+        elif rank[left_root] > rank[right_root]:
+            parent[right_root] = left_root
+        else:
+            parent[right_root] = left_root
+            rank[left_root] += 1
+
+    first_seen_by_path: dict[Path, int] = {}
+    for index, building in enumerate(building_list):
+        for curve in curves:
+            path = building.file_path(curve)
+            if path in first_seen_by_path:
+                union(index, first_seen_by_path[path])
+            else:
+                first_seen_by_path[path] = index
+
+    groups_by_root: dict[int, list[Building]] = {}
+    for index, building in enumerate(building_list):
+        root = find(index)
+        groups_by_root.setdefault(root, []).append(building)
+
+    return list(groups_by_root.values())
