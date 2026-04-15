@@ -3,14 +3,14 @@ from pathlib import Path
 from typing import final, override
 
 import polars as pl
+from xxhash import xxh64
 
 from buildstock_fetch.constants import WEATHER_FILE_DIR
 from buildstock_fetch.releases import RELEASES, BuildstockRelease
 from buildstock_fetch.types import FileType, ReleaseKey, UpgradeID, USStateCode
-from xxhash import xxh64
 
 _weather_map_df: pl.DataFrame | None = None
-_NUM_BUCKETS = 32
+_NUM_BUCKETS = 256
 
 
 @final
