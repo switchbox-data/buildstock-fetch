@@ -113,30 +113,33 @@ async def _download_and_process_load_curves_group(
 
     target_folder.mkdir(parents=True, exist_ok=True)
     temp_root = Path(tempfile.mkdtemp(prefix=".loadcurves-", dir=target_folder))
+    tasks: list[asyncio.Task[list[Path]]] = []
     try:
         tasks = [
-            _download_and_process_load_curves_for_building_logged(
-                temp_root / str(building.id), client, curves, building, progress, semaphore, processing_semaphore
+            asyncio.create_task(
+                _download_and_process_load_curves_for_building_logged(
+                    temp_root / str(building.id), client, curves, building, progress, semaphore, processing_semaphore
+                )
             )
             for building in buildings
         ]
         nested_results = await asyncio.gather(*tasks)
-
-        temp_paths_by_target: dict[Path, list[Path]] = {}
-        result_paths: list[Path] = []
-        for building, temp_paths in zip(buildings, nested_results, strict=True):
-            building_temp_root = temp_root / str(building.id)
-            for temp_path in temp_paths:
-                final_target = target_folder / temp_path.relative_to(building_temp_root)
-                temp_paths_by_target.setdefault(final_target, []).append(temp_path)
-                result_paths.append(final_target)
-
-        finalize_tasks = [
-            _async_finalize_load_curve_output(target_path, source_paths, processing_semaphore)
-            for target_path, source_paths in temp_paths_by_target.items()
-        ]
-        _ = await asyncio.gather(*finalize_tasks)
+        temp_paths_by_target, result_paths = _group_temp_paths_by_target_from_results(
+            target_folder, temp_root, buildings, nested_results
+        )
+        await _finalize_temp_paths_by_target(temp_paths_by_target, processing_semaphore)
         return result_paths
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            _ = await asyncio.gather(*tasks, return_exceptions=True)
+
+        temp_paths_by_target, _ = _group_temp_paths_by_target_from_disk(target_folder, temp_root)
+        if temp_paths_by_target:
+            await asyncio.shield(_finalize_temp_paths_by_target(temp_paths_by_target, processing_semaphore))
+        raise
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -241,6 +244,50 @@ async def _async_finalize_load_curve_output(
 ) -> None:
     async with semaphore:
         await asyncio.to_thread(_finalize_load_curve_output, target_path, source_paths)
+
+
+async def _finalize_temp_paths_by_target(
+    temp_paths_by_target: dict[Path, list[Path]],
+    processing_semaphore: asyncio.Semaphore,
+) -> None:
+    finalize_tasks = [
+        _async_finalize_load_curve_output(target_path, source_paths, processing_semaphore)
+        for target_path, source_paths in temp_paths_by_target.items()
+    ]
+    _ = await asyncio.gather(*finalize_tasks)
+
+
+def _group_temp_paths_by_target_from_results(
+    target_folder: Path,
+    temp_root: Path,
+    buildings: Sequence[Building],
+    nested_results: Sequence[Sequence[Path]],
+) -> tuple[dict[Path, list[Path]], list[Path]]:
+    temp_paths_by_target: dict[Path, list[Path]] = {}
+    result_paths: list[Path] = []
+    for building, temp_paths in zip(buildings, nested_results, strict=True):
+        building_temp_root = temp_root / str(building.id)
+        for temp_path in temp_paths:
+            final_target = target_folder / temp_path.relative_to(building_temp_root)
+            temp_paths_by_target.setdefault(final_target, []).append(temp_path)
+            result_paths.append(final_target)
+    return temp_paths_by_target, result_paths
+
+
+def _group_temp_paths_by_target_from_disk(
+    target_folder: Path,
+    temp_root: Path,
+) -> tuple[dict[Path, list[Path]], list[Path]]:
+    temp_paths_by_target: dict[Path, list[Path]] = {}
+    result_paths: list[Path] = []
+    for temp_path in sorted(temp_root.rglob("*.parquet")):
+        relative_path = temp_path.relative_to(temp_root)
+        if len(relative_path.parts) < 2:
+            continue
+        final_target = target_folder.joinpath(*relative_path.parts[1:])
+        temp_paths_by_target.setdefault(final_target, []).append(temp_path)
+        result_paths.append(final_target)
+    return temp_paths_by_target, result_paths
 
 
 def _finalize_load_curve_output(target_path: Path, source_paths: Sequence[Path]) -> None:

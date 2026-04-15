@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -323,6 +324,84 @@ async def test_download_and_process_load_curves_batch_merges_contents_when_two_b
 
     actual_df = pl.read_parquet(shared_target).sort(["timestamp", "example_label"])
     expected_df = expected_df.cast(actual_df.schema)
+    assert_frame_equal(actual_df, expected_df)
+
+
+@pytest.mark.asyncio
+async def test_download_and_process_load_curves_group_finalizes_completed_temp_outputs_when_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    building_a = _make_building(bldg_id=1234567)
+    building_b = _make_building(bldg_id=2345678)
+    expected_a = pl.DataFrame({
+        "timestamp": [
+            datetime(2024, 1, 1, 0, 0, 15),
+            datetime(2024, 1, 1, 0, 15, 15),
+            datetime(2024, 1, 1, 0, 30, 15),
+        ],
+        "example_load_kw": [1.0, 2.0, 3.0],
+        "example_label": ["a", "b", "c"],
+    })
+
+    original_file_path = Building.file_path
+
+    def fake_file_path(self: Building, file_type: FileType) -> Path:
+        if self.id in {building_a.id, building_b.id} and file_type == "load_curve_15min":
+            return Path(self.release) / "load_curve_15min" / "state=NY" / "upgrade=00" / "shared-output.parquet"
+        return original_file_path(self, file_type)
+
+    async def fake_process(
+        target_folder: Path,
+        client: httpx.AsyncClient,
+        curves: list[str],
+        building: Building,
+        progress: object,
+        semaphore: asyncio.Semaphore,
+        processing_semaphore: asyncio.Semaphore,
+    ) -> list[Path]:
+        output_path = target_folder / fake_file_path(building, "load_curve_15min")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if building.id == building_a.id:
+            expected_a.write_parquet(output_path)
+            return [output_path]
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            raise
+        return []
+
+    monkeypatch.setattr(Building, "file_path", fake_file_path)
+    monkeypatch.setattr(
+        "buildstock_fetch.loadcurves._download_and_process_load_curves_for_building_logged",
+        fake_process,
+    )
+
+    async def fake_estimate_download_size(client: httpx.AsyncClient, urls: object) -> float:
+        return 1.0
+
+    monkeypatch.setattr("buildstock_fetch.loadcurves.estimate_download_size", fake_estimate_download_size)
+
+    async with httpx.AsyncClient() as client:
+        group_task = asyncio.create_task(
+            download_and_process_load_curves_batch(
+                tmp_path,
+                client,
+                ["load_curve_15min"],
+                [building_a, building_b],
+                semaphore=None,
+                processing_semaphore=asyncio.Semaphore(1),
+            )
+        )
+        await asyncio.sleep(0.1)
+        group_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await group_task
+
+    shared_target = tmp_path / fake_file_path(building_a, "load_curve_15min")
+    assert shared_target.exists()
+
+    actual_df = pl.read_parquet(shared_target).sort(["timestamp", "example_label"])
+    expected_df = expected_a.sort(["timestamp", "example_label"]).cast(actual_df.schema)
     assert_frame_equal(actual_df, expected_df)
 
 
