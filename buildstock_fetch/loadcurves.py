@@ -20,6 +20,7 @@ from .shared import DownloadAndProcessProgress, download, estimate_download_size
 from .types import ReleaseKey
 
 AGGREGATION_RULES_CACHE: dict[ReleaseKey, list[pl.Expr]] = {}
+_FINALIZE_MERGE_CHUNK_SIZE = 128
 
 LoadCurveAggregate = Literal[
     "load_curve_hourly",
@@ -244,11 +245,49 @@ async def _async_finalize_load_curve_output(
 
 def _finalize_load_curve_output(target_path: Path, source_paths: Sequence[Path]) -> None:
     target_path.parent.mkdir(exist_ok=True, parents=True)
-    if len(source_paths) == 1:
-        _ = shutil.move(source_paths[0], target_path)
+    merge_inputs = list(source_paths)
+    if target_path.exists():
+        merge_inputs.insert(0, target_path)
+
+    if len(merge_inputs) == 1:
+        only_path = merge_inputs[0]
+        if only_path != target_path:
+            _ = shutil.move(only_path, target_path)
         return
 
-    pl.scan_parquet([str(path) for path in source_paths]).sink_parquet(target_path)
+    temp_dir = Path(tempfile.mkdtemp(prefix=f".merge-{target_path.stem}-", dir=target_path.parent))
+    try:
+        merged_path = _merge_parquet_files_chunked(merge_inputs, temp_dir)
+        tmp_target = target_path.with_suffix(".tmp.parquet")
+        if tmp_target.exists():
+            tmp_target.unlink()
+        _ = shutil.move(merged_path, tmp_target)
+        _ = tmp_target.replace(target_path)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _merge_parquet_files_chunked(paths: Sequence[Path], temp_dir: Path) -> Path:
+    if not paths:
+        msg = "Cannot merge an empty parquet path list"
+        raise ValueError(msg)
+
+    current_paths = list(paths)
+    round_idx = 0
+
+    # Reduce large fan-in merges into smaller staged merges to keep finalization
+    # bounded when many buildings map into the same bucket file.
+    while len(current_paths) > 1:
+        next_paths: list[Path] = []
+        for chunk_idx, start in enumerate(range(0, len(current_paths), _FINALIZE_MERGE_CHUNK_SIZE)):
+            chunk_paths = current_paths[start : start + _FINALIZE_MERGE_CHUNK_SIZE]
+            chunk_output = temp_dir / f"merge-r{round_idx:02d}-{chunk_idx:04d}.parquet"
+            pl.scan_parquet([str(path) for path in chunk_paths]).sink_parquet(chunk_output)
+            next_paths.append(chunk_output)
+        current_paths = next_paths
+        round_idx += 1
+
+    return current_paths[0]
 
 
 def _load_aggregation_rules(release: ReleaseKey) -> list[pl.Expr]:
