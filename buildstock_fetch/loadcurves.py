@@ -4,6 +4,7 @@ import random
 import shutil
 import tempfile
 from collections.abc import Collection, Sequence
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Literal, cast
@@ -11,6 +12,7 @@ from urllib.parse import urljoin
 
 import httpx
 import polars as pl
+import pyarrow.parquet as pq
 import tenacity
 from httpx import AsyncClient
 
@@ -34,6 +36,17 @@ _TIME_BUCKET = {
     "load_curve_daily": "1d",
     "load_curve_monthly": "1mo",
 }
+
+
+@dataclass
+class _TargetAccumulator:
+    target_path: Path
+    temp_path: Path
+    expected_buildings: int
+    completed_buildings: int = 0
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    writer: pq.ParquetWriter | None = None
+    published: bool = False
 
 
 async def download_and_process_load_curves_batch(
@@ -78,7 +91,7 @@ sem = asyncio.Semaphore(50)
 
 
 async def _download_and_process_load_curves_for_building_logged(
-    target_folder: Path,
+    accumulators: dict[Path, _TargetAccumulator],
     client: AsyncClient,
     curves: Collection[LoadCurve],
     building: Building,
@@ -88,7 +101,7 @@ async def _download_and_process_load_curves_for_building_logged(
 ) -> list[Path]:
     try:
         result = await _download_and_process_load_curves_for_building(
-            target_folder, client, curves, building, progress, semaphore, processing_semaphore
+            accumulators, client, curves, building, progress, semaphore, processing_semaphore
         )
     except Exception as e:
         logging.getLogger(__name__).error("Error while processing building %s: %s", building, e)  # noqa: TRY400
@@ -106,28 +119,22 @@ async def _download_and_process_load_curves_group(
     semaphore: asyncio.Semaphore,
     processing_semaphore: asyncio.Semaphore,
 ) -> list[Path]:
-    if len(buildings) <= 1:
-        return await _download_and_process_load_curves_for_building_logged(
-            target_folder, client, curves, buildings[0], progress, semaphore, processing_semaphore
-        )
-
     target_folder.mkdir(parents=True, exist_ok=True)
     temp_root = Path(tempfile.mkdtemp(prefix=".loadcurves-", dir=target_folder))
+    accumulators = _build_target_accumulators(target_folder, temp_root, buildings, curves)
     tasks: list[asyncio.Task[list[Path]]] = []
     try:
         tasks = [
             asyncio.create_task(
                 _download_and_process_load_curves_for_building_logged(
-                    temp_root / str(building.id), client, curves, building, progress, semaphore, processing_semaphore
+                    accumulators, client, curves, building, progress, semaphore, processing_semaphore
                 )
             )
             for building in buildings
         ]
         nested_results = await asyncio.gather(*tasks)
-        temp_paths_by_target, result_paths = _group_temp_paths_by_target_from_results(
-            target_folder, temp_root, buildings, nested_results
-        )
-        await _finalize_temp_paths_by_target(temp_paths_by_target, processing_semaphore)
+        await _publish_pending_accumulators(accumulators, processing_semaphore)
+        result_paths = [path for nested in nested_results for path in nested]
         return result_paths
     except BaseException:
         for task in tasks:
@@ -135,10 +142,7 @@ async def _download_and_process_load_curves_group(
                 task.cancel()
         if tasks:
             _ = await asyncio.gather(*tasks, return_exceptions=True)
-
-        temp_paths_by_target, _ = _group_temp_paths_by_target_from_disk(target_folder, temp_root)
-        if temp_paths_by_target:
-            await asyncio.shield(_finalize_temp_paths_by_target(temp_paths_by_target, processing_semaphore))
+        await asyncio.shield(_publish_pending_accumulators(accumulators, processing_semaphore))
         raise
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
@@ -151,7 +155,7 @@ async def _download_and_process_load_curves_group(
     after=lambda e: logging.getLogger(__name__).info("Retrying %s", e),
 )
 async def _download_and_process_load_curves_for_building(
-    target_folder: Path,
+    accumulators: dict[Path, _TargetAccumulator],
     client: AsyncClient,
     curves: Collection[LoadCurve],
     building: Building,
@@ -165,7 +169,13 @@ async def _download_and_process_load_curves_for_building(
 
         tasks = [
             asyncio.create_task(
-                _async_process_load_curve_aggregate(target_folder, file_path, aggregate, building, processing_semaphore)
+                _async_process_load_curve_aggregate(
+                    accumulators,
+                    file_path,
+                    aggregate,
+                    building,
+                    processing_semaphore,
+                )
             )
             for aggregate in set(curves)
         ]
@@ -178,24 +188,23 @@ async def _download_and_process_load_curves_for_building(
 
 
 async def _async_process_load_curve_aggregate(
-    target_folder: Path,
+    accumulators: dict[Path, _TargetAccumulator],
     file_path: Path,
     aggregate: LoadCurve,
     building: Building,
     semaphore: asyncio.Semaphore,
 ) -> Path:
     async with semaphore:
-        return await asyncio.to_thread(_process_load_curve_aggregate, target_folder, file_path, aggregate, building)
+        frame = await asyncio.to_thread(_process_load_curve_aggregate, file_path, aggregate, building)
+    accumulator = accumulators[_resolve_target_key(building, aggregate)]
+    return await _append_frame_to_accumulator(accumulator, frame)
 
 
 def _process_load_curve_aggregate(
-    target_folder: Path, file_path: Path, aggregate: LoadCurve, building: Building
-) -> Path:
-    target_path = target_folder / building.file_path(aggregate)
-    target_path.parent.mkdir(exist_ok=True, parents=True)
+    file_path: Path, aggregate: LoadCurve, building: Building
+) -> pl.DataFrame:
     if aggregate == "load_curve_15min":
-        _ = shutil.copy2(file_path, target_path)
-        return target_path
+        return pl.read_parquet(file_path)
     aggregation_rules = _load_aggregation_rules(building.release)
 
     bucket = _TIME_BUCKET[aggregate]
@@ -233,8 +242,7 @@ def _process_load_curve_aggregate(
                 pl.col("timestamp").dt.month().alias("month"),
             ])
 
-    lf.sink_parquet(target_path)
-    return target_path
+    return lf.collect()
 
 
 async def _async_finalize_load_curve_output(
@@ -246,61 +254,97 @@ async def _async_finalize_load_curve_output(
         await asyncio.to_thread(_finalize_load_curve_output, target_path, source_paths)
 
 
-async def _finalize_temp_paths_by_target(
-    temp_paths_by_target: dict[Path, list[Path]],
+async def _publish_pending_accumulators(
+    accumulators: dict[Path, _TargetAccumulator],
     processing_semaphore: asyncio.Semaphore,
 ) -> None:
-    finalize_tasks = [
-        _async_finalize_load_curve_output(target_path, source_paths, processing_semaphore)
-        for target_path, source_paths in temp_paths_by_target.items()
-    ]
+    finalize_tasks = [_async_publish_accumulator(accumulator, processing_semaphore) for accumulator in accumulators.values()]
     _ = await asyncio.gather(*finalize_tasks)
 
 
-def _group_temp_paths_by_target_from_results(
+def _build_target_accumulators(
     target_folder: Path,
     temp_root: Path,
     buildings: Sequence[Building],
-    nested_results: Sequence[Sequence[Path]],
-) -> tuple[dict[Path, list[Path]], list[Path]]:
-    temp_paths_by_target: dict[Path, list[Path]] = {}
-    result_paths: list[Path] = []
-    for building, temp_paths in zip(buildings, nested_results, strict=True):
-        building_temp_root = temp_root / str(building.id)
-        for temp_path in temp_paths:
-            final_target = target_folder / temp_path.relative_to(building_temp_root)
-            temp_paths_by_target.setdefault(final_target, []).append(temp_path)
-            result_paths.append(final_target)
-    return temp_paths_by_target, result_paths
+    curves: Collection[LoadCurve],
+) -> dict[Path, _TargetAccumulator]:
+    accumulators: dict[Path, _TargetAccumulator] = {}
+    for building in buildings:
+        for curve in set(curves):
+            relative_target = building.file_path(curve)
+            accumulator = accumulators.get(relative_target)
+            if accumulator is None:
+                target_path = target_folder / relative_target
+                temp_path = temp_root / target_path.relative_to(target_folder)
+                accumulators[relative_target] = _TargetAccumulator(
+                    target_path=target_path,
+                    temp_path=temp_path,
+                    expected_buildings=1,
+                )
+            else:
+                accumulator.expected_buildings += 1
+    return accumulators
 
 
-def _group_temp_paths_by_target_from_disk(
-    target_folder: Path,
-    temp_root: Path,
-) -> tuple[dict[Path, list[Path]], list[Path]]:
-    temp_paths_by_target: dict[Path, list[Path]] = {}
-    result_paths: list[Path] = []
-    for temp_path in sorted(temp_root.rglob("*.parquet")):
-        relative_path = temp_path.relative_to(temp_root)
-        if len(relative_path.parts) < 2:
-            continue
-        final_target = target_folder.joinpath(*relative_path.parts[1:])
-        temp_paths_by_target.setdefault(final_target, []).append(temp_path)
-        result_paths.append(final_target)
-    return temp_paths_by_target, result_paths
+def _resolve_target_key(
+    building: Building,
+    aggregate: LoadCurve,
+) -> Path:
+    return building.file_path(aggregate)
+
+
+async def _append_frame_to_accumulator(accumulator: _TargetAccumulator, frame: pl.DataFrame) -> Path:
+    async with accumulator.lock:
+        await asyncio.to_thread(_append_frame_to_temp_output, accumulator, frame)
+        accumulator.completed_buildings += 1
+        if accumulator.completed_buildings == accumulator.expected_buildings:
+            await asyncio.to_thread(_publish_accumulator_sync, accumulator)
+        return accumulator.target_path
+
+
+def _append_frame_to_temp_output(accumulator: _TargetAccumulator, frame: pl.DataFrame) -> None:
+    if frame.is_empty():
+        return
+    accumulator.temp_path.parent.mkdir(exist_ok=True, parents=True)
+    table = frame.to_arrow()
+    if accumulator.writer is None:
+        accumulator.writer = pq.ParquetWriter(accumulator.temp_path, table.schema)
+    accumulator.writer.write_table(table)
+
+
+async def _async_publish_accumulator(
+    accumulator: _TargetAccumulator,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    async with accumulator.lock, semaphore:
+        await asyncio.to_thread(_publish_accumulator_sync, accumulator)
+
+
+def _publish_accumulator_sync(accumulator: _TargetAccumulator) -> None:
+    if accumulator.published:
+        return
+    if accumulator.writer is not None:
+        accumulator.writer.close()
+        accumulator.writer = None
+    if not accumulator.temp_path.exists():
+        accumulator.published = True
+        return
+    _finalize_load_curve_output(accumulator.target_path, [accumulator.temp_path])
+    accumulator.published = True
 
 
 def _finalize_load_curve_output(target_path: Path, source_paths: Sequence[Path]) -> None:
     target_path.parent.mkdir(exist_ok=True, parents=True)
     merge_inputs = list(source_paths)
-    if target_path.exists():
-        merge_inputs.insert(0, target_path)
 
-    if len(merge_inputs) == 1:
+    if len(merge_inputs) == 1 and not target_path.exists():
         only_path = merge_inputs[0]
         if only_path != target_path:
-            _ = shutil.move(only_path, target_path)
+            _ = Path(only_path).replace(target_path)
         return
+
+    if target_path.exists():
+        merge_inputs.insert(0, target_path)
 
     temp_dir = Path(tempfile.mkdtemp(prefix=f".merge-{target_path.stem}-", dir=target_path.parent))
     try:
@@ -329,12 +373,20 @@ def _merge_parquet_files_chunked(paths: Sequence[Path], temp_dir: Path) -> Path:
         for chunk_idx, start in enumerate(range(0, len(current_paths), _FINALIZE_MERGE_CHUNK_SIZE)):
             chunk_paths = current_paths[start : start + _FINALIZE_MERGE_CHUNK_SIZE]
             chunk_output = temp_dir / f"merge-r{round_idx:02d}-{chunk_idx:04d}.parquet"
-            pl.scan_parquet([str(path) for path in chunk_paths]).sink_parquet(chunk_output)
+            _dedupe_lazyframe(pl.scan_parquet([str(path) for path in chunk_paths])).sink_parquet(chunk_output)
             next_paths.append(chunk_output)
         current_paths = next_paths
         round_idx += 1
 
     return current_paths[0]
+
+
+def _dedupe_lazyframe(lf: pl.LazyFrame) -> pl.LazyFrame:
+    schema = lf.collect_schema()
+    dedupe_subset = [column for column in ("bldg_id", "timestamp") if column in schema]
+    if dedupe_subset:
+        return lf.unique(subset=dedupe_subset, keep="first")
+    return lf.unique(keep="first")
 
 
 def _load_aggregation_rules(release: ReleaseKey) -> list[pl.Expr]:

@@ -2,7 +2,9 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 import httpx
+import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import pytest
 
 from buildstock_fetch import building_ as building_module
@@ -89,6 +91,24 @@ def test_15min_load_curve_path_uses_bucketed_filename(release: ReleaseKey):
     assert path.parts[-3] == f"state={building.state}"
     assert path.parts[-2] == f"upgrade={int(building.upgrade):02d}"
     assert path.name == expected_filename
+
+
+@pytest.mark.network
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "release",
+    sorted(release.key for release in RELEASES if "load_curve_15min" in release.file_types),
+)
+def test_15min_load_curve_remote_schema_includes_bldg_id_for_all_releases(release: ReleaseKey):
+    building = _sample_building(release)
+    url = urljoin(OEDI_WEB_URL, building.load_curve_15min_path)
+
+    with httpx.Client(timeout=60, follow_redirects=True) as client:
+        response = client.get(url)
+        response.raise_for_status()
+
+    schema = pq.read_schema(pa.BufferReader(response.content))
+    assert "bldg_id" in schema.names, f"{release} 15min parquet is missing bldg_id"
 
 
 @pytest.mark.parametrize(
