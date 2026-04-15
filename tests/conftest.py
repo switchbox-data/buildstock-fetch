@@ -5,8 +5,35 @@ from tempfile import TemporaryDirectory
 
 import polars as pl
 import pytest
+from pytest_recording import _vcr as pytest_recording_vcr
 
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
+
+
+def _patch_empty_vcr_cassette_loading() -> None:
+    """Treat zero-byte cassette files as empty recordings.
+
+    Some committed integration cassettes are intentionally empty because the
+    exercised code path produced no recordable HTTP interactions. Recent
+    pytest-recording/VCR combinations deserialize an empty file to ``None`` and
+    then crash while indexing ``data["interactions"]``.
+    """
+
+    original_load_cassette = pytest_recording_vcr.load_cassette
+
+    def load_cassette(cassette_path: str, serializer: object) -> tuple[list[object], list[object]]:
+        try:
+            with open(cassette_path, encoding="utf8") as cassette_file:
+                if not cassette_file.read().strip():
+                    return [], []
+        except OSError:
+            return [], []
+        return original_load_cassette(cassette_path, serializer)
+
+    pytest_recording_vcr.load_cassette = load_cassette
+
+
+# _patch_empty_vcr_cassette_loading()
 
 
 @pytest.fixture(scope="session")
@@ -62,7 +89,8 @@ def integration_test_data():
         if not parquet_files:
             return []
         return (
-            pl.scan_parquet([str(path) for path in parquet_files])
+            pl
+            .scan_parquet([str(path) for path in parquet_files])
             .select("bldg_id")
             .unique()
             .sort("bldg_id")

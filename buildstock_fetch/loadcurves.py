@@ -2,6 +2,7 @@ import asyncio
 import logging
 import random
 import shutil
+import tempfile
 from collections.abc import Collection, Sequence
 from datetime import timedelta
 from pathlib import Path
@@ -15,7 +16,7 @@ from httpx import AsyncClient
 
 from .building_ import Building
 from .constants import LOAD_CURVE_COLUMN_AGGREGATION, OEDI_WEB_URL
-from .shared import DownloadAndProcessProgress, download, estimate_download_size, groupby_sorted
+from .shared import DownloadAndProcessProgress, download, estimate_download_size
 from .types import ReleaseKey
 
 AGGREGATION_RULES_CACHE: dict[ReleaseKey, list[pl.Expr]] = {}
@@ -62,10 +63,10 @@ async def download_and_process_load_curves_batch(
 
     with progress.live():
         tasks = [
-            _download_and_process_load_curves_for_building_logged(
-                target_folder, client, curves, building, progress, semaphore, processing_semaphore
+            _download_and_process_load_curves_group(
+                target_folder, client, curves, group, progress, semaphore, processing_semaphore
             )
-            for building in buildings
+            for group in group_buildings(buildings, curves)
         ]
         result = [path for nested in await asyncio.gather(*tasks) for path in nested]
 
@@ -93,6 +94,50 @@ async def _download_and_process_load_curves_for_building_logged(
         return []
     else:
         return result
+
+
+async def _download_and_process_load_curves_group(
+    target_folder: Path,
+    client: AsyncClient,
+    curves: Collection[LoadCurve],
+    buildings: Sequence[Building],
+    progress: DownloadAndProcessProgress,
+    semaphore: asyncio.Semaphore,
+    processing_semaphore: asyncio.Semaphore,
+) -> list[Path]:
+    if len(buildings) <= 1:
+        return await _download_and_process_load_curves_for_building_logged(
+            target_folder, client, curves, buildings[0], progress, semaphore, processing_semaphore
+        )
+
+    target_folder.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(tempfile.mkdtemp(prefix=".loadcurves-", dir=target_folder))
+    try:
+        tasks = [
+            _download_and_process_load_curves_for_building_logged(
+                temp_root / str(building.id), client, curves, building, progress, semaphore, processing_semaphore
+            )
+            for building in buildings
+        ]
+        nested_results = await asyncio.gather(*tasks)
+
+        temp_paths_by_target: dict[Path, list[Path]] = {}
+        result_paths: list[Path] = []
+        for building, temp_paths in zip(buildings, nested_results, strict=True):
+            building_temp_root = temp_root / str(building.id)
+            for temp_path in temp_paths:
+                final_target = target_folder / temp_path.relative_to(building_temp_root)
+                temp_paths_by_target.setdefault(final_target, []).append(temp_path)
+                result_paths.append(final_target)
+
+        finalize_tasks = [
+            _async_finalize_load_curve_output(target_path, source_paths, processing_semaphore)
+            for target_path, source_paths in temp_paths_by_target.items()
+        ]
+        _ = await asyncio.gather(*finalize_tasks)
+        return result_paths
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
 
 
 @tenacity.retry(
@@ -186,6 +231,24 @@ def _process_load_curve_aggregate(
 
     lf.sink_parquet(target_path)
     return target_path
+
+
+async def _async_finalize_load_curve_output(
+    target_path: Path,
+    source_paths: Sequence[Path],
+    semaphore: asyncio.Semaphore,
+) -> None:
+    async with semaphore:
+        await asyncio.to_thread(_finalize_load_curve_output, target_path, source_paths)
+
+
+def _finalize_load_curve_output(target_path: Path, source_paths: Sequence[Path]) -> None:
+    target_path.parent.mkdir(exist_ok=True, parents=True)
+    if len(source_paths) == 1:
+        _ = shutil.move(source_paths[0], target_path)
+        return
+
+    pl.scan_parquet([str(path) for path in source_paths]).sink_parquet(target_path)
 
 
 def _load_aggregation_rules(release: ReleaseKey) -> list[pl.Expr]:

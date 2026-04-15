@@ -181,10 +181,10 @@ ignore = [
 "tests/*" = ["S101", "TRY003"]
 "tests/**/*.py" = ["S101", "TRY003"]
 "tests/test_release.py" = [
-  "S603",   # subprocess call: check for execution of untrusted input
-  "S607",   # Starting a process with a partial executable path
-  "F401",   # imported but unused
-  "B904",   # Within an `except` clause, raise exceptions with `raise ... from err`
+  "S603", # subprocess call: check for execution of untrusted input
+  "S607", # Starting a process with a partial executable path
+  "F401", # imported but unused
+  "B904", # Within an `except` clause, raise exceptions with `raise ... from err`
 ]
 
 [tool.ruff.format]
@@ -206,6 +206,7 @@ extraPaths = ["."]
 [[tool.pyright.executionEnvironments]]
 root = "tests"
 extraPaths = ["."]
+reportAny = "none"
 reportUnusedCallResult = "none"
 reportUnusedCoroutine = "none"
 reportUnknownArgumentType = "none"
