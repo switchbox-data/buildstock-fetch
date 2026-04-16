@@ -1,16 +1,20 @@
+import bisect
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import final, override
 
 import polars as pl
-from xxhash import xxh64
 
-from buildstock_fetch.constants import WEATHER_FILE_DIR
+from buildstock_fetch.constants import BUCKET_BOUNDARIES_FILE, WEATHER_FILE_DIR
 from buildstock_fetch.releases import RELEASES, BuildstockRelease
 from buildstock_fetch.types import FileType, ReleaseKey, UpgradeID, USStateCode
 
 _weather_map_df: pl.DataFrame | None = None
 _NUM_BUCKETS = 256
+# Derived from combined metadata. Regenerate `data/bucket_boundaries.json`
+# whenever the packaged metadata changes.
+_bucket_boundaries_by_release: dict[ReleaseKey, tuple[int, ...]] | None = None
 
 
 @final
@@ -56,6 +60,24 @@ class CountyUnavailableError(ValueError):
     @override
     def __str__(self) -> str:
         return f"County name is required for an operation but is not available for {self.building}"
+
+
+def _load_bucket_boundaries() -> dict[ReleaseKey, tuple[int, ...]]:
+    # This file is a compiled index derived from metadata, not source-of-truth data.
+    # If metadata changes without regenerating boundaries, bucket assignments can drift.
+    raw_boundaries = json.loads(Path(BUCKET_BOUNDARIES_FILE).read_text())  # pyright: ignore[reportAny]
+    return {str(release): tuple(int(boundary) for boundary in boundaries) for release, boundaries in raw_boundaries.items()}
+
+
+def get_bucket_boundaries(release: ReleaseKey) -> tuple[int, ...]:
+    global _bucket_boundaries_by_release
+    if _bucket_boundaries_by_release is None:
+        _bucket_boundaries_by_release = _load_bucket_boundaries()
+    try:
+        return _bucket_boundaries_by_release[release]
+    except KeyError as exc:
+        msg = f"Missing bucket boundaries for release {release}"
+        raise KeyError(msg) from exc
 
 
 @dataclass(frozen=True)
@@ -255,7 +277,8 @@ class Building:
 
     @property
     def bucket(self) -> int:
-        return xxh64(str(self.id)).intdigest() % _NUM_BUCKETS
+        boundaries = get_bucket_boundaries(self.release)
+        return min(bisect.bisect_left(boundaries, self.id), len(boundaries) - 1)
 
     def file_path(self, file_type: FileType) -> Path:
         url: str

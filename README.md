@@ -128,6 +128,14 @@ To run the tests:
 just test
 ```
 
+### Regenerating bucket boundaries
+
+`buildstock_fetch/data/bucket_boundaries.json` is derived from the packaged combined metadata and is loaded once at startup for fast bucket lookup. If the combined metadata changes, regenerate the boundary file before shipping or testing the package:
+
+```bash
+.venv/bin/python utils/build_bucket_boundaries.py
+```
+
 ### Rendering docs
 
 We use `mkdocs` and [mkdocs-material](https://squidfunk.github.io/mkdocs-material/) for writing and rendering docs. The docs are written in markdown and live in [docs/](docs/).

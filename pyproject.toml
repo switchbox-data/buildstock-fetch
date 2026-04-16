@@ -97,6 +97,7 @@ include = ["buildstock_fetch", "buildstock_fetch.*"]
 [tool.setuptools.package-data]
 "buildstock_fetch" = [
   "data/buildstock_releases.json",
+  "data/bucket_boundaries.json",
   "data/building_data/**/*",
   "data/**/*.parquet",
   "data/load_curve_column_map/*.csv",
