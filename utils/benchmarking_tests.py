@@ -21,6 +21,7 @@ class BenchmarkCase:
     upgrade_mode: str
     building_ids: tuple[int, ...] | None
     result_mode: str
+    aggregate_mode: str
     notes: str
 
 
@@ -31,6 +32,7 @@ class CaseResult:
     file_type: str
     upgrade_mode: str
     result_mode: str
+    aggregate_mode: str
     building_count_filter: int | None
     rows: int
     columns: int
@@ -145,7 +147,17 @@ def build_cases(
             upgrade_mode=upgrade,
             building_ids=None,
             result_mode="aggregate",
-            notes="Primary success metric for state-wide hourly reads.",
+            aggregate_mode="scan_sum",
+            notes="Primary state-wide hourly scan benchmark using row count and one metric sum.",
+        ),
+        BenchmarkCase(
+            name="hourly_full_state_single_upgrade_n_unique",
+            file_type="load_curve_hourly",
+            upgrade_mode=upgrade,
+            building_ids=None,
+            result_mode="aggregate",
+            aggregate_mode="n_unique",
+            notes="State-wide hourly distinct-building benchmark.",
         ),
         BenchmarkCase(
             name="monthly_full_state_single_upgrade",
@@ -153,6 +165,7 @@ def build_cases(
             upgrade_mode=upgrade,
             building_ids=None,
             result_mode="aggregate",
+            aggregate_mode="scan_sum",
             notes="Checks the smaller monthly cadence against the same layout.",
         ),
         BenchmarkCase(
@@ -161,6 +174,7 @@ def build_cases(
             upgrade_mode="all",
             building_ids=None,
             result_mode="aggregate",
+            aggregate_mode="scan_sum",
             notes="Exercises partition pruning when all upgrade partitions are included.",
         ),
         BenchmarkCase(
@@ -169,6 +183,7 @@ def build_cases(
             upgrade_mode=upgrade,
             building_ids=(first_id,),
             result_mode="aggregate",
+            aggregate_mode="scan_sum",
             notes="Worst-case targeted lookup after moving away from one file per building, without materializing rows.",
         ),
         BenchmarkCase(
@@ -177,6 +192,7 @@ def build_cases(
             upgrade_mode=upgrade,
             building_ids=pick_same_bucket_ids(bucket_to_ids, 10),
             result_mode="aggregate",
+            aggregate_mode="scan_sum",
             notes="Small targeted read concentrated within one bucket/chunk, without materializing rows.",
         ),
         BenchmarkCase(
@@ -185,6 +201,7 @@ def build_cases(
             upgrade_mode=upgrade,
             building_ids=pick_spread_bucket_ids(bucket_to_ids, 10, seed),
             result_mode="aggregate",
+            aggregate_mode="scan_sum",
             notes="Small targeted read spread across many buckets/chunks, without materializing rows.",
         ),
         BenchmarkCase(
@@ -193,6 +210,7 @@ def build_cases(
             upgrade_mode=upgrade,
             building_ids=pick_spread_bucket_ids(bucket_to_ids, min(100, len(building_ids)), seed + 1),
             result_mode="aggregate",
+            aggregate_mode="scan_sum",
             notes="Medium subset read spread across the state without materializing all rows.",
         ),
         BenchmarkCase(
@@ -201,6 +219,7 @@ def build_cases(
             upgrade_mode=upgrade,
             building_ids=pick_spread_bucket_ids(bucket_to_ids, min(1000, len(building_ids)), seed + 2),
             result_mode="aggregate",
+            aggregate_mode="scan_sum",
             notes="Large subset read to locate the crossover with full-state reads without exhausting RAM.",
         ),
     ]
@@ -230,26 +249,31 @@ def collect_streaming(lf: pl.LazyFrame) -> pl.DataFrame:
     return lf.collect(engine="streaming")
 
 
-def aggregate_summary(lf: pl.LazyFrame) -> tuple[pl.DataFrame, str | None]:
+def aggregate_summary(lf: pl.LazyFrame, aggregate_mode: str) -> tuple[pl.DataFrame, str | None]:
     schema = lf.collect_schema()
     metric_column = choose_metric_column(lf)
-    needed_columns = [column for column in ("bldg_id", "timestamp") if column in schema]
-    if metric_column is not None:
-        needed_columns.append(metric_column)
+    needed_columns: list[str] = []
+    if "bldg_id" in schema:
+        needed_columns.append("bldg_id")
+    if aggregate_mode == "scan_sum":
+        if "timestamp" in schema:
+            needed_columns.append("timestamp")
+        if metric_column is not None:
+            needed_columns.append(metric_column)
     if needed_columns:
         lf = lf.select(needed_columns)
 
     expressions: list[pl.Expr] = [pl.len().alias("rows")]
-    if "bldg_id" in schema:
+    if aggregate_mode == "n_unique" and "bldg_id" in schema:
         expressions.append(pl.col("bldg_id").n_unique().alias("unique_bldgs"))
-    if "timestamp" in schema:
+    if aggregate_mode == "scan_sum" and "timestamp" in schema:
         expressions.extend(
             [
                 pl.col("timestamp").min().cast(pl.String).alias("min_ts"),
                 pl.col("timestamp").max().cast(pl.String).alias("max_ts"),
             ]
         )
-    if metric_column is not None:
+    if aggregate_mode == "scan_sum" and metric_column is not None:
         expressions.append(pl.col(metric_column).sum().alias("metric_sum"))
     return collect_streaming(lf.select(expressions)), metric_column
 
@@ -298,30 +322,19 @@ def benchmark_case(
     repeats: int,
 ) -> CaseResult:
     timings: list[float] = []
-    final_df: pl.DataFrame | None = None
     aggregate_df: pl.DataFrame | None = None
     metric_column: str | None = None
 
     for _ in range(repeats):
         lf = query_for_case(data_path, release, state, case)
         started_at = time.perf_counter()
-        if case.result_mode == "aggregate":
-            aggregate_df, metric_column = aggregate_summary(lf)
-        else:
-            final_df = collect_streaming(lf)
+        aggregate_df, metric_column = aggregate_summary(lf, case.aggregate_mode)
         timings.append(time.perf_counter() - started_at)
 
-    if case.result_mode == "aggregate":
-        if aggregate_df is None:
-            raise RuntimeError(f"Aggregate benchmark case {case.name} did not produce a summary")
-        rows, unique_buildings, min_timestamp, max_timestamp, metric_sum = summarize_aggregate_result(aggregate_df)
-        columns = 0
-    else:
-        if final_df is None:
-            raise RuntimeError(f"Collect benchmark case {case.name} did not produce a frame")
-        rows = final_df.height
-        columns = final_df.width
-        unique_buildings, min_timestamp, max_timestamp, metric_column, metric_sum = summarize_frame(final_df)
+    if aggregate_df is None:
+        raise RuntimeError(f"Aggregate benchmark case {case.name} did not produce a summary")
+    rows, unique_buildings, min_timestamp, max_timestamp, metric_sum = summarize_aggregate_result(aggregate_df)
+    columns = 0
 
     stdev_seconds = statistics.stdev(timings) if len(timings) > 1 else 0.0
 
@@ -331,6 +344,7 @@ def benchmark_case(
         file_type=case.file_type,
         upgrade_mode=case.upgrade_mode,
         result_mode=case.result_mode,
+        aggregate_mode=case.aggregate_mode,
         building_count_filter=None if case.building_ids is None else len(case.building_ids),
         rows=rows,
         columns=columns,
@@ -366,6 +380,7 @@ def print_results(results: Sequence[CaseResult]) -> None:
             "file_type": [result.file_type for result in results],
             "upgrade": [result.upgrade_mode for result in results],
             "result_mode": [result.result_mode for result in results],
+            "agg_mode": [result.aggregate_mode for result in results],
             "bldg_filter_n": [result.building_count_filter for result in results],
             "rows": [result.rows for result in results],
             "cols": [result.columns for result in results],
@@ -397,7 +412,7 @@ def print_case_result(result: CaseResult) -> None:
     metric_sum = "n/a" if result.metric_sum is None else round(result.metric_sum, 3)
     print(
         f"completed case={result.case_name} data_path={result.data_path} "
-        f"mode={result.result_mode} rows={result.rows} unique_bldgs={result.unique_buildings} "
+        f"mode={result.result_mode}/{result.aggregate_mode} rows={result.rows} unique_bldgs={result.unique_buildings} "
         f"first_s={result.first_seconds:.3f} median_s={result.median_seconds:.3f} metric_sum={metric_sum}"
     )
 
