@@ -168,24 +168,24 @@ def build_cases(
             file_type="load_curve_hourly",
             upgrade_mode=upgrade,
             building_ids=(first_id,),
-            result_mode="collect",
-            notes="Worst-case targeted lookup after moving away from one file per building.",
+            result_mode="aggregate",
+            notes="Worst-case targeted lookup after moving away from one file per building, without materializing rows.",
         ),
         BenchmarkCase(
             name="hourly_ten_buildings_same_bucket",
             file_type="load_curve_hourly",
             upgrade_mode=upgrade,
             building_ids=pick_same_bucket_ids(bucket_to_ids, 10),
-            result_mode="collect",
-            notes="Small targeted read concentrated within one bucket/chunk.",
+            result_mode="aggregate",
+            notes="Small targeted read concentrated within one bucket/chunk, without materializing rows.",
         ),
         BenchmarkCase(
             name="hourly_ten_buildings_spread_buckets",
             file_type="load_curve_hourly",
             upgrade_mode=upgrade,
             building_ids=pick_spread_bucket_ids(bucket_to_ids, 10, seed),
-            result_mode="collect",
-            notes="Small targeted read spread across many buckets/chunks.",
+            result_mode="aggregate",
+            notes="Small targeted read spread across many buckets/chunks, without materializing rows.",
         ),
         BenchmarkCase(
             name="hourly_hundred_buildings_spread_buckets",
@@ -226,9 +226,19 @@ def choose_metric_column(lf: pl.LazyFrame) -> str | None:
     return None
 
 
+def collect_streaming(lf: pl.LazyFrame) -> pl.DataFrame:
+    return lf.collect(engine="streaming")
+
+
 def aggregate_summary(lf: pl.LazyFrame) -> tuple[pl.DataFrame, str | None]:
     schema = lf.collect_schema()
     metric_column = choose_metric_column(lf)
+    needed_columns = [column for column in ("bldg_id", "timestamp") if column in schema]
+    if metric_column is not None:
+        needed_columns.append(metric_column)
+    if needed_columns:
+        lf = lf.select(needed_columns)
+
     expressions: list[pl.Expr] = [pl.len().alias("rows")]
     if "bldg_id" in schema:
         expressions.append(pl.col("bldg_id").n_unique().alias("unique_bldgs"))
@@ -241,7 +251,7 @@ def aggregate_summary(lf: pl.LazyFrame) -> tuple[pl.DataFrame, str | None]:
         )
     if metric_column is not None:
         expressions.append(pl.col(metric_column).sum().alias("metric_sum"))
-    return lf.select(expressions).collect(), metric_column
+    return collect_streaming(lf.select(expressions)), metric_column
 
 
 def summarize_frame(df: pl.DataFrame) -> tuple[int | None, str | None, str | None, str | None, float | None]:
@@ -298,7 +308,7 @@ def benchmark_case(
         if case.result_mode == "aggregate":
             aggregate_df, metric_column = aggregate_summary(lf)
         else:
-            final_df = lf.collect()
+            final_df = collect_streaming(lf)
         timings.append(time.perf_counter() - started_at)
 
     if case.result_mode == "aggregate":
