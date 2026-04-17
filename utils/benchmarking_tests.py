@@ -191,16 +191,16 @@ def build_cases(
             file_type="load_curve_hourly",
             upgrade_mode=upgrade,
             building_ids=pick_spread_bucket_ids(bucket_to_ids, min(100, len(building_ids)), seed + 1),
-            result_mode="collect",
-            notes="Medium subset read spread across the state.",
+            result_mode="aggregate",
+            notes="Medium subset read spread across the state without materializing all rows.",
         ),
         BenchmarkCase(
             name="hourly_thousand_buildings_spread_buckets",
             file_type="load_curve_hourly",
             upgrade_mode=upgrade,
             building_ids=pick_spread_bucket_ids(bucket_to_ids, min(1000, len(building_ids)), seed + 2),
-            result_mode="collect",
-            notes="Large subset read to locate the crossover with full-state reads.",
+            result_mode="aggregate",
+            notes="Large subset read to locate the crossover with full-state reads without exhausting RAM.",
         ),
     ]
 
