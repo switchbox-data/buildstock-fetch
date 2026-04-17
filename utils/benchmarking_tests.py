@@ -9,6 +9,7 @@ from typing import Annotated
 
 import polars as pl
 import typer
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
 from buildstock_fetch.building_ import get_bucket_boundaries
 
@@ -382,6 +383,15 @@ def print_results(results: Sequence[CaseResult]) -> None:
         print(f"  {result.case_name}: {result.notes}")
 
 
+def print_case_result(result: CaseResult) -> None:
+    metric_sum = "n/a" if result.metric_sum is None else round(result.metric_sum, 3)
+    print(
+        f"completed case={result.case_name} data_path={result.data_path} "
+        f"mode={result.result_mode} rows={result.rows} unique_bldgs={result.unique_buildings} "
+        f"first_s={result.first_seconds:.3f} median_s={result.median_seconds:.3f} metric_sum={metric_sum}"
+    )
+
+
 @app.command()
 def main(
     data_path: Annotated[
@@ -412,10 +422,22 @@ def main(
     print_selected_ids(cases)
 
     results: list[CaseResult] = []
-    for one_data_path in data_path:
-        print(f"\nRunning benchmarks for {one_data_path}")
-        for case in cases:
-            results.append(benchmark_case(one_data_path, release, state, case, repeats))
+    total_cases = len(data_path) * len(cases)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+    ) as progress:
+        task_id = progress.add_task("Running benchmark cases", total=total_cases)
+        for one_data_path in data_path:
+            for case in cases:
+                progress.update(task_id, description=f"Running {case.name} on {one_data_path}")
+                result = benchmark_case(one_data_path, release, state, case, repeats)
+                results.append(result)
+                print_case_result(result)
+                progress.advance(task_id)
 
     print_results(results)
 
