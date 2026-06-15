@@ -87,6 +87,12 @@ download-pums:
         https://buildstock-fetch.s3.amazonaws.com/ev_demand/pums/NY_2021_pums_PUMA_HINCP_VEH_NP.csv
     echo "✅ PUMS data downloaded successfully"
 
+# Download Maryland ACS 2021 PUMS from Census (for EV vehicle-ownership model)
+download-pums-md:
+    echo "🚀 Downloading Maryland PUMS from Census ACS 2021 1-year microdata"
+    uv run python utils/ev_data/inputs/download_md_pums.py
+    echo "✅ Maryland PUMS downloaded successfully"
+
 # Save locally (default)
 # just ev-demand NY res_2024_tmy3_2 2018-01-01 2018-01-02
 # Upload to S3 (requires --upload-s3 flag)
