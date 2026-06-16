@@ -12,9 +12,7 @@ from buildstock_fetch.loadcurves import _load_aggregation_rules
 VALID_AGGREGATE_FUNCTIONS = {"sum", "mean", "first"}
 
 ALL_COLUMN_MAP_CSVS = sorted(LOAD_CURVE_COLUMN_AGGREGATION.glob("*.csv"))
-ALL_RELEASE_CSVS = [
-    p for p in ALL_COLUMN_MAP_CSVS if not p.name[0].isdigit()
-]
+ALL_RELEASE_CSVS = [p for p in ALL_COLUMN_MAP_CSVS if not p.name[0].isdigit()]
 
 
 # ---------------------------------------------------------------------------
@@ -222,19 +220,14 @@ def test_aggregate_load_curve_2025_sum_columns_are_summed():
     from buildstock_fetch.main import _aggregate_load_curve_aggregate
 
     csv_path = LOAD_CURVE_COLUMN_AGGREGATION / "2025_resstock_load_curve_columns.csv"
-    csv_cols = pl.read_csv(csv_path)["name"].to_list()
 
     # Use only sum + first columns to keep the DataFrame simple
-    sum_cols = (
-        pl.read_csv(csv_path)
-        .filter(pl.col("Aggregate_function").is_in(["sum", "first"]))["name"]
-        .to_list()
-    )
+    sum_cols = pl.read_csv(csv_path).filter(pl.col("Aggregate_function").is_in(["sum", "first"]))["name"].to_list()
     df = _make_2025_load_curve_df(sum_cols)
 
     result = _aggregate_load_curve_aggregate(df, "hourly", "2025")
 
-    # Each hour has 4 × 15-min rows all with value 1.0 → sum should be 4.0
+    # Each hour has 4 x 15-min rows all with value 1.0 -> sum should be 4.0
     energy_col = next(c for c in result.columns if c.startswith("out.electricity.") and c != "timestamp")
     assert result[energy_col][0] == pytest.approx(4.0)
 
@@ -244,11 +237,7 @@ def test_aggregate_load_curve_2025_mean_columns_are_averaged():
     from buildstock_fetch.main import _aggregate_load_curve_aggregate
 
     csv_path = LOAD_CURVE_COLUMN_AGGREGATION / "2025_resstock_load_curve_columns.csv"
-    mean_cols = (
-        pl.read_csv(csv_path)
-        .filter(pl.col("Aggregate_function").is_in(["mean", "first"]))["name"]
-        .to_list()
-    )
+    mean_cols = pl.read_csv(csv_path).filter(pl.col("Aggregate_function").is_in(["mean", "first"]))["name"].to_list()
     df = _make_2025_load_curve_df(mean_cols)
 
     result = _aggregate_load_curve_aggregate(df, "hourly", "2025")
@@ -289,7 +278,7 @@ def test_amy2018_aggregation_rules_produce_correct_expressions():
 
 
 def test_amy2018_per_release_sum_columns_are_summed():
-    """Sum columns should total across 4 × 15-min rows using the per-release rules."""
+    """Sum columns should total across 4 x 15-min rows using the per-release rules."""
     rules = _load_aggregation_rules("res_2025_amy2018_1")
     df = _make_amy2018_load_curve_df()
 
@@ -298,16 +287,15 @@ def test_amy2018_per_release_sum_columns_are_summed():
     lf = lf.with_columns(pl.col("timestamp").dt.truncate("1h").alias("_bucket"))
     result = lf.group_by("_bucket").agg(rules).collect()
 
-    # All 4 rows fall in the same hour → energy sum should be 4.0
+    # All 4 rows fall in the same hour -> energy sum should be 4.0
     energy_col = next(
-        c for c in result.columns
-        if c.startswith("out.electricity.") and c not in ("_bucket", "timestamp")
+        c for c in result.columns if c.startswith("out.electricity.") and c not in ("_bucket", "timestamp")
     )
     assert result[energy_col][0] == pytest.approx(4.0)
 
 
 def test_amy2018_per_release_mean_columns_are_averaged():
-    """Mean columns should be averaged across 4 × 15-min rows using the per-release rules."""
+    """Mean columns should be averaged across 4 x 15-min rows using the per-release rules."""
     rules = _load_aggregation_rules("res_2025_amy2018_1")
     df = _make_amy2018_load_curve_df()
 
