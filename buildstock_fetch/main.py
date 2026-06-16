@@ -497,7 +497,9 @@ def _aggregate_load_curve_aggregate(
     """Aggregate the 15-minute load curve to specified time step based on aggregation rules."""
     # Read the aggregation rules from CSV
     load_curve_map = None
-    if release_year == "2024":
+    if release_year == "2025":
+        load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2025_resstock_load_curve_columns.csv")
+    elif release_year == "2024":
         load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2024_resstock_load_curve_columns.csv")
     elif release_year == "2022":
         load_curve_map = LOAD_CURVE_COLUMN_AGGREGATION.joinpath("2022_resstock_load_curve_columns.csv")
