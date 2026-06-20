@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal, cast, overload
 
 import numpy as np
 import polars as pl
@@ -115,6 +115,113 @@ class TripSchedule:
     departure_hour: int
     arrival_hour: int
     miles_driven: float
+
+
+MIN_TRIP_DURATION_HOURS = 1  # hourly model: each trip spans at least one away-from-home hour
+
+
+def normalize_day_trip_times(
+    departures: np.ndarray,
+    arrivals: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Enforce arrival > departure per trip and non-overlapping trips within a day.
+
+    Independent random offsets can produce arrival <= departure or overlapping intervals.
+    Trips are repacked in departure order on a single calendar day (no overnight trips).
+    Each trip starts strictly after the previous trip ends (next dep >= prev arr + 1).
+    Returns arrays in the original input order. Trips that no longer fit before hour 23
+    are dropped (keep_mask=False).
+    """
+    n = len(departures)
+    keep = np.ones(n, dtype=bool)
+    if n == 0:
+        return departures.astype(int), arrivals.astype(int), keep
+
+    # Pack in chronological order, then restore the caller's trip index order below.
+    order = np.argsort(departures, kind="stable")
+    dep_sorted = departures[order].astype(int)
+    arr_sorted = arrivals[order].astype(int)
+    keep_sorted = np.ones(n, dtype=bool)
+
+    earliest_next_dep = 0
+    for i in range(n):
+        # No room left today for another trip of minimum duration.
+        if earliest_next_dep > 23 - MIN_TRIP_DURATION_HOURS:
+            keep_sorted[i:] = False
+            break
+
+        # Push forward if this trip overlaps a prior one; enforce arr > dep.
+        dep = min(max(int(dep_sorted[i]), earliest_next_dep), 23 - MIN_TRIP_DURATION_HOURS)
+        arr = min(max(int(arr_sorted[i]), dep + MIN_TRIP_DURATION_HOURS), 23)
+
+        dep_sorted[i] = dep
+        arr_sorted[i] = arr
+        # Inclusive hour model: away through arrival hour, so next dep is at least arr + 1.
+        earliest_next_dep = arr + 1
+
+    # Map packed times back to the original trip-index order for downstream joins.
+    dep_out = np.empty(n, dtype=int)
+    arr_out = np.empty(n, dtype=int)
+    dep_out[order] = dep_sorted
+    arr_out[order] = arr_sorted
+    keep[order] = keep_sorted
+    return dep_out, arr_out, keep
+
+
+def summarize_nhts_match_catalog(catalog: pl.DataFrame) -> pl.DataFrame:
+    """Summarize NHTS household/vehicle matching gaps from sample_vehicle_profiles catalog."""
+    if catalog.is_empty():
+        return pl.DataFrame({"metric": [], "count": [], "share_of_vehicle_slots": []})
+
+    vehicle_slots = catalog.height
+    n_missing_nhts = catalog.filter(~pl.col("nhts_vehicle_matched")).height
+    matched = catalog.filter(pl.col("nhts_vehicle_matched"))
+    n_missing_weekday = matched.filter(~pl.col("has_weekday_trips")).height
+    n_missing_weekend = matched.filter(~pl.col("has_weekend_trips")).height
+    n_missing_both = matched.filter(~pl.col("has_weekday_trips") & ~pl.col("has_weekend_trips")).height
+
+    buildings_with_gaps = (
+        catalog.filter(
+            ~pl.col("nhts_vehicle_matched")
+            | ~pl.col("has_weekday_trips")
+            | ~pl.col("has_weekend_trips")
+        )
+        .select("bldg_id")
+        .unique()
+        .height
+    )
+    buildings_with_vehicles = catalog.select("bldg_id").unique().height
+
+    def share(count: int) -> float:
+        return count / vehicle_slots if vehicle_slots else 0.0
+
+    return pl.DataFrame({
+        "metric": [
+            "vehicle_slots",
+            "missing_nhts_vehicle_match",
+            "missing_weekday_trip_profile",
+            "missing_weekend_trip_profile",
+            "missing_both_trip_profiles",
+            "buildings_with_any_gap",
+        ],
+        "count": [
+            vehicle_slots,
+            n_missing_nhts,
+            n_missing_weekday,
+            n_missing_weekend,
+            n_missing_both,
+            buildings_with_gaps,
+        ],
+        "share_of_vehicle_slots": [
+            1.0,
+            share(n_missing_nhts),
+            share(n_missing_weekday),
+            share(n_missing_weekend),
+            share(n_missing_both),
+            buildings_with_gaps / buildings_with_vehicles if buildings_with_vehicles else 0.0,
+        ],
+    })
 
 
 class EVDemandCalculator:
@@ -422,9 +529,31 @@ class EVDemandCalculator:
         # Fallback: return empty list if no matches found
         return "no_match", []
 
+    @overload
     def sample_vehicle_profiles(
-        self, bldg_veh_df: pl.DataFrame, nhts_df: pl.DataFrame
-    ) -> dict[tuple[str, int], VehicleProfile]:
+        self,
+        bldg_veh_df: pl.DataFrame,
+        nhts_df: pl.DataFrame,
+        *,
+        return_catalog: Literal[False] = False,
+    ) -> dict[tuple[str, int], VehicleProfile]: ...
+
+    @overload
+    def sample_vehicle_profiles(
+        self,
+        bldg_veh_df: pl.DataFrame,
+        nhts_df: pl.DataFrame,
+        *,
+        return_catalog: Literal[True],
+    ) -> tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]: ...
+
+    def sample_vehicle_profiles(
+        self,
+        bldg_veh_df: pl.DataFrame,
+        nhts_df: pl.DataFrame,
+        *,
+        return_catalog: bool = False,
+    ) -> dict[tuple[str, int], VehicleProfile] | tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]:
         """
         For each household and vehicle, select a weekday and weekend trip profiles from NHTS.
 
@@ -433,9 +562,12 @@ class EVDemandCalculator:
         Args:
             bldg_veh_df: DataFrame with household and vehicle info.
             nhts_df: NHTS trip data DataFrame with trip weights
+            return_catalog: If True, also return a per-vehicle-slot match diagnostics DataFrame.
 
         Returns:
-            Dict mapping (bldg_id, vehicle_id) to sampled trip profile parameters
+            Dict mapping (bldg_id, vehicle_id) to sampled trip profile parameters.
+            When return_catalog=True, returns (profiles, catalog) where catalog has one row
+            per predicted vehicle slot with NHTS match and weekday/weekend trip availability.
         """
         df = bldg_veh_df
         if df is None:
@@ -444,7 +576,8 @@ class EVDemandCalculator:
         if nhts_df is None:
             raise NHTSDataError()
 
-        profiles = {}
+        profiles: dict[tuple[str, int], VehicleProfile] = {}
+        catalog_records: list[dict[str, Any]] = []
         total_buildings = len(df)
         processed_buildings = 0
 
@@ -461,7 +594,7 @@ class EVDemandCalculator:
                 continue
 
             # Find best vehicle matches for all cars at this building
-            _match_type, matched_vehicle_ids = self.find_best_matches(
+            match_type, matched_vehicle_ids = self.find_best_matches(
                 target_income=row["income_bucket"],
                 target_occupants=row["occupants"],
                 target_vehicles=num_vehicles,
@@ -469,7 +602,25 @@ class EVDemandCalculator:
             )
 
             # Create profiles for each vehicle
-            for vehicle_id, matched_vehicle_id in enumerate(matched_vehicle_ids, start=1):
+            for vehicle_id in range(1, num_vehicles + 1):
+                if vehicle_id > len(matched_vehicle_ids):
+                    if return_catalog:
+                        catalog_records.append({
+                            "bldg_id": bldg_id,
+                            "vehicle_slot": vehicle_id,
+                            "predicted_vehicles": num_vehicles,
+                            "match_type": match_type,
+                            "nhts_vehicle_matched": False,
+                            "matched_hh_vehicle_id": None,
+                            "has_weekday_trips": False,
+                            "has_weekend_trips": False,
+                            "weekday_trip_count": 0,
+                            "weekend_trip_count": 0,
+                        })
+                    continue
+
+                matched_vehicle_id = matched_vehicle_ids[vehicle_id - 1]
+
                 # Get weekday trips for this vehicle (simple filtering)
                 weekday_data = self.nhts_df.filter(
                     (pl.col("hh_vehicle_id") == matched_vehicle_id) & (pl.col("weekday") == 2)
@@ -510,10 +661,26 @@ class EVDemandCalculator:
                     weekend_trip_ids=weekend_trip_ids,
                 )
 
+                if return_catalog:
+                    catalog_records.append({
+                        "bldg_id": bldg_id,
+                        "vehicle_slot": vehicle_id,
+                        "predicted_vehicles": num_vehicles,
+                        "match_type": match_type,
+                        "nhts_vehicle_matched": True,
+                        "matched_hh_vehicle_id": matched_vehicle_id,
+                        "has_weekday_trips": len(weekday_miles) > 0,
+                        "has_weekend_trips": len(weekend_miles) > 0,
+                        "weekday_trip_count": len(weekday_miles),
+                        "weekend_trip_count": len(weekend_miles),
+                    })
+
             # Log progress for buildings with vehicles
             self._log_progress(processed_buildings, total_buildings, "Building progress")
 
         logging.info(f"Generated {len(profiles)} vehicle profiles from {total_buildings} buildings")
+        if return_catalog:
+            return profiles, pl.DataFrame(catalog_records)
         return profiles
 
     def generate_daily_schedules(
@@ -620,13 +787,24 @@ class EVDemandCalculator:
             departures_with_variance = np.clip(selected_departures + departure_offsets, 0, 23)
             arrivals_with_variance = np.clip(selected_arrivals + arrival_offsets, 0, 23)
 
+            # Offsets are drawn independently per trip, so fix invalid intervals and
+            # overlaps before writing the day's schedule (may drop trips that spill past 23:00).
+            departures_with_variance, arrivals_with_variance, keep_trip = normalize_day_trip_times(
+                departures_with_variance,
+                arrivals_with_variance,
+            )
+            miles_variance = miles_variance[keep_trip]
+            num_trips = int(keep_trip.sum())
+            if num_trips == 0:
+                continue  # e.g. weekday template missing or every trip dropped after packing
+
             # Batch append to lists
             bldg_ids.extend([profile.bldg_id] * num_trips)
             vehicle_ids.extend([profile.vehicle_id] * num_trips)
             dates.extend([current_date] * num_trips)
-            departure_hours.extend(departures_with_variance.astype(int))
-            arrival_hours.extend(arrivals_with_variance.astype(int))
-            miles_driven.extend(miles_variance)
+            departure_hours.extend(departures_with_variance[keep_trip].tolist())
+            arrival_hours.extend(arrivals_with_variance[keep_trip].tolist())
+            miles_driven.extend(miles_variance.tolist())
 
         # Create DataFrame directly from lists (vectorized approach)
         schedule_data = {
@@ -722,7 +900,10 @@ class EVDemandCalculator:
         bldg_veh_df = self.predict_num_vehicles()
         # Get all vehicle profiles
         logging.info("Assigning vehicle profiles")
-        vehicle_profiles = self.sample_vehicle_profiles(bldg_veh_df, self.nhts_df)
+        vehicle_profiles = cast(
+            dict[tuple[str, int], VehicleProfile],
+            self.sample_vehicle_profiles(bldg_veh_df, self.nhts_df),
+        )
 
         # Generate trip schedules for each vehicle
         logging.info("Generating trip schedules")

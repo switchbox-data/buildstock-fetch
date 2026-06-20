@@ -1,10 +1,16 @@
 from datetime import datetime
 from unittest.mock import patch
 
+import numpy as np
 import polars as pl
 import pytest
 
-from utils.ev_demand import EVDemandCalculator, VehicleProfile
+from utils.ev_demand import (
+    EVDemandCalculator,
+    VehicleProfile,
+    normalize_day_trip_times,
+    summarize_nhts_match_catalog,
+)
 
 
 # Test data fixtures
@@ -199,6 +205,25 @@ def test_sample_vehicle_profiles(calculator):
         assert profile.weekend_trip_ids == expected["weekend_trip_ids"]
 
 
+def test_sample_vehicle_profiles_match_catalog(calculator):
+    profiles, catalog = calculator.sample_vehicle_profiles(
+        calculator.metadata_df,
+        calculator.nhts_df,
+        return_catalog=True,
+    )
+
+    assert len(profiles) == catalog.filter(pl.col("nhts_vehicle_matched")).height
+    assert catalog.height == calculator.metadata_df["vehicles"].sum()
+
+    summary = summarize_nhts_match_catalog(catalog)
+    assert summary.filter(pl.col("metric") == "vehicle_slots")["count"][0] == 4
+    assert summary.filter(pl.col("metric") == "missing_weekend_trip_profile")["count"][0] == 2
+
+    missing_weekend = catalog.filter(pl.col("nhts_vehicle_matched") & ~pl.col("has_weekend_trips"))
+    assert missing_weekend.height == 2
+    assert set(missing_weekend.select("bldg_id", "vehicle_slot").rows()) == {("b2", 2), ("b3", 1)}
+
+
 def test_sample_vehicle_profiles_zero_vehicles(calculator, mock_nhts_data, mock_metadata_with_zero):
     # Create new calculator with metadata that includes a zero-vehicle building
     calculator = EVDemandCalculator(
@@ -266,6 +291,49 @@ def test_generate_daily_schedules(calculator):
         assert actual["departure_hour"] == expected["departure_hour"]
         assert actual["arrival_hour"] == expected["arrival_hour"]
         assert pytest.approx(actual["miles_driven"], rel=1e-8) == expected["miles_driven"]
+
+
+def test_normalize_day_trip_times_enforces_order_and_non_overlap():
+    departures = np.array([12, 8])
+    arrivals = np.array([11, 17])  # first trip inverted; second overlaps first chronologically
+
+    dep, arr, keep = normalize_day_trip_times(departures, arrivals)
+
+    assert keep.tolist() == [True, True]
+    assert dep.tolist() == [18, 8]
+    assert arr.tolist() == [19, 17]
+    assert (arr > dep).all()
+
+    chronological = sorted(zip(dep, arr, strict=True))
+    for (_, prev_arr), (next_dep, _) in zip(chronological, chronological[1:], strict=False):
+        assert next_dep > prev_arr
+
+
+def test_generate_daily_schedules_no_invalid_or_overlapping_trips(calculator):
+    profile = VehicleProfile(
+        bldg_id="b1",
+        vehicle_id=1,
+        weekday_departure_hour=[8, 13],
+        weekday_arrival_hour=[12, 17],
+        weekday_miles=[20.0, 10.0],
+        weekday_trip_weights=[1.0, 1.0],
+        weekend_departure_hour=[10, 15],
+        weekend_arrival_hour=[14, 18],
+        weekend_miles=[25.0, 5.0],
+        weekend_trip_weights=[1.0, 1.0],
+        weekday_trip_ids=[1, 2],
+        weekend_trip_ids=[1, 2],
+    )
+
+    schedules = calculator.generate_daily_schedules(profile, rng=np.random.RandomState(0))
+
+    for day_trips in schedules.partition_by("date", as_dict=False):
+        day_trips = day_trips.sort("departure_hour")
+        for row in day_trips.iter_rows(named=True):
+            assert row["arrival_hour"] > row["departure_hour"]
+
+        for prev, nxt in zip(day_trips.iter_rows(named=True), day_trips.iter_rows(named=True)[1:], strict=False):
+            assert nxt["departure_hour"] > prev["arrival_hour"]
 
 
 @patch("utils.ev_demand.EVDemandCalculator._generate_annual_trip_schedule")
