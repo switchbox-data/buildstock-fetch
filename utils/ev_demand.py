@@ -1,7 +1,9 @@
 import argparse
+import calendar
 import logging
 import os
 import sys
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -118,6 +120,298 @@ class TripSchedule:
 
 
 MIN_TRIP_DURATION_HOURS = 1  # hourly model: each trip spans at least one away-from-home hour
+HOURS_PER_YEAR = 8760  # standard hourly load-curve length (365 days × 24 hours)
+DEFAULT_BATTERY_CAPACITY_KWH = 90.0  # uniform fleet battery assumption for SOC modeling
+DEFAULT_KWH_PER_MILE = 0.30  # simple-model assumption
+DEFAULT_LEVEL2_CHARGER_KW = 7.2  # typical 32 A @ 240 V residential Level 2 charger
+
+
+def build_8760_hour_timestamps(year: int) -> pl.DataFrame:
+    """Build 8760 naive hourly timestamps for a calendar year (drops Dec 31 in leap years)."""
+    start = datetime(year, 1, 1, 0, 0, 0)  # first hour of the target year
+    end = datetime(year, 12, 31, 23, 0, 0)  # last hour of the target year
+    timestamps: list[datetime] = []  # collect one timestamp per hour before building the DataFrame
+    current = start  # walk forward one hour at a time from start to end
+    while current <= end:
+        timestamps.append(current)  # record this hour
+        current += timedelta(hours=1)  # advance to the next hour
+
+    if calendar.isleap(year):
+        # leap years have 8784 raw hours; drop Dec 31 to match ResStock/CAIRO 8760 convention
+        timestamps = [timestamp for timestamp in timestamps if not (timestamp.month == 12 and timestamp.day == 31)]
+
+    if len(timestamps) != HOURS_PER_YEAR:
+        raise ValueError(f"Expected {HOURS_PER_YEAR} timestamps, got {len(timestamps)} for year {year}")
+    return pl.DataFrame({"timestamp": timestamps})  # one-column reference grid shared by all vehicles
+
+
+def generate_vehicle_presence_schedules(
+    trip_schedules: pl.DataFrame,
+    start_date: datetime,
+    *,
+    vehicle_keys: Iterable[tuple[str | int, int]] | None = None,
+) -> dict[tuple[str | int, int], pl.DataFrame]:
+    """
+    Build an 8760-row hourly home/away schedule for each vehicle.
+
+    Uses the same inclusive-hour trip model as generate_daily_schedules: a vehicle is
+    away from home from departure_hour through arrival_hour on each trip day. It is at
+    home (and available to charge) in all other hours.
+    """
+    # shared 8760-hour calendar with join keys for matching trip rows to hours
+    hours_base = (
+        build_8760_hour_timestamps(start_date.year)  # Jan 1 00:00 through Dec 31 23:00 (8760 rows)
+        .with_row_index("hour_of_year")  # stable 0..8759 index aligned with load-curve hour order
+        .with_columns(
+            pl.col("timestamp").dt.date().alias("date"),  # calendar date for joining daily trip rows
+            pl.col("timestamp").dt.hour().alias("hour"),  # clock hour (0..23) for joining trip rows
+        )
+    )
+
+    if vehicle_keys is None:
+        if trip_schedules.is_empty():
+            return {}  # no vehicles requested and no trips to infer vehicle ids from
+        vehicle_keys_df = trip_schedules.select("bldg_id", "vehicle_id").unique()  # infer vehicles from trips
+    else:
+        vehicle_keys_df = pl.DataFrame(
+            {
+                "bldg_id": [key[0] for key in vehicle_keys],  # building id for each requested vehicle slot
+                "vehicle_id": [key[1] for key in vehicle_keys],  # 1-based vehicle index within the building
+            }
+        ).unique()  # caller may pass vehicle_profiles.keys(); dedupe just in case
+
+    if trip_schedules.is_empty():
+        # no trips means the vehicle never leaves home; every hour is chargeable
+        hourly_presence = (
+            vehicle_keys_df.join(hours_base, how="cross")  # one 8760-row schedule per requested vehicle
+            .with_columns(
+                pl.lit(True).alias("at_home"),  # default presence state without trip evidence
+                pl.lit(False).alias("away_from_home"),  # explicit complement of at_home
+                pl.lit(True).alias("can_charge"),  # home charging assumed available whenever at home
+            )
+            .select("bldg_id", "vehicle_id", "hour_of_year", "timestamp", "at_home", "away_from_home", "can_charge")
+        )
+    else:
+        away_hours = (
+            trip_schedules.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
+            .with_columns(
+                # inclusive hour model: away from departure_hour through arrival_hour
+                # +1 to include the arrival hour itself
+                pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour") + 1).alias("hour"),
+            )
+            .explode("hour")  # one row per away hour instead of one row per trip interval
+            .select("bldg_id", "vehicle_id", "date", "hour")  # minimal join keys for marking away hours
+            .unique()  # overlapping trips on the same day collapse to a single away marker
+        )
+
+        hourly_presence = (
+            vehicle_keys_df.join(hours_base, how="cross")  # 8760 rows × number of vehicles
+            .join(
+                away_hours.with_columns(pl.lit(False).alias("at_home")),  # away rows carry at_home=False
+                on=["bldg_id", "vehicle_id", "date", "hour"],  # match a specific vehicle-hour to a trip hour
+                how="left",  # keep all 8760 hours; hours without trips remain null until filled below
+            )
+            .with_columns(
+                pl.col("at_home").fill_null(True).alias("at_home"),
+            )
+            .with_columns(
+                (~pl.col("at_home")).alias("away_from_home"),
+                pl.col("at_home").alias("can_charge"),
+            )
+            .select("bldg_id", "vehicle_id", "hour_of_year", "timestamp", "at_home", "away_from_home", "can_charge")
+        )
+
+    presence_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] = {}  # output container keyed by vehicle
+    for vehicle_frame in hourly_presence.partition_by(["bldg_id", "vehicle_id"], as_dict=False):
+        bldg_id = vehicle_frame["bldg_id"][0]  # building id is constant within each partition
+        vehicle_id = int(vehicle_frame["vehicle_id"][0])  # vehicle index is constant within each partition
+        presence_by_vehicle[(bldg_id, vehicle_id)] = vehicle_frame.drop("bldg_id", "vehicle_id").sort(
+            "hour_of_year"  # return a clean per-vehicle 8760-row frame sorted chronologically
+        )
+
+    return presence_by_vehicle  # dict[(bldg_id, vehicle_id)] -> hourly presence DataFrame
+
+
+def _build_hourly_discharge_kwh(
+    trip_schedules: pl.DataFrame,
+    hours_base: pl.DataFrame,
+    *,
+    kwh_per_mile: float,
+    ev_adoption_rate: float,
+) -> pl.DataFrame:
+    """Spread each trip's driving energy uniformly over its inclusive away-from-home hours."""
+    if trip_schedules.is_empty():
+        # no trips -> no driving discharge; return typed empty frame for downstream joins
+        return pl.DataFrame(
+            schema={
+                "bldg_id": pl.Int64,
+                "vehicle_id": pl.Int64,
+                "hour_of_year": pl.UInt32,
+                "discharge_kwh": pl.Float64,
+            }
+        )
+
+    away_hour_discharge = (
+        trip_schedules.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
+        .with_columns(
+            # same inclusive away-hour model as presence: dep through arr (+1 for exclusive end)
+            pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour") + 1).alias("hour"),
+            (pl.col("miles_driven") * kwh_per_mile * ev_adoption_rate).alias("trip_kwh"),
+        )
+        .with_columns(
+            # divide total trip energy evenly across all away hours for that trip
+            (pl.col("trip_kwh") / pl.col("hour").list.len()).alias("discharge_kwh_per_away_hour")
+        )
+        .explode("hour")  # one row per away hour instead of one row per trip
+        .join(
+            hours_base.select("date", "hour", "hour_of_year"),  # map calendar (date, hour) -> hour_of_year index
+            on=["date", "hour"],
+            how="inner",
+        )
+        .group_by("bldg_id", "vehicle_id", "hour_of_year")
+        # overlapping trips contributing to the same hour add their discharge shares together
+        .agg(pl.col("discharge_kwh_per_away_hour").sum().alias("discharge_kwh"))
+    )
+    return away_hour_discharge
+
+
+def _simulate_hourly_soc(
+    at_home: np.ndarray,
+    discharge_kwh: np.ndarray,
+    *,
+    battery_capacity_kwh: float,
+    charger_power_kw: float,
+    initial_soc_kwh: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Hour-by-hour SOC balance: discharge while away, then charge at Level 2 when home and not full.
+
+    Returns end-of-hour SOC, hourly charge energy, and a per-hour underflow flag when discharge
+    exceeds available SOC (SOC is clamped to zero).
+    """
+    if len(at_home) != HOURS_PER_YEAR or len(discharge_kwh) != HOURS_PER_YEAR:
+        raise ValueError(f"Expected length {HOURS_PER_YEAR}, got {len(at_home)} and {len(discharge_kwh)}")
+
+    soc_kwh = np.empty(HOURS_PER_YEAR, dtype=np.float64)  # end-of-hour battery level
+    charge_kwh = np.zeros(HOURS_PER_YEAR, dtype=np.float64)  # grid energy delivered this hour
+    soc_underflow = np.zeros(HOURS_PER_YEAR, dtype=bool)  # True when trip draw exceeds available SOC
+
+    current_soc = initial_soc_kwh  # carry SOC forward; only reset at year start unless caller overrides
+    for hour_idx in range(HOURS_PER_YEAR):
+        discharge = discharge_kwh[hour_idx]
+        if discharge > 0.0:
+            if discharge > current_soc:
+                # trip requires more energy than remains in the battery; clamp and flag (no public charging)
+                soc_underflow[hour_idx] = True
+                current_soc = 0.0
+            else:
+                current_soc -= discharge
+
+        if at_home[hour_idx] and current_soc < battery_capacity_kwh:
+            # plug in immediately at Level 2 rate whenever home and not full (no smart scheduling)
+            added = min(charger_power_kw, battery_capacity_kwh - current_soc)
+            charge_kwh[hour_idx] = added
+            current_soc += added
+
+        soc_kwh[hour_idx] = current_soc  # record end-of-hour SOC after discharge then charge
+
+    return soc_kwh, charge_kwh, soc_underflow
+
+
+def generate_vehicle_soc_schedules(
+    trip_schedules: pl.DataFrame,
+    start_date: datetime,
+    *,
+    vehicle_keys: Iterable[tuple[str | int, int]] | None = None,
+    battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH,
+    kwh_per_mile: float = DEFAULT_KWH_PER_MILE,
+    charger_power_kw: float = DEFAULT_LEVEL2_CHARGER_KW,
+    ev_adoption_rate: float = 1.0,
+    initial_soc_kwh: float | None = None,
+) -> dict[tuple[str | int, int], pl.DataFrame]:
+    """
+    Build an 8760-row hourly SOC schedule for each vehicle.
+
+    Assumes each vehicle starts the year at full battery (or ``initial_soc_kwh``). Trip energy is
+    spread uniformly over inclusive away hours (departure through arrival). Whenever the vehicle is
+    home and below full capacity, it charges at ``charger_power_kw`` until full. SOC is clamped at
+    zero when discharge exceeds available energy; those hours are flagged with ``soc_underflow``.
+    """
+    # validate physical/model parameters before building 8760-hour arrays
+    if battery_capacity_kwh <= 0:
+        raise ValueError(f"battery_capacity_kwh must be positive, got {battery_capacity_kwh}")
+    if charger_power_kw < 0:
+        raise ValueError(f"charger_power_kw must be non-negative, got {charger_power_kw}")
+    if kwh_per_mile < 0:
+        raise ValueError(f"kwh_per_mile must be non-negative, got {kwh_per_mile}")
+
+    start_soc = battery_capacity_kwh if initial_soc_kwh is None else initial_soc_kwh
+    if not 0.0 <= start_soc <= battery_capacity_kwh:
+        raise ValueError(
+            f"initial_soc_kwh must be within [0, {battery_capacity_kwh}], got {start_soc}"
+        )
+
+    # shared calendar used to translate trip (date, clock hour) rows into hour_of_year indices
+    hours_base = (
+        build_8760_hour_timestamps(start_date.year)
+        .with_row_index("hour_of_year")
+        .with_columns(
+            pl.col("timestamp").dt.date().alias("date"),
+            pl.col("timestamp").dt.hour().alias("hour"),
+        )
+    )
+
+    # step 1: where the vehicle is home vs away (determines when charging is allowed)
+    presence_by_vehicle = generate_vehicle_presence_schedules(
+        trip_schedules,
+        start_date,
+        vehicle_keys=vehicle_keys,
+    )
+    # step 2: how much driving energy is consumed in each hour (vectorized from trip schedules)
+    discharge_by_hour = _build_hourly_discharge_kwh(
+        trip_schedules,
+        hours_base,
+        kwh_per_mile=kwh_per_mile,
+        ev_adoption_rate=ev_adoption_rate,
+    )
+
+    # index discharge by vehicle and hour_of_year for fast numpy scatter in the sequential SOC loop
+    discharge_lookup: dict[tuple[str | int, int], dict[int, float]] = {}
+    for discharge_frame in discharge_by_hour.partition_by(["bldg_id", "vehicle_id"], as_dict=False):
+        vehicle_key = (discharge_frame["bldg_id"][0], int(discharge_frame["vehicle_id"][0]))
+        discharge_lookup[vehicle_key] = dict(
+            zip(
+                discharge_frame["hour_of_year"].to_list(),
+                discharge_frame["discharge_kwh"].to_list(),
+                strict=True,
+            )
+        )
+
+    # step 3: per vehicle, run sequential hour-by-hour SOC balance (cannot be fully vectorized)
+    soc_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] = {}
+    for vehicle_key, presence in presence_by_vehicle.items():
+        discharge_arr = np.zeros(HOURS_PER_YEAR, dtype=np.float64)  # default: no driving this hour
+        for hour_of_year, discharge in discharge_lookup.get(vehicle_key, {}).items():
+            discharge_arr[int(hour_of_year)] = discharge
+
+        at_home = presence["at_home"].to_numpy()
+        soc_kwh, charge_kwh, soc_underflow = _simulate_hourly_soc(
+            at_home,
+            discharge_arr,
+            battery_capacity_kwh=battery_capacity_kwh,
+            charger_power_kw=charger_power_kw,
+            initial_soc_kwh=start_soc,
+        )
+
+        soc_by_vehicle[vehicle_key] = presence.with_columns(
+            pl.Series("discharge_kwh", discharge_arr),
+            pl.Series("charge_kwh", charge_kwh),
+            pl.Series("soc_kwh", soc_kwh),
+            pl.Series("soc_frac", soc_kwh / battery_capacity_kwh),
+            pl.Series("soc_underflow", soc_underflow),
+        )
+
+    return soc_by_vehicle  # dict[(bldg_id, vehicle_id)] -> 8760-row hourly SOC DataFrame
 
 
 def normalize_day_trip_times(
@@ -910,6 +1204,55 @@ class EVDemandCalculator:
         trip_schedules = self._generate_annual_trip_schedule(vehicle_profiles)
 
         return trip_schedules
+
+    def generate_vehicle_presence_schedules(
+        self,
+        trip_schedules: pl.DataFrame,
+        *,
+        vehicle_keys: Iterable[tuple[str | int, int]] | None = None,
+    ) -> dict[tuple[str | int, int], pl.DataFrame]:
+        """
+        Map each vehicle to an 8760-row hourly schedule of home/away status.
+
+        Vehicles are available to charge whenever they are at home.
+        """
+        if self.start_date is None:
+            raise NoDateRangeError()  # year anchor is required to build the 8760-hour calendar
+        return generate_vehicle_presence_schedules(
+            trip_schedules,
+            self.start_date,  # use the same schedule year as trip generation
+            vehicle_keys=vehicle_keys,  # optional explicit vehicle list, e.g. vehicle_profiles.keys()
+        )
+
+    def generate_vehicle_soc_schedules(
+        self,
+        trip_schedules: pl.DataFrame,
+        *,
+        vehicle_keys: Iterable[tuple[str | int, int]] | None = None,
+        battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH,
+        kwh_per_mile: float = DEFAULT_KWH_PER_MILE,
+        charger_power_kw: float = DEFAULT_LEVEL2_CHARGER_KW,
+        ev_adoption_rate: float = 1.0,
+        initial_soc_kwh: float | None = None,
+    ) -> dict[tuple[str | int, int], pl.DataFrame]:
+        """
+        Map each vehicle to an 8760-row hourly SOC, charging, and discharge schedule.
+
+        Vehicles start the year fully charged and recharge at ``charger_power_kw`` whenever they
+        are home and below full capacity.
+        """
+        if self.start_date is None:
+            raise NoDateRangeError()  # year anchor is required to build the 8760-hour calendar
+        return generate_vehicle_soc_schedules(
+            trip_schedules,
+            self.start_date,  # use the same schedule year as trip generation
+            vehicle_keys=vehicle_keys,  # optional explicit vehicle list, e.g. vehicle_profiles.keys()
+            battery_capacity_kwh=battery_capacity_kwh,
+            kwh_per_mile=kwh_per_mile,
+            charger_power_kw=charger_power_kw,
+            ev_adoption_rate=ev_adoption_rate,
+            initial_soc_kwh=initial_soc_kwh,
+        )
 
 
 def parse_arguments():
