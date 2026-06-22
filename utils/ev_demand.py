@@ -293,7 +293,7 @@ def _simulate_hourly_soc(
         raise ValueError(f"Expected length {HOURS_PER_YEAR}, got {len(at_home)} and {len(discharge_kwh)}")
 
     soc_kwh = np.empty(HOURS_PER_YEAR, dtype=np.float64)  # end-of-hour battery level
-    charge_kwh = np.zeros(HOURS_PER_YEAR, dtype=np.float64)  # grid energy delivered this hour
+    charge_kwh = np.zeros(HOURS_PER_YEAR, dtype=np.float64)  # energy charged each hour
     soc_underflow = np.zeros(HOURS_PER_YEAR, dtype=bool)  # True when trip draw exceeds available SOC
 
     current_soc = initial_soc_kwh  # carry SOC forward; only reset at year start unless caller overrides
@@ -361,13 +361,14 @@ def generate_vehicle_soc_schedules(
         )
     )
 
-    # step 1: where the vehicle is home vs away (determines when charging is allowed)
+    # where the vehicle is home vs away (determines when charging is allowed)
     presence_by_vehicle = generate_vehicle_presence_schedules(
         trip_schedules,
         start_date,
         vehicle_keys=vehicle_keys,
     )
-    # step 2: how much driving energy is consumed in each hour (vectorized from trip schedules)
+    
+    # how much driving energy is consumed in each hour (vectorized from trip schedules)
     discharge_by_hour = _build_hourly_discharge_kwh(
         trip_schedules,
         hours_base,
@@ -387,7 +388,7 @@ def generate_vehicle_soc_schedules(
             )
         )
 
-    # step 3: per vehicle, run sequential hour-by-hour SOC balance (cannot be fully vectorized)
+    # per vehicle, run sequential hour-by-hour SOC balance (cannot be fully vectorized)
     soc_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] = {}
     for vehicle_key, presence in presence_by_vehicle.items():
         discharge_arr = np.zeros(HOURS_PER_YEAR, dtype=np.float64)  # default: no driving this hour
@@ -407,7 +408,6 @@ def generate_vehicle_soc_schedules(
             pl.Series("discharge_kwh", discharge_arr),
             pl.Series("charge_kwh", charge_kwh),
             pl.Series("soc_kwh", soc_kwh),
-            pl.Series("soc_frac", soc_kwh / battery_capacity_kwh),
             pl.Series("soc_underflow", soc_underflow),
         )
 
