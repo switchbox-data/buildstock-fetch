@@ -120,7 +120,7 @@ class TripSchedule:
 
 
 MIN_TRIP_DURATION_HOURS = 1  # hourly model: each trip spans at least one away-from-home hour
-HOURS_PER_YEAR = 8760  # standard hourly load-curve length (365 days × 24 hours)
+HOURS_PER_YEAR = 8760  # standard hourly load-curve length (365 days x 24 hours)
 DEFAULT_BATTERY_CAPACITY_KWH = 90.0  # uniform fleet battery assumption for SOC modeling
 DEFAULT_KWH_PER_MILE = 0.30  # simple-model assumption
 DEFAULT_LEVEL2_CHARGER_KW = 7.2  # typical 32 A @ 240 V residential Level 2 charger
@@ -173,12 +173,10 @@ def generate_vehicle_presence_schedules(
             return {}  # no vehicles requested and no trips to infer vehicle ids from
         vehicle_keys_df = trip_schedules.select("bldg_id", "vehicle_id").unique()  # infer vehicles from trips
     else:
-        vehicle_keys_df = pl.DataFrame(
-            {
-                "bldg_id": [key[0] for key in vehicle_keys],  # building id for each requested vehicle slot
-                "vehicle_id": [key[1] for key in vehicle_keys],  # 1-based vehicle index within the building
-            }
-        ).unique()  # caller may pass vehicle_profiles.keys(); dedupe just in case
+        vehicle_keys_df = pl.DataFrame({
+            "bldg_id": [key[0] for key in vehicle_keys],  # building id for each requested vehicle slot
+            "vehicle_id": [key[1] for key in vehicle_keys],  # 1-based vehicle index within the building
+        }).unique()  # caller may pass vehicle_profiles.keys(); dedupe just in case
 
     if trip_schedules.is_empty():
         # no trips means the vehicle never leaves home; every hour is chargeable
@@ -205,7 +203,7 @@ def generate_vehicle_presence_schedules(
         )
 
         hourly_presence = (
-            vehicle_keys_df.join(hours_base, how="cross")  # 8760 rows × number of vehicles
+            vehicle_keys_df.join(hours_base, how="cross")  # 8760 rows x number of vehicles
             .join(
                 away_hours.with_columns(pl.lit(False).alias("at_home")),  # away rows carry at_home=False
                 on=["bldg_id", "vehicle_id", "date", "hour"],  # match a specific vehicle-hour to a trip hour
@@ -347,9 +345,7 @@ def generate_vehicle_soc_schedules(
 
     start_soc = battery_capacity_kwh if initial_soc_kwh is None else initial_soc_kwh
     if not 0.0 <= start_soc <= battery_capacity_kwh:
-        raise ValueError(
-            f"initial_soc_kwh must be within [0, {battery_capacity_kwh}], got {start_soc}"
-        )
+        raise ValueError(f"initial_soc_kwh must be within [0, {battery_capacity_kwh}], got {start_soc}")
 
     # shared calendar used to translate trip (date, clock hour) rows into hour_of_year indices
     hours_base = (
@@ -367,7 +363,7 @@ def generate_vehicle_soc_schedules(
         start_date,
         vehicle_keys=vehicle_keys,
     )
-    
+
     # how much driving energy is consumed in each hour (vectorized from trip schedules)
     discharge_by_hour = _build_hourly_discharge_kwh(
         trip_schedules,
@@ -476,11 +472,7 @@ def summarize_nhts_match_catalog(catalog: pl.DataFrame) -> pl.DataFrame:
     n_missing_both = matched.filter(~pl.col("has_weekday_trips") & ~pl.col("has_weekend_trips")).height
 
     buildings_with_gaps = (
-        catalog.filter(
-            ~pl.col("nhts_vehicle_matched")
-            | ~pl.col("has_weekday_trips")
-            | ~pl.col("has_weekend_trips")
-        )
+        catalog.filter(~pl.col("nhts_vehicle_matched") | ~pl.col("has_weekday_trips") | ~pl.col("has_weekend_trips"))
         .select("bldg_id")
         .unique()
         .height
@@ -977,7 +969,7 @@ class EVDemandCalculator:
             return profiles, pl.DataFrame(catalog_records)
         return profiles
 
-    def generate_daily_schedules(
+    def generate_daily_schedules(  # noqa: C901
         self, profile: VehicleProfile, rng: np.random.RandomState | None = None
     ) -> pl.DataFrame:
         """Generate trip schedules for all days in the date range as a DataFrame."""
