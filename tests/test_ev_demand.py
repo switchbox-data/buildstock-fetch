@@ -424,19 +424,20 @@ def test_generate_vehicle_soc_schedules_energy_balance(calculator):
         weekday_trip_ids=[1],
         weekend_trip_ids=[1],
     )
+    battery_capacity_kwh = 90.0
     trip_schedules = calculator.generate_daily_schedules(profile, rng=np.random.RandomState(0))
     soc_schedule = generate_vehicle_soc_schedules(
         trip_schedules,
         calculator.start_date,
         vehicle_keys=[("b1", 1)],
-        battery_capacity_kwh=90.0,
+        battery_capacity_kwh=battery_capacity_kwh,
         kwh_per_mile=0.30,
         charger_power_kw=7.2,
     )[("b1", 1)]
 
     assert soc_schedule.height == 8760
     assert soc_schedule["soc_kwh"].min() >= 0.0
-    assert soc_schedule["soc_frac"].max() <= 1.0 + 1e-9
+    assert soc_schedule["soc_kwh"].max() <= battery_capacity_kwh + 1e-9
 
     expected_discharge = trip_schedules["miles_driven"].sum() * 0.30
     assert soc_schedule["discharge_kwh"].sum() == pytest.approx(expected_discharge, rel=1e-6)
