@@ -10,11 +10,6 @@ from utils.ev_demand import (
     HOURS_PER_YEAR,
     EVDemandCalculator,
     VehicleProfile,
-    _simulate_hourly_soc,
-    build_8760_hour_timestamps,
-    generate_vehicle_presence_schedules,
-    generate_vehicle_soc_schedules,
-    normalize_day_trip_times,
     summarize_nhts_match_catalog,
 )
 
@@ -229,6 +224,13 @@ def test_sample_vehicle_profiles_match_catalog(calculator):
     assert missing_weekend.height == 2
     assert set(missing_weekend.select("bldg_id", "vehicle_slot").rows()) == {("b2", 2), ("b3", 1)}
 
+    vehicle_slots_with_any_gap = catalog.filter(
+        ~pl.col("nhts_vehicle_matched") | ~pl.col("has_weekday_trips") | ~pl.col("has_weekend_trips")
+    ).height
+    gap_summary = summary.filter(pl.col("metric") == "vehicle_slots_with_any_gap")
+    assert gap_summary["count"][0] == vehicle_slots_with_any_gap
+    assert gap_summary["share_of_vehicle_slots"][0] == pytest.approx(vehicle_slots_with_any_gap / 4)
+
 
 def test_sample_vehicle_profiles_zero_vehicles(calculator, mock_nhts_data, mock_metadata_with_zero):
     # Create new calculator with metadata that includes a zero-vehicle building
@@ -274,7 +276,7 @@ def test_generate_daily_schedules(calculator):
         weekend_trip_ids=[1],
     )
 
-    schedules = calculator.generate_daily_schedules(profile)
+    schedules = calculator._generate_vehicle_daily_trip_schedules(profile)
 
     expected_schedules = [
         # Weekend days (Sat-Sun)
@@ -299,11 +301,11 @@ def test_generate_daily_schedules(calculator):
         assert pytest.approx(actual["miles_driven"], rel=1e-8) == expected["miles_driven"]
 
 
-def test_normalize_day_trip_times_enforces_order_and_non_overlap():
+def test_normalize_day_trip_times_enforces_order_and_non_overlap(calculator):
     departures = np.array([12, 8])
     arrivals = np.array([11, 17])  # first trip inverted; second overlaps first chronologically
 
-    dep, arr, keep = normalize_day_trip_times(departures, arrivals)
+    dep, arr, keep = calculator._normalize_day_trip_times(departures, arrivals)
 
     assert keep.tolist() == [True, True]
     assert dep.tolist() == [18, 8]
@@ -331,7 +333,7 @@ def test_generate_daily_schedules_no_invalid_or_overlapping_trips(calculator):
         weekend_trip_ids=[1, 2],
     )
 
-    schedules = calculator.generate_daily_schedules(profile, rng=np.random.RandomState(0))
+    schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
 
     for day_trips in schedules.partition_by("date", as_dict=False):
         day_trips = day_trips.sort("departure_hour")
@@ -342,17 +344,11 @@ def test_generate_daily_schedules_no_invalid_or_overlapping_trips(calculator):
             assert nxt["departure_hour"] > prev["arrival_hour"]
 
 
-def test_build_8760_hour_timestamps_non_leap_year():
-    timestamps = build_8760_hour_timestamps(2023)
-    assert timestamps.height == 8760
-    assert timestamps["timestamp"][0] == datetime(2023, 1, 1, 0, 0, 0)
-    assert timestamps["timestamp"][-1] == datetime(2023, 12, 31, 23, 0, 0)
-
-
-def test_build_8760_hour_timestamps_leap_year_drops_dec_31():
-    timestamps = build_8760_hour_timestamps(2024)
-    assert timestamps.height == 8760
-    assert timestamps.filter((pl.col("timestamp").dt.month() == 12) & (pl.col("timestamp").dt.day() == 31)).is_empty()
+def test_build_hours_base_matches_instance_date_range(calculator):
+    hours_base = calculator._build_hours_base()
+    assert hours_base.height == calculator.num_hours
+    assert hours_base["timestamp"][0] == datetime(2022, 1, 1, 0, 0, 0)
+    assert hours_base["timestamp"][-1] == datetime(2022, 1, 7, 23, 0, 0)
 
 
 def test_generate_vehicle_presence_schedules_marks_trip_hours_away(calculator):
@@ -370,14 +366,13 @@ def test_generate_vehicle_presence_schedules_marks_trip_hours_away(calculator):
         weekday_trip_ids=[1],
         weekend_trip_ids=[1],
     )
-    trip_schedules = calculator.generate_daily_schedules(profile, rng=np.random.RandomState(0))
-    presence = generate_vehicle_presence_schedules(
+    trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
+    presence = calculator.generate_vehicle_presence_schedules(
         trip_schedules,
-        calculator.start_date,
         vehicle_keys=[("b1", 1)],
     )[("b1", 1)]
 
-    assert presence.height == 8760
+    assert presence.height == calculator.num_hours
     assert presence.filter(pl.col("can_charge") != pl.col("at_home")).is_empty()
     assert presence.filter(pl.col("at_home") & pl.col("away_from_home")).is_empty()
     assert presence.filter(pl.col("at_home") & pl.col("can_charge").is_null()).is_empty()
@@ -389,8 +384,8 @@ def test_generate_vehicle_presence_schedules_marks_trip_hours_away(calculator):
     assert not weekday_away["can_charge"].any()
 
 
-def test_generate_vehicle_presence_schedules_all_home_without_trips():
-    presence = generate_vehicle_presence_schedules(
+def test_generate_vehicle_presence_schedules_all_home_without_trips(calculator):
+    presence = calculator.generate_vehicle_presence_schedules(
         pl.DataFrame({
             "bldg_id": [],
             "vehicle_id": [],
@@ -399,11 +394,10 @@ def test_generate_vehicle_presence_schedules_all_home_without_trips():
             "arrival_hour": [],
             "miles_driven": [],
         }),
-        datetime(2024, 1, 1),
         vehicle_keys=[("b1", 1)],
     )[("b1", 1)]
 
-    assert presence.height == 8760
+    assert presence.height == calculator.num_hours
     assert presence["at_home"].all()
     assert presence["can_charge"].all()
     assert not presence["away_from_home"].any()
@@ -425,17 +419,16 @@ def test_generate_vehicle_soc_schedules_energy_balance(calculator):
         weekend_trip_ids=[1],
     )
     battery_capacity_kwh = 90.0
-    trip_schedules = calculator.generate_daily_schedules(profile, rng=np.random.RandomState(0))
-    soc_schedule = generate_vehicle_soc_schedules(
+    trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
+    soc_schedule = calculator.generate_vehicle_soc_schedules(
         trip_schedules,
-        calculator.start_date,
         vehicle_keys=[("b1", 1)],
         battery_capacity_kwh=battery_capacity_kwh,
         kwh_per_mile=0.30,
         charger_power_kw=7.2,
     )[("b1", 1)]
 
-    assert soc_schedule.height == 8760
+    assert soc_schedule.height == calculator.num_hours
     assert soc_schedule["soc_kwh"].min() >= 0.0
     assert soc_schedule["soc_kwh"].max() <= battery_capacity_kwh + 1e-9
 
@@ -460,10 +453,9 @@ def test_generate_vehicle_soc_schedules_flags_underflow(calculator):
         weekday_trip_ids=[1],
         weekend_trip_ids=[1],
     )
-    trip_schedules = calculator.generate_daily_schedules(profile, rng=np.random.RandomState(0))
-    soc_schedule = generate_vehicle_soc_schedules(
+    trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
+    soc_schedule = calculator.generate_vehicle_soc_schedules(
         trip_schedules,
-        calculator.start_date,
         vehicle_keys=[("b1", 1)],
         battery_capacity_kwh=5.0,
         kwh_per_mile=0.30,
@@ -474,10 +466,69 @@ def test_generate_vehicle_soc_schedules_flags_underflow(calculator):
     assert soc_schedule["soc_kwh"].min() == 0.0
 
 
-def test_simulate_hourly_soc_stays_full_without_trips():
+def test_generate_vehicle_soc_schedules_uses_prebuilt_presence(calculator):
+    profile = VehicleProfile(
+        bldg_id="b1",
+        vehicle_id=1,
+        weekday_departure_hour=[8],
+        weekday_arrival_hour=[17],
+        weekday_miles=[20.0],
+        weekday_trip_weights=[1.0],
+        weekend_departure_hour=[10],
+        weekend_arrival_hour=[19],
+        weekend_miles=[25.0],
+        weekend_trip_weights=[1.0],
+        weekday_trip_ids=[1],
+        weekend_trip_ids=[1],
+    )
+    trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
+    presence_by_vehicle = calculator.generate_vehicle_presence_schedules(
+        trip_schedules,
+        vehicle_keys=[("b1", 1)],
+    )
+    soc_kwargs = {
+        "battery_capacity_kwh": 90.0,
+        "kwh_per_mile": 0.30,
+        "charger_power_kw": 7.2,
+    }
+    soc_direct = calculator.generate_vehicle_soc_schedules(
+        trip_schedules,
+        vehicle_keys=[("b1", 1)],
+        **soc_kwargs,
+    )[("b1", 1)]
+    soc_from_presence = calculator.generate_vehicle_soc_schedules(
+        trip_schedules,
+        presence_by_vehicle=presence_by_vehicle,
+        **soc_kwargs,
+    )[("b1", 1)]
+
+    assert soc_direct.columns == soc_from_presence.columns
+    for column in soc_direct.columns:
+        if soc_direct[column].dtype == pl.Boolean:
+            assert soc_direct[column].to_list() == soc_from_presence[column].to_list()
+        else:
+            assert soc_direct[column].to_list() == pytest.approx(soc_from_presence[column].to_list(), rel=1e-9, abs=1e-9)
+
+
+def test_simulate_hourly_soc_is_beginning_of_hour(calculator):
+    at_home = np.array([False, True])
+    discharge = np.array([10.0, 0.0])
+    soc_kwh, _, _ = calculator._simulate_hourly_soc(
+        at_home,
+        discharge,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=90.0,
+    )
+
+    assert soc_kwh[0] == pytest.approx(90.0)
+    assert soc_kwh[1] == pytest.approx(80.0)
+
+
+def test_simulate_hourly_soc_stays_full_without_trips(calculator):
     at_home = np.ones(HOURS_PER_YEAR, dtype=bool)
     discharge = np.zeros(HOURS_PER_YEAR, dtype=np.float64)
-    soc_kwh, charge_kwh, soc_underflow = _simulate_hourly_soc(
+    soc_kwh, charge_kwh, soc_underflow = calculator._simulate_hourly_soc(
         at_home,
         discharge,
         battery_capacity_kwh=90.0,
@@ -491,10 +542,37 @@ def test_simulate_hourly_soc_stays_full_without_trips():
     assert not soc_underflow.any()
 
 
-@patch("utils.ev_demand.EVDemandCalculator._generate_annual_trip_schedule")
+def test_vehicle_hourly_schedules_to_dataframe(calculator):
+    profile = VehicleProfile(
+        bldg_id="b1",
+        vehicle_id=1,
+        weekday_departure_hour=[8],
+        weekday_arrival_hour=[17],
+        weekday_miles=[20.0],
+        weekday_trip_weights=[1.0],
+        weekend_departure_hour=[10],
+        weekend_arrival_hour=[19],
+        weekend_miles=[25.0],
+        weekend_trip_weights=[1.0],
+        weekday_trip_ids=[1],
+        weekend_trip_ids=[1],
+    )
+    trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
+    soc_by_vehicle = calculator.generate_vehicle_soc_schedules(
+        trip_schedules,
+        vehicle_keys=[("b1", 1)],
+    )
+    soc_df = EVDemandCalculator.vehicle_hourly_schedules_to_dataframe(soc_by_vehicle)
+
+    assert soc_df.height == calculator.num_hours
+    assert soc_df["bldg_id"].to_list() == ["b1"] * calculator.num_hours
+    assert soc_df["vehicle_id"].to_list() == [1] * calculator.num_hours
+
+
+@patch("utils.ev_demand.EVDemandCalculator.generate_daily_trip_schedules")
 @patch("utils.ev_demand.EVDemandCalculator.sample_vehicle_profiles")
 @patch("utils.ev_demand.EVDemandCalculator.predict_num_vehicles")
-def test_generate_trip_schedules(predict_vehicles, sample_profiles, generate_schedule, calculator):
+def test_match_and_generate_trip_schedules(predict_vehicles, sample_profiles, generate_schedule, calculator):
     # Setup expected data
     metadata = calculator.metadata_df
     predict_vehicles.return_value = metadata
@@ -527,7 +605,7 @@ def test_generate_trip_schedules(predict_vehicles, sample_profiles, generate_sch
     generate_schedule.return_value = pl.DataFrame(schedule_data)
 
     # Run the function
-    result = calculator.generate_trip_schedules()
+    result = calculator.match_and_generate_trip_schedules()
 
     # Verify exact expected output
     assert isinstance(result, pl.DataFrame)
