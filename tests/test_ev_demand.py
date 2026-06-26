@@ -10,6 +10,8 @@ from utils.ev_demand import (
     HOURS_PER_YEAR,
     EVDemandCalculator,
     VehicleProfile,
+    nhts_departure_hour,
+    nhts_arrival_hour,
     summarize_nhts_match_catalog,
 )
 
@@ -65,6 +67,14 @@ def calculator(mock_nhts_data, mock_metadata):
         end_date=datetime(2022, 1, 7),
         random_state=42,
     )
+
+
+def test_nhts_hour_conversion():
+    assert nhts_departure_hour(830) == 8
+    assert nhts_departure_hour(1700) == 17
+    assert nhts_arrival_hour(1700) == 17
+    assert nhts_arrival_hour(1715) == 18
+    assert nhts_arrival_hour(1450) == 15
 
 
 def test_find_best_matches(calculator):
@@ -303,18 +313,18 @@ def test_generate_daily_schedules(calculator):
 
 def test_normalize_day_trip_times_enforces_order_and_non_overlap(calculator):
     departures = np.array([12, 8])
-    arrivals = np.array([11, 17])  # first trip inverted; second overlaps first chronologically
+    home_hours = np.array([11, 17])  # first trip inverted; second overlaps first chronologically
 
-    dep, arr, keep = calculator._normalize_day_trip_times(departures, arrivals)
+    dep, home, keep = calculator._normalize_day_trip_times(departures, home_hours)
 
     assert keep.tolist() == [True, True]
-    assert dep.tolist() == [18, 8]
-    assert arr.tolist() == [19, 17]
-    assert (arr > dep).all()
+    assert dep.tolist() == [17, 8]
+    assert home.tolist() == [18, 17]
+    assert (home > dep).all()
 
-    chronological = sorted(zip(dep, arr, strict=True))
-    for (_, prev_arr), (next_dep, _) in pairwise(chronological):
-        assert next_dep > prev_arr
+    chronological = sorted(zip(dep, home, strict=True))
+    for (_, prev_home), (next_dep, _) in pairwise(chronological):
+        assert next_dep >= prev_home
 
 
 def test_generate_daily_schedules_no_invalid_or_overlapping_trips(calculator):
@@ -341,7 +351,7 @@ def test_generate_daily_schedules_no_invalid_or_overlapping_trips(calculator):
             assert row["arrival_hour"] > row["departure_hour"]
 
         for prev, nxt in pairwise(day_trips.iter_rows(named=True)):
-            assert nxt["departure_hour"] > prev["arrival_hour"]
+            assert nxt["departure_hour"] >= prev["arrival_hour"]
 
 
 def test_build_hours_base_matches_instance_date_range(calculator):
@@ -510,14 +520,19 @@ def test_generate_vehicle_soc_schedules_uses_prebuilt_presence(calculator):
             assert soc_direct[column].to_list() == pytest.approx(soc_from_presence[column].to_list(), rel=1e-9, abs=1e-9)
 
 
-def test_simulate_hourly_soc_is_beginning_of_hour(calculator):
+def test_compute_hourly_soc_is_beginning_of_hour(calculator):
     at_home = np.array([False, True])
     discharge = np.array([10.0, 0.0])
-    soc_kwh, _, _ = calculator._simulate_hourly_soc(
+    charge_kwh = calculator._schedule_immediate_charging(
         at_home,
         discharge,
         battery_capacity_kwh=90.0,
         charger_power_kw=7.2,
+        initial_soc_kwh=90.0,
+    )
+    soc_kwh, _ = calculator._compute_hourly_soc(
+        discharge,
+        charge_kwh,
         initial_soc_kwh=90.0,
     )
 
@@ -525,14 +540,94 @@ def test_simulate_hourly_soc_is_beginning_of_hour(calculator):
     assert soc_kwh[1] == pytest.approx(80.0)
 
 
-def test_simulate_hourly_soc_stays_full_without_trips(calculator):
-    at_home = np.ones(HOURS_PER_YEAR, dtype=bool)
-    discharge = np.zeros(HOURS_PER_YEAR, dtype=np.float64)
-    soc_kwh, charge_kwh, soc_underflow = calculator._simulate_hourly_soc(
+def test_cost_minimizing_charging_shifts_to_cheaper_hours(calculator):
+    prices = np.array([0.20, 0.20, 0.10, 0.10])
+    at_home = np.array([True, True, True, True])
+    discharge = np.array([10.0, 0.0, 0.0, 0.0])
+
+    immediate_charge = calculator._schedule_immediate_charging(
         at_home,
         discharge,
         battery_capacity_kwh=90.0,
         charger_power_kw=7.2,
+        initial_soc_kwh=50.0,
+    )
+    optimized_charge = calculator._schedule_cost_minimizing_charging(
+        at_home,
+        discharge,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=50.0,
+        hourly_price_usd_per_kwh=prices,
+    )
+    _, optimized_underflow = calculator._compute_hourly_soc(
+        discharge,
+        optimized_charge,
+        initial_soc_kwh=50.0,
+    )
+
+    immediate_cost = float((immediate_charge * prices).sum())
+    optimized_cost = float((optimized_charge * prices).sum())
+
+    assert not optimized_underflow.any()
+    assert optimized_charge.sum() == pytest.approx(10.0, rel=1e-6)
+    assert optimized_cost <= immediate_cost + 1e-9
+    assert optimized_cost == pytest.approx(7.2 * 0.10 + 2.8 * 0.10, rel=1e-6)
+
+
+def test_generate_vehicle_soc_schedules_cost_minimizing_not_more_expensive(calculator):
+    profile = VehicleProfile(
+        bldg_id="b1",
+        vehicle_id=1,
+        weekday_departure_hour=[8],
+        weekday_arrival_hour=[17],
+        weekday_miles=[20.0],
+        weekday_trip_weights=[1.0],
+        weekend_departure_hour=[10],
+        weekend_arrival_hour=[19],
+        weekend_miles=[25.0],
+        weekend_trip_weights=[1.0],
+        weekday_trip_ids=[1],
+        weekend_trip_ids=[1],
+    )
+    trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
+    hours_base = calculator._build_hours_base()
+    prices = np.where(hours_base["hour"].to_numpy() < 12, 0.10, 0.20)
+
+    immediate = calculator.generate_vehicle_soc_schedules(
+        trip_schedules,
+        vehicle_keys=[("b1", 1)],
+        charging_strategy="immediate",
+    )[("b1", 1)]
+    optimized = calculator.generate_vehicle_soc_schedules(
+        trip_schedules,
+        vehicle_keys=[("b1", 1)],
+        charging_strategy="cost_minimizing",
+        hourly_price_usd_per_kwh=prices,
+    )[("b1", 1)]
+
+    immediate_cost = float((immediate["charge_kwh"].to_numpy() * prices).sum())
+    optimized_cost = float((optimized["charge_kwh"].to_numpy() * prices).sum())
+
+    assert optimized["discharge_kwh"].sum() == pytest.approx(immediate["discharge_kwh"].sum(), rel=1e-6)
+    assert optimized["charge_kwh"].sum() == pytest.approx(immediate["charge_kwh"].sum(), rel=1e-6)
+    assert optimized_cost <= immediate_cost + 1e-6
+    assert not optimized["soc_underflow"].any()
+
+
+def test_immediate_charging_stays_full_without_trips(calculator):
+    at_home = np.ones(HOURS_PER_YEAR, dtype=bool)
+    discharge = np.zeros(HOURS_PER_YEAR, dtype=np.float64)
+    charge_kwh = calculator._schedule_immediate_charging(
+        at_home,
+        discharge,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=90.0,
+    )
+    soc_kwh, soc_underflow = calculator._compute_hourly_soc(
+        discharge,
+        charge_kwh,
         initial_soc_kwh=90.0,
     )
 

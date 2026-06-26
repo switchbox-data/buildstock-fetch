@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, Literal, cast, overload
 
+import cvxpy as cp
 import numpy as np
 import polars as pl
 from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
@@ -95,11 +96,11 @@ class VehicleProfile:
     bldg_id: str
     vehicle_id: int
     weekday_departure_hour: list[int] = field(default_factory=list)  # List of departure hours for each weekday trip
-    weekday_arrival_hour: list[int] = field(default_factory=list)  # List of arrival hours for each weekday trip
+    weekday_arrival_hour: list[int] = field(default_factory=list)  # First hour at home (exclusive end of away interval)
     weekday_miles: list[float] = field(default_factory=list)  # List of miles for each weekday trip
     weekday_trip_weights: list[float] = field(default_factory=list)  # List of trip weights for each weekday trip
     weekend_departure_hour: list[int] = field(default_factory=list)  # List of departure hours for each weekend trip
-    weekend_arrival_hour: list[int] = field(default_factory=list)  # List of arrival hours for each weekend trip
+    weekend_arrival_hour: list[int] = field(default_factory=list)  # First hour at home (exclusive end of away interval)
     weekend_miles: list[float] = field(default_factory=list)  # List of miles for each weekend trip
     weekend_trip_weights: list[float] = field(default_factory=list)  # List of trip weights for each weekend trip
     weekday_trip_ids: list[int] = field(default_factory=list)  # List of trip IDs for weekdays
@@ -113,16 +114,54 @@ class TripSchedule:
     bldg_id: int  # Changed from int to str to match VehicleProfile
     vehicle_id: int
     date: datetime
-    departure_hour: int
-    arrival_hour: int
+    departure_hour: int  # first away hour (inclusive)
+    arrival_hour: int  # first home hour (exclusive end of away interval; same as nhts_home_hour)
     miles_driven: float
 
 
-MIN_TRIP_DURATION_HOURS = 1  # hourly model: each trip spans at least one away-from-home hour
+MIN_TRIP_AWAY_HOURS = 1  # hourly model: each trip is away for at least one clock hour
+MAX_DEPARTURE_HOUR = 23  # latest hour a same-day trip can start (hour 0..23)
+MAX_HOME_HOUR = 24  # exclusive end of away interval; 24 = home after hour 23 ends
 HOURS_PER_YEAR = 8760  # standard hourly load-curve length (365 days x 24 hours)
-DEFAULT_BATTERY_CAPACITY_KWH = 90.0  # uniform fleet battery assumption for SOC modeling
+DEFAULT_BATTERY_CAPACITY_KWH = 120.0  # uniform fleet battery assumption for SOC modeling
 DEFAULT_KWH_PER_MILE = 0.30  # simple-model assumption
 DEFAULT_LEVEL2_CHARGER_KW = 7.2  # typical 32 A @ 240 V residential Level 2 charger
+# How home charging is scheduled before SOC is derived from discharge + charge.
+ChargingStrategy = Literal["immediate", "cost_minimizing"]
+
+
+def nhts_departure_hour(start_time: int) -> int:
+    """Clock hour when a trip starts (vehicle is away during this hour).
+
+    NHTS ``STRTTIME`` is HHMM; e.g. 830 → hour 8.
+
+    Args:
+        start_time (int): NHTS ``STRTTIME`` in HHMM format
+
+    Returns:
+        int: Clock hour when a trip starts
+    """
+    return int(start_time) // 100
+
+
+def nhts_arrival_hour(end_time: int) -> int:
+    """First clock hour at home after a trip ends (exclusive end of the away interval).
+
+    NHTS ``ENDTIME`` is HHMM. If the trip ends exactly on the hour (e.g. 1700),
+    the vehicle is home starting that hour. If it ends mid-hour (e.g. 1715),
+    it is still away for that full hour and home starting the next hour.
+
+    Away hours are ``range(departure_hour, home_hour)``.
+
+    Args:
+        end_time (int): NHTS ``ENDTIME`` in HHMM format
+
+    Returns:
+        int: First clock hour at home after a trip ends
+    """
+    end_time = int(end_time)
+    hour, minute = divmod(end_time, 100)
+    return hour if minute == 0 else hour + 1
 
 
 def summarize_nhts_match_catalog(catalog: pl.DataFrame) -> pl.DataFrame:
@@ -591,15 +630,15 @@ class EVDemandCalculator:
                 )
 
                 # Process weekday trips (extract from filtered data)
-                weekday_departures = [t // 100 for t in weekday_data["start_time"]]  # Convert HHMM to HH
-                weekday_arrivals = [t // 100 for t in weekday_data["end_time"]]
+                weekday_departures = [nhts_departure_hour(t) for t in weekday_data["start_time"]]
+                weekday_arrivals = [nhts_arrival_hour(t) for t in weekday_data["end_time"]]
                 weekday_miles = weekday_data["miles_driven"].to_list()
                 weekday_weights = weekday_data["trip_weight"].to_list()
                 weekday_trip_ids = list(range(1, len(weekday_departures) + 1))
 
                 # Process weekend trips (extract from filtered data)
-                weekend_departures = [t // 100 for t in weekend_data["start_time"]]
-                weekend_arrivals = [t // 100 for t in weekend_data["end_time"]]
+                weekend_departures = [nhts_departure_hour(t) for t in weekend_data["start_time"]]
+                weekend_arrivals = [nhts_arrival_hour(t) for t in weekend_data["end_time"]]
                 weekend_miles = weekend_data["miles_driven"].to_list()
                 weekend_weights = weekend_data["trip_weight"].to_list()
                 weekend_trip_ids = list(range(1, len(weekend_departures) + 1))
@@ -645,67 +684,63 @@ class EVDemandCalculator:
     @staticmethod
     def _normalize_day_trip_times(
         departures: np.ndarray,
-        arrivals: np.ndarray,
+        home_hours: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Enforce arrival > departure per trip and non-overlapping trips within a day.
+        Enforce home_hour > departure_hour per trip and non-overlapping away intervals within a day.
 
-        Independent random offsets can produce arrival <= departure or overlapping intervals.
+        Away hours are ``range(departure_hour, home_hour)`` (departure inclusive, home exclusive).
+        Independent random offsets can produce home_hour <= departure_hour or overlapping intervals.
         Trips are repacked in departure order on a single calendar day (no overnight trips).
-        Each trip starts strictly after the previous trip ends (next dep >= prev arr + 1).
+        Each trip's away interval ends before the next trip's departure hour begins.
         Returns arrays in the original input order. Trips that no longer fit before hour 23
         are dropped (keep_mask=False).
 
         Args:
-            departures (np.ndarray): Array of departure hours
-            arrivals (np.ndarray): Array of arrival hours
+            departures: Array of departure hours
+            home_hours: Array of first-at-home hours (exclusive end of away interval)
 
         Returns:
-            tuple[np.ndarray, np.ndarray, np.ndarray]: Tuple of normalized departure hours, arrival hours, and keep mask
-                - departures: Normalized departure hours
-                - arrivals: Normalized arrival hours
-                - keep: Keep mask indicating which trips are kept
-
-        Raises:
-            ValueError: If departures and arrivals have different lengths
+            tuple[np.ndarray, np.ndarray, np.ndarray]: Tuple of normalized departure hours,
+                home hours, and keep mask
         """
-        if len(departures) != len(arrivals):
-            raise ValueError(f"departures and arrivals must have the same length, got {len(departures)} and {len(arrivals)}")
+        if len(departures) != len(home_hours):
+            raise ValueError(
+                f"departures and home_hours must have the same length, got {len(departures)} and {len(home_hours)}"
+            )
 
         n = len(departures)
         keep = np.ones(n, dtype=bool)
         if n == 0:
-            return departures.astype(int), arrivals.astype(int), keep
+            return departures.astype(int), home_hours.astype(int), keep
 
-        # Pack in chronological order, then restore the caller's trip index order below.
         order = np.argsort(departures, kind="stable")
         dep_sorted = departures[order].astype(int)
-        arr_sorted = arrivals[order].astype(int)
+        home_sorted = home_hours[order].astype(int)
         keep_sorted = np.ones(n, dtype=bool)
 
         earliest_next_dep = 0
         for i in range(n):
-            # No room left today for another trip of minimum duration.
-            if earliest_next_dep > 23 - MIN_TRIP_DURATION_HOURS:
+            if earliest_next_dep > MAX_DEPARTURE_HOUR:
                 keep_sorted[i:] = False
                 break
 
-            # Push forward if this trip overlaps a prior one; enforce arr > dep.
-            dep = min(max(int(dep_sorted[i]), earliest_next_dep), 23 - MIN_TRIP_DURATION_HOURS)
-            arr = min(max(int(arr_sorted[i]), dep + MIN_TRIP_DURATION_HOURS), 23)
+            dep = min(max(int(dep_sorted[i]), earliest_next_dep), MAX_DEPARTURE_HOUR)
+            home = min(max(int(home_sorted[i]), dep + MIN_TRIP_AWAY_HOURS), MAX_HOME_HOUR)
+            if home <= dep:
+                keep_sorted[i] = False
+                continue
 
             dep_sorted[i] = dep
-            arr_sorted[i] = arr
-            # Inclusive hour model: away through arrival hour, so next dep is at least arr + 1.
-            earliest_next_dep = arr + 1
+            home_sorted[i] = home
+            earliest_next_dep = home
 
-        # Map packed times back to the original trip-index order for downstream joins.
         dep_out = np.empty(n, dtype=int)
-        arr_out = np.empty(n, dtype=int)
+        home_out = np.empty(n, dtype=int)
         dep_out[order] = dep_sorted
-        arr_out[order] = arr_sorted
+        home_out[order] = home_sorted
         keep[order] = keep_sorted
-        return dep_out, arr_out, keep
+        return dep_out, home_out, keep
 
     def _generate_vehicle_daily_trip_schedules(  # noqa: C901
         self, profile: VehicleProfile, rng: np.random.RandomState | None = None
@@ -819,14 +854,14 @@ class EVDemandCalculator:
             arrival_offsets = rng.choice(time_offsets, size=num_trips, p=time_probabilities)
 
             # Apply offsets with bounds checking
-            departures_with_variance = np.clip(selected_departures + departure_offsets, 0, 23)
-            arrivals_with_variance = np.clip(selected_arrivals + arrival_offsets, 0, 23)
+            departures_with_variance = np.clip(selected_departures + departure_offsets, 0, MAX_DEPARTURE_HOUR)
+            home_hours_with_variance = np.clip(selected_arrivals + arrival_offsets, 1, MAX_HOME_HOUR)
 
             # Offsets are drawn independently per trip, so fix invalid intervals and
             # overlaps before writing the day's schedule (may drop trips that spill past 23:00).
-            departures_with_variance, arrivals_with_variance, keep_trip = self._normalize_day_trip_times(
+            departures_with_variance, home_hours_with_variance, keep_trip = self._normalize_day_trip_times(
                 departures_with_variance,
-                arrivals_with_variance,
+                home_hours_with_variance,
             )
             miles_variance = miles_variance[keep_trip]
             num_trips = int(keep_trip.sum())
@@ -838,7 +873,7 @@ class EVDemandCalculator:
             vehicle_ids.extend([profile.vehicle_id] * num_trips)
             dates.extend([current_date] * num_trips)
             departure_hours.extend(departures_with_variance[keep_trip].tolist())
-            arrival_hours.extend(arrivals_with_variance[keep_trip].tolist())
+            arrival_hours.extend(home_hours_with_variance[keep_trip].tolist())
             miles_driven.extend(miles_variance.tolist())
 
         # Create DataFrame directly from lists (vectorized approach)
@@ -987,117 +1022,6 @@ class EVDemandCalculator:
             )
         )
     
-    @staticmethod
-    def _build_hourly_discharge_kwh(
-        trip_schedules: pl.DataFrame,
-        hours_base: pl.DataFrame,
-        *,
-        kwh_per_mile: float,
-        ev_adoption_rate: float,
-    ) -> pl.DataFrame:
-        """Spread each trip's driving energy uniformly over its inclusive away-from-home hours.
-        
-        Args:
-            trip_schedules (pl.DataFrame): DataFrame of trip schedules
-            hours_base (pl.DataFrame): hourly calendar for the instance date range
-            kwh_per_mile (float): kWh per mile
-            ev_adoption_rate (float): EV adoption rate
-
-        Returns:
-            pl.DataFrame: hourly discharge kWh for each trip
-        """
-        if trip_schedules.is_empty():
-            # no trips -> no driving discharge; return typed empty frame for downstream joins
-            return pl.DataFrame(
-                schema={
-                    "bldg_id": pl.Int64,
-                    "vehicle_id": pl.Int64,
-                    "hour_index": pl.UInt32,
-                    "discharge_kwh": pl.Float64,
-                }
-            )
-
-        away_hour_discharge = (
-            trip_schedules.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
-            .with_columns(
-                # same inclusive away-hour model as presence: dep through arr (+1 for exclusive end)
-                pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour") + 1).alias("hour"),
-                (pl.col("miles_driven") * kwh_per_mile * ev_adoption_rate).alias("trip_kwh"),
-            )
-            .with_columns(
-                # divide total trip energy evenly across all away hours for that trip
-                (pl.col("trip_kwh") / pl.col("hour").list.len()).alias("discharge_kwh_per_away_hour")
-            )
-            .explode("hour")  # one row per away hour instead of one row per trip
-            .join(
-                hours_base.select("date", "hour", "hour_index"),  # map calendar (date, hour) -> hour_index index
-                on=["date", "hour"],
-                how="inner",
-            )
-            .group_by("bldg_id", "vehicle_id", "hour_index")
-            # overlapping trips contributing to the same hour add their discharge shares together
-            .agg(pl.col("discharge_kwh_per_away_hour").sum().alias("discharge_kwh"))
-        )
-        return away_hour_discharge
-
-    @staticmethod
-    def _simulate_hourly_soc(
-        at_home: np.ndarray,
-        discharge_kwh: np.ndarray,
-        *,
-        battery_capacity_kwh: float,
-        charger_power_kw: float,
-        initial_soc_kwh: float,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Hour-by-hour SOC balance: discharge while away, then charge at Level 2 when home and not full.
-
-        Returns beginning-of-hour SOC (``soc_kwh[i]`` is the level at the start of hour *i*, before that
-        hour's discharge and charge), hourly charge energy, and a per-hour underflow flag when discharge
-        exceeds available SOC (SOC is clamped to zero).
-
-        Args:
-            at_home (np.ndarray): Array of at_home flags for each hour
-            discharge_kwh (np.ndarray): Array of discharge kWh for each hour
-            battery_capacity_kwh (float): Battery capacity in kWh
-            charger_power_kw (float): Charger power in kW
-            initial_soc_kwh (float): Initial SOC in kWh at the start of hour 0
-
-        Returns:
-            tuple[np.ndarray, np.ndarray, np.ndarray]: Tuple of beginning-of-hour SOC, hourly charge energy,
-            and per-hour underflow flag
-        """
-        if len(at_home) != len(discharge_kwh):
-            raise ValueError(
-                f"at_home and discharge_kwh must have the same length, got {len(at_home)} and {len(discharge_kwh)}"
-            )
-
-        num_hours = len(at_home)
-        soc_kwh = np.empty(num_hours, dtype=np.float64)  # beginning-of-hour battery level
-        charge_kwh = np.zeros(num_hours, dtype=np.float64)  # energy charged each hour
-        soc_underflow = np.zeros(num_hours, dtype=bool)  # True when trip draw exceeds available SOC
-
-        current_soc = initial_soc_kwh
-        for hour_idx in range(num_hours):
-            soc_kwh[hour_idx] = current_soc  # record beginning-of-hour SOC before discharge and charge
-
-            discharge = discharge_kwh[hour_idx]
-            if discharge > 0.0:
-                if discharge > current_soc:
-                    # trip requires more energy than remains in the battery; clamp and flag (no public charging)
-                    soc_underflow[hour_idx] = True
-                    current_soc = 0.0
-                else:
-                    current_soc -= discharge
-
-            if at_home[hour_idx] and current_soc < battery_capacity_kwh:
-                # plug in immediately at Level 2 rate whenever home and not full (no smart scheduling)
-                added = min(charger_power_kw, battery_capacity_kwh - current_soc)
-                charge_kwh[hour_idx] = added
-                current_soc += added
-
-        return soc_kwh, charge_kwh, soc_underflow
-
     def generate_vehicle_presence_schedules(
         self,
         trip_schedules: pl.DataFrame,
@@ -1106,11 +1030,12 @@ class EVDemandCalculator:
         vehicle_keys: Iterable[tuple[str | int, int]] | None = None,
     ) -> dict[tuple[str | int, int], pl.DataFrame]:
         """
-        Map each vehicle to an hourly schedule of home/away status for the instance date range.
+        Map each vehicle's trip schedule to an hourly schedule of home/away status for the instance date range.
 
-        Uses the same inclusive-hour trip model as generate_daily_schedules: a vehicle is
-        away from home from departure_hour through arrival_hour on each trip day. It is at
-        home (and available to charge) in all other hours.
+        Uses the same away-hour model as generate_daily_trip_schedules: a vehicle is
+        away from home for hours ``range(departure_hour, arrival_hour)`` on each trip day,
+        where ``arrival_hour`` is the first hour at home. It is at home (and available to
+        charge) in all other hours.
 
         Args:
             trip_schedules (pl.DataFrame): DataFrame of trip schedules
@@ -1148,9 +1073,8 @@ class EVDemandCalculator:
             away_hours = (
                 trip_schedules.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
                 .with_columns(
-                    # inclusive hour model: away from departure_hour through arrival_hour
-                    # +1 to include the arrival hour itself
-                    pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour") + 1).alias("hour"),
+                    # away from departure_hour (inclusive) through arrival_hour (exclusive)
+                    pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour")).alias("hour"),
                 )
                 .explode("hour")  # one row per away hour instead of one row per trip interval
                 .select("bldg_id", "vehicle_id", "date", "hour")  # minimal join keys for marking away hours
@@ -1183,26 +1107,286 @@ class EVDemandCalculator:
             )
 
         return presence_by_vehicle  # dict[(bldg_id, vehicle_id)] -> hourly presence DataFrame
+    
+    @staticmethod
+    def _build_hourly_discharge_kwh(
+        trip_schedules: pl.DataFrame,
+        hours_base: pl.DataFrame,
+        *,
+        kwh_per_mile: float,
+        ev_adoption_rate: float,
+    ) -> pl.DataFrame:
+        """
+        Map each vehicle's trip schedule to an hourly schedule of discharge kWh for the instance date range.
+        Spread each trip's driving energy uniformly over its away-from-home hours.
+
+        Away hours are ``range(departure_hour, arrival_hour)`` where ``arrival_hour`` is the
+        first hour at home (exclusive end of the away interval).
+        
+        Args:
+            trip_schedules (pl.DataFrame): DataFrame of trip schedules
+            hours_base (pl.DataFrame): hourly calendar for the instance date range
+            kwh_per_mile (float): kWh per mile
+            ev_adoption_rate (float): EV adoption rate
+
+        Returns:
+            pl.DataFrame: hourly discharge kWh for each trip
+        """
+        if trip_schedules.is_empty():
+            # no trips -> no driving discharge; return typed empty frame for downstream joins
+            return pl.DataFrame(
+                schema={
+                    "bldg_id": pl.Int64,
+                    "vehicle_id": pl.Int64,
+                    "hour_index": pl.UInt32,
+                    "discharge_kwh": pl.Float64,
+                }
+            )
+
+        away_hour_discharge = (
+            trip_schedules.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
+            .with_columns(
+                # away from departure_hour (inclusive) through arrival_hour (exclusive)
+                pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour")).alias("hour"),
+                (pl.col("miles_driven") * kwh_per_mile * ev_adoption_rate).alias("trip_kwh"),
+            )
+            .with_columns(
+                # divide total trip energy evenly across all away hours for that trip
+                (pl.col("trip_kwh") / pl.col("hour").list.len()).alias("discharge_kwh_per_away_hour")
+            )
+            .explode("hour")  # one row per away hour instead of one row per trip
+            .join(
+                hours_base.select("date", "hour", "hour_index"),  # map calendar (date, hour) -> hour_index index
+                on=["date", "hour"],
+                how="inner",
+            )
+            .group_by("bldg_id", "vehicle_id", "hour_index")
+            # overlapping trips contributing to the same hour add their discharge shares together
+            .agg(pl.col("discharge_kwh_per_away_hour").sum().alias("discharge_kwh"))
+        )
+        return away_hour_discharge
+
+    @staticmethod
+    def _schedule_immediate_charging(
+        at_home: np.ndarray,
+        discharge_kwh: np.ndarray,
+        *,
+        battery_capacity_kwh: float,
+        charger_power_kw: float,
+        initial_soc_kwh: float,
+    ) -> np.ndarray:
+        """
+        Given a vehicle's hourly presence and discharge schedule, build an hourly charge schedule 
+        by plugging in at max power whenever home and not full.
+
+        This is the naive "charge as soon as you get home" policy. It forward-simulates SOC
+        hour-by-hour because each hour's charge limit depends on energy remaining after that
+        hour's trip draw. Returns only ``charge_kwh``; pair with ``_compute_hourly_soc`` for
+        beginning-of-hour SOC and underflow flags.
+
+        Args:
+            at_home: Whether the vehicle is home at the start of each hour
+            discharge_kwh: Fixed trip draw ``x_t^DB`` each hour (kWh)
+            battery_capacity_kwh: Battery capacity ``K^B`` (kWh)
+            charger_power_kw: Max charge rate ``C^B`` when home (kW = kWh/hour)
+            initial_soc_kwh: Start-of-hour-0 SOC ``s_0`` (kWh)
+
+        Returns:
+            Hourly charge energy ``x_t^CB`` (kWh), same length as ``at_home``
+        """
+        if len(at_home) != len(discharge_kwh):
+            raise ValueError(
+                f"at_home and discharge_kwh must have the same length, got {len(at_home)} and {len(discharge_kwh)}"
+            )
+
+        num_hours = len(at_home)
+        charge_kwh = np.zeros(num_hours, dtype=np.float64)
+        current_soc = initial_soc_kwh
+
+        for hour_idx in range(num_hours):
+            # Discharge first (same order as _compute_hourly_soc).
+            trip_draw = discharge_kwh[hour_idx]
+            if trip_draw > current_soc:
+                current_soc = 0.0  # no public charging; battery empty until next charge
+            else:
+                current_soc -= trip_draw
+
+            # Charge at Level 2 whenever home and below full capacity.
+            if at_home[hour_idx] and current_soc < battery_capacity_kwh:
+                added = min(charger_power_kw, battery_capacity_kwh - current_soc)
+                charge_kwh[hour_idx] = added
+                current_soc += added
+
+        return charge_kwh
+
+    @staticmethod
+    def _schedule_cost_minimizing_charging(
+        at_home: np.ndarray,
+        discharge_kwh: np.ndarray,
+        *,
+        battery_capacity_kwh: float,
+        charger_power_kw: float,
+        initial_soc_kwh: float,
+        hourly_price_usd_per_kwh: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Given a vehicle's hourly presence and discharge schedule, build a perfect-foresight hourly 
+        charge schedule that minimizes electricity cost (cvxpy LP).
+
+        Returns only ``charge_kwh``; pair with ``_compute_hourly_soc`` for beginning-of-hour
+        SOC and underflow flags. This is a theoretical lower bound on charging cost when the
+        driver knows all future trips and can shift charging to the cheapest home hours.
+
+        LP formulation (``T = num_hours`` clock hours indexed ``0..T-1``):
+
+        - Given: ``s_0`` (``initial_soc_kwh``), fixed discharge ``x_t^DB = discharge_kwh[t]``
+        - Decide: charge ``x_t^CB`` for ``t = 0..T-1`` and start-of-hour SOC ``s_t`` for ``t = 1..T``
+        - Minimize ``sum_{t=0}^{T-1} p_t x_t^CB``
+        - Subject to:
+            ``s_1 = s_0 + x_0^CB - x_0^DB``
+            ``s_{t+1} = s_t + x_t^CB - x_t^DB`` for ``t = 1..T-1``
+            ``0 <= x_t^CB <= C^B`` (charger limit when home, else 0)
+            ``0 <= s_t <= K^B`` for ``t = 1..T``
+            ``s_T = s_0`` (return to initial SOC at horizon end)
+
+        Discharging and charging are mutually exclusive in this model: trip draw is
+        assigned to away hours where ``x_t^CB = 0``, so ``s_t >= x_t^DB`` follows from
+        ``s_{t+1} >= 0`` and the transition equalities without an extra constraint.
+
+        Args:
+            at_home: Whether the vehicle is home at the start of each hour
+            discharge_kwh: Fixed trip draw ``x_t^DB`` each hour (kWh)
+            battery_capacity_kwh: Battery capacity ``K^B`` (kWh)
+            charger_power_kw: Max charge rate ``C^B`` when home (kW = kWh/hour)
+            initial_soc_kwh: Start-of-hour-0 SOC ``s_0`` (kWh)
+            hourly_price_usd_per_kwh: Marginal price ``p_t`` each hour ($/kWh)
+
+        Returns:
+            Hourly charge energy ``x_t^CB`` (kWh), same length as ``at_home``
+
+        Raises:
+            ValueError: If input arrays differ in length or prices are negative
+            RuntimeError: If the LP solver fails to find a feasible schedule
+        """
+        num_hours = len(at_home)
+        if len(discharge_kwh) != num_hours:
+            raise ValueError(
+                f"at_home and discharge_kwh must have the same length, got {len(at_home)} and {len(discharge_kwh)}"
+            )
+        if len(hourly_price_usd_per_kwh) != num_hours:
+            raise ValueError(
+                "hourly_price_usd_per_kwh must match schedule length, "
+                f"got {len(hourly_price_usd_per_kwh)} and expected {num_hours}"
+            )
+        if np.any(hourly_price_usd_per_kwh < 0):
+            raise ValueError("hourly_price_usd_per_kwh must be non-negative")
+
+        discharge = np.asarray(discharge_kwh, dtype=np.float64)
+        prices = np.asarray(hourly_price_usd_per_kwh, dtype=np.float64)
+        max_charge = np.where(at_home, charger_power_kw, 0.0)
+        s_0 = float(initial_soc_kwh)
+
+        # Decision variables: x_t^CB (charge) and s_t for t = 1..T (s_0 is fixed).
+        charge = cp.Variable(num_hours, name="charge")
+        soc = cp.Variable(num_hours, name="soc")  # s_1..s_T
+
+        constraints: list[cp.Constraint] = [
+            soc[0] == s_0 + charge[0] - discharge[0],  # s_1 = s_0 + x_0^CB - x_0^DB
+            # soc[-1] == s_0,  # terminal SOC: must replenish any energy drawn from s_0
+            charge >= 0,
+            charge <= max_charge,  # zero when away (discharge and charge never overlap)
+            soc >= 0,
+            soc <= battery_capacity_kwh,
+        ]
+        if num_hours > 1:
+            # s_{t+1} = s_t + x_t^CB - x_t^DB for t = 1..T-1
+            constraints.append(soc[1:] == soc[:-1] + charge[1:] - discharge[1:])
+
+        problem = cp.Problem(cp.Minimize(prices @ charge), constraints)
+        problem.solve()
+
+        if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
+            raise RuntimeError(f"Cost-minimizing charging LP failed: {problem.status}")
+
+        return np.asarray(charge.value, dtype=np.float64).reshape(-1)
+
+    @staticmethod
+    def _compute_hourly_soc(
+        discharge_kwh: np.ndarray,
+        charge_kwh: np.ndarray,
+        *,
+        initial_soc_kwh: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Given a vehicle's hourly discharge and charge schedule, derive the beginning-of-hour SOC 
+        and underflow flags.
+
+        Shared by both charging strategies: once ``charge_kwh`` is chosen, SOC is computed with
+        the same hour-by-hour rules. ``soc_kwh[t]`` is the battery level at the **start** of
+        hour *t*; within the hour, discharge is applied first, then charge.
+
+        Args:
+            discharge_kwh: Fixed trip draw each hour (kWh)
+            charge_kwh: Scheduled charge each hour (kWh), from immediate or cost-minimizing policy
+            initial_soc_kwh: Start-of-hour-0 SOC (kWh)
+
+        Returns:
+            Tuple of beginning-of-hour SOC (kWh) and per-hour underflow flag (True when trip
+            draw exceeds available SOC at the start of that hour; SOC is clamped to zero)
+        """
+        if len(discharge_kwh) != len(charge_kwh):
+            raise ValueError(
+                f"discharge_kwh and charge_kwh must have the same length, got {len(discharge_kwh)} and {len(charge_kwh)}"
+            )
+
+        num_hours = len(discharge_kwh)
+        soc_kwh = np.empty(num_hours, dtype=np.float64)
+        soc_underflow = np.zeros(num_hours, dtype=bool)
+
+        current_soc = initial_soc_kwh
+        for hour_idx in range(num_hours):
+            soc_kwh[hour_idx] = current_soc  # record beginning-of-hour SOC
+
+            trip_draw = discharge_kwh[hour_idx]
+            if trip_draw > current_soc + 1e-9:
+                soc_underflow[hour_idx] = True
+                current_soc = 0.0
+            else:
+                current_soc -= trip_draw
+
+            current_soc += charge_kwh[hour_idx]  # charge after discharge within the hour
+
+        return soc_kwh, soc_underflow
 
     def generate_vehicle_soc_schedules(
         self,
         trip_schedules: pl.DataFrame,
         *,
         vehicle_keys: Iterable[tuple[str | int, int]] | None = None,
-        presence_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] | None = None,
         hours_base: pl.DataFrame | None = None,
+        presence_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] | None = None,
         battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH,
         kwh_per_mile: float = DEFAULT_KWH_PER_MILE,
         charger_power_kw: float = DEFAULT_LEVEL2_CHARGER_KW,
         ev_adoption_rate: float = 1.0,
         initial_soc_kwh: float | None = None,
+        charging_strategy: ChargingStrategy = "immediate",
+        hourly_price_usd_per_kwh: np.ndarray | None = None,
     ) -> dict[tuple[str | int, int], pl.DataFrame]:
         """
         Map each vehicle to an hourly SOC, charging, and discharge schedule for the instance date range.
 
+        Pipeline per vehicle:
+        1. Spread trip miles into hourly ``discharge_kwh`` (away hours only)
+        2. Build ``charge_kwh`` via ``charging_strategy`` (immediate or cost-minimizing LP)
+        3. Derive ``soc_kwh`` and ``soc_underflow`` from discharge + charge
+
         ``soc_kwh`` is the battery level at the beginning of each hour (aligned with ``timestamp``).
-        Vehicles start fully charged and recharge at ``charger_power_kw`` whenever they
-        are home and below full capacity.
+
+        Charging strategies:
+        - ``immediate``: charge at full power whenever home and not full (default).
+        - ``cost_minimizing``: perfect-foresight LP that shifts charging to the cheapest
+          home hours while meeting all trip energy needs. Requires ``hourly_price_usd_per_kwh``.
 
         Args:
             trip_schedules: DataFrame of trip schedules
@@ -1215,6 +1399,8 @@ class EVDemandCalculator:
             charger_power_kw: Charger power in kW
             ev_adoption_rate: EV adoption rate
             initial_soc_kwh: Initial SOC in kWh at the start of hour 0
+            charging_strategy: ``immediate`` or ``cost_minimizing``
+            hourly_price_usd_per_kwh: Length-``num_hours`` marginal price array for optimized charging
 
         Returns:
             Dict of vehicle keys to hourly SOC schedules
@@ -1225,6 +1411,7 @@ class EVDemandCalculator:
             ValueError: If ``kwh_per_mile`` is negative
             ValueError: If ``initial_soc_kwh`` is not within [0, ``battery_capacity_kwh``]
             ValueError: If a pre-built presence schedule does not match the hourly calendar length
+            ValueError: If ``charging_strategy`` is ``cost_minimizing`` without hourly prices
         """
         if battery_capacity_kwh <= 0:
             raise ValueError(f"battery_capacity_kwh must be positive, got {battery_capacity_kwh}")
@@ -1240,6 +1427,14 @@ class EVDemandCalculator:
         if hours_base is None:
             hours_base = self._build_hours_base()
         num_hours = hours_base.height
+
+        if charging_strategy == "cost_minimizing":
+            if hourly_price_usd_per_kwh is None:
+                raise ValueError("hourly_price_usd_per_kwh is required when charging_strategy='cost_minimizing'")
+            if len(hourly_price_usd_per_kwh) != num_hours:
+                raise ValueError(
+                    f"hourly_price_usd_per_kwh must have length {num_hours}, got {len(hourly_price_usd_per_kwh)}"
+                )
 
         if presence_by_vehicle is None:
             presence_by_vehicle = self.generate_vehicle_presence_schedules(
@@ -1283,11 +1478,28 @@ class EVDemandCalculator:
                 discharge_arr[int(hour_index)] = discharge
 
             at_home = presence["at_home"].to_numpy()
-            soc_kwh, charge_kwh, soc_underflow = self._simulate_hourly_soc(
-                at_home,
+            # Step 2: choose hourly charge schedule (strategy-specific).
+            if charging_strategy == "immediate":
+                charge_kwh = self._schedule_immediate_charging(
+                    at_home,
+                    discharge_arr,
+                    battery_capacity_kwh=battery_capacity_kwh,
+                    charger_power_kw=charger_power_kw,
+                    initial_soc_kwh=start_soc,
+                )
+            else:
+                charge_kwh = self._schedule_cost_minimizing_charging(
+                    at_home,
+                    discharge_arr,
+                    battery_capacity_kwh=battery_capacity_kwh,
+                    charger_power_kw=charger_power_kw,
+                    initial_soc_kwh=start_soc,
+                    hourly_price_usd_per_kwh=np.asarray(hourly_price_usd_per_kwh, dtype=np.float64),
+                )
+            # Step 3: derive beginning-of-hour SOC from discharge + charge (shared logic).
+            soc_kwh, soc_underflow = self._compute_hourly_soc(
                 discharge_arr,
-                battery_capacity_kwh=battery_capacity_kwh,
-                charger_power_kw=charger_power_kw,
+                charge_kwh,
                 initial_soc_kwh=start_soc,
             )
 
@@ -1304,10 +1516,33 @@ class EVDemandCalculator:
     def vehicle_hourly_schedules_to_dataframe(
         schedules_by_vehicle: dict[tuple[str | int, int], pl.DataFrame],
     ) -> pl.DataFrame:
-        """Flatten per-vehicle hourly schedule dicts into a single long-form DataFrame."""
+        """Flatten per-vehicle hourly schedule dicts into a single long-form DataFrame.
+
+        Stacks one row per vehicle-hour so building-level aggregations (e.g. TOU cost) can
+        use ``group_by("bldg_id")`` instead of looping over the input dict.
+
+        Args:
+            schedules_by_vehicle: Dict keyed by ``(bldg_id, vehicle_id)`` with hourly frames
+                from ``generate_vehicle_presence_schedules`` or ``generate_vehicle_soc_schedules``
+
+        Returns:
+            DataFrame with the following columns:
+            - bldg_id: Building ID
+            - vehicle_id: Vehicle ID
+            - hour_index: Hour index
+            - timestamp: Timestamp
+            - at_home: Whether the vehicle is at home
+            - away_from_home: Whether the vehicle is away from home
+            - can_charge: Whether the vehicle can charge
+            - discharge_kwh: Discharge kWh
+            - charge_kwh: Charge kWh
+            - soc_kwh: SOC kWh
+            - soc_underflow: Whether the vehicle has a SOC underflow
+        """
         if not schedules_by_vehicle:
             return pl.DataFrame()
 
+        # Tag each per-vehicle frame with its building/vehicle keys, then stack.
         frames = [
             frame.with_columns(
                 pl.lit(bldg_id).alias("bldg_id"),
