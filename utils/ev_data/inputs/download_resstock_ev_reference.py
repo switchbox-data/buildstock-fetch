@@ -25,10 +25,7 @@ import requests
 RESSTOCK_BASE = "https://raw.githubusercontent.com/NREL/resstock/develop"
 SATURATIONS_URL = f"{RESSTOCK_BASE}/project_national/resources/options_saturations.csv"
 LOOKUP_URL = f"{RESSTOCK_BASE}/resources/options_lookup.tsv"
-EV_OWNERSHIP_URL = (
-    f"{RESSTOCK_BASE}/project_national/housing_characteristics/"
-    "Electric%20Vehicle%20Ownership.tsv"
-)
+EV_OWNERSHIP_URL = f"{RESSTOCK_BASE}/project_national/housing_characteristics/Electric%20Vehicle%20Ownership.tsv"
 
 # NREL/TP-5500-93766 Table 208 (Autonomie 2022 via TEMPO)
 AUTONOMIE_2022_VEHICLES: list[dict[str, object]] = [

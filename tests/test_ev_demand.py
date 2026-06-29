@@ -542,37 +542,83 @@ def test_compute_hourly_soc_is_beginning_of_hour(calculator):
 
 def test_cost_minimizing_charging_shifts_to_cheaper_hours(calculator):
     prices = np.array([0.20, 0.20, 0.10, 0.10])
-    at_home = np.array([True, True, True, True])
-    discharge = np.array([10.0, 0.0, 0.0, 0.0])
+    at_home = np.array([True, True, True, False])
+    discharge = np.array([0.0, 0.0, 0.0, 10.0])
 
     immediate_charge = calculator._schedule_immediate_charging(
         at_home,
         discharge,
         battery_capacity_kwh=90.0,
         charger_power_kw=7.2,
-        initial_soc_kwh=50.0,
+        initial_soc_kwh=5.0,
     )
-    optimized_charge = calculator._schedule_cost_minimizing_charging(
+    optimized_charge, optimized_shed = calculator._schedule_cost_minimizing_charging(
         at_home,
         discharge,
         battery_capacity_kwh=90.0,
         charger_power_kw=7.2,
-        initial_soc_kwh=50.0,
+        initial_soc_kwh=5.0,
         hourly_price_usd_per_kwh=prices,
     )
     _, optimized_underflow = calculator._compute_hourly_soc(
         discharge,
         optimized_charge,
-        initial_soc_kwh=50.0,
+        initial_soc_kwh=5.0,
     )
 
     immediate_cost = float((immediate_charge * prices).sum())
     optimized_cost = float((optimized_charge * prices).sum())
 
     assert not optimized_underflow.any()
-    assert optimized_charge.sum() == pytest.approx(10.0, rel=1e-6)
+    assert optimized_shed.sum() == pytest.approx(0.0, abs=1e-6)
+    assert optimized_charge.sum() == pytest.approx(5.0, rel=1e-6)
     assert optimized_cost <= immediate_cost + 1e-9
-    assert optimized_cost == pytest.approx(7.2 * 0.10 + 2.8 * 0.10, rel=1e-6)
+    assert optimized_charge[2] == pytest.approx(5.0, rel=1e-6)
+    assert optimized_cost == pytest.approx(5.0 * 0.10, rel=1e-6)
+
+
+def test_cost_minimizing_charging_is_feasible_when_trip_exceeds_initial_soc(calculator):
+    """Shed load keeps the LP feasible when away-hour trip draw exceeds start-of-hour SOC."""
+    at_home = np.array([False, True, True, True])
+    discharge = np.array([10.0, 0.0, 0.0, 0.0])
+    prices = np.array([0.10, 0.10, 0.10, 0.10])
+
+    charge, shed = calculator._schedule_cost_minimizing_charging(
+        at_home,
+        discharge,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=5.0,
+        hourly_price_usd_per_kwh=prices,
+    )
+
+    assert shed[0] == pytest.approx(5.0, rel=1e-6)
+    assert charge.sum() == pytest.approx(0.0, abs=0.1)
+
+
+def test_cost_minimizing_charging_sheds_trip_when_cheaper_than_charging(calculator):
+    prices = np.array([1.00, 1.00, 0.10, 0.10])
+    at_home = np.array([False, True, True, True])
+    discharge = np.array([10.0, 0.0, 0.0, 0.0])
+
+    charge, shed = calculator._schedule_cost_minimizing_charging(
+        at_home,
+        discharge,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=5.0,
+        hourly_price_usd_per_kwh=prices,
+        shed_load_penalty_usd_per_kwh=0.50,
+    )
+    _, underflow = calculator._compute_hourly_soc(
+        discharge,
+        charge,
+        initial_soc_kwh=5.0,
+    )
+
+    assert underflow[0]
+    assert shed[0] == pytest.approx(5.0, rel=1e-6)
+    assert charge.sum() == pytest.approx(0.0, abs=1e-6)
 
 
 def test_generate_vehicle_soc_schedules_cost_minimizing_not_more_expensive(calculator):
@@ -635,6 +681,180 @@ def test_immediate_charging_stays_full_without_trips(calculator):
     assert soc_kwh[-1] == pytest.approx(90.0)
     assert charge_kwh.sum() == pytest.approx(0.0)
     assert not soc_underflow.any()
+
+
+def test_off_peak_charging_never_charges_during_peak(calculator):
+    from datetime import date
+
+    hours_base = pl.DataFrame({
+        "hour_index": list(range(24)),
+        "date": [date(2022, 1, 1)] * 24,
+        "hour": list(range(24)),
+        "timestamp": [datetime(2022, 1, 1, hour) for hour in range(24)],
+    })
+    is_off_peak = EVDemandCalculator._build_is_off_peak(hours_base)
+    at_home = np.array([hour < 8 or hour >= 17 for hour in range(24)])
+    discharge = np.zeros(24, dtype=np.float64)
+    discharge[8:17] = 6.0 / 9.0
+
+    vehicle_trips = pl.DataFrame({
+        "bldg_id": ["b1"],
+        "vehicle_id": [1],
+        "date": [datetime(2022, 1, 1)],
+        "departure_hour": [8],
+        "arrival_hour": [17],
+        "miles_driven": [20.0],
+    })
+    charge_allowed, soc_target_kwh = EVDemandCalculator._build_off_peak_charging_params(
+        at_home,
+        discharge,
+        hours_base,
+        vehicle_trips,
+        battery_capacity_kwh=90.0,
+        is_off_peak=is_off_peak,
+    )
+    charge_kwh = EVDemandCalculator._schedule_off_peak_charging(
+        at_home,
+        discharge,
+        charge_allowed=charge_allowed,
+        soc_target_kwh=soc_target_kwh,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=18.0,
+    )
+
+    for peak_hour in range(17, 22):
+        assert charge_kwh[peak_hour] == pytest.approx(0.0)
+    assert charge_kwh.sum() > 0.0
+
+
+def test_off_peak_charging_blocks_between_trip_home_hours(calculator):
+    from datetime import date
+
+    hours_base = pl.DataFrame({
+        "hour_index": list(range(24)),
+        "date": [date(2022, 1, 1)] * 24,
+        "hour": list(range(24)),
+        "timestamp": [datetime(2022, 1, 1, hour) for hour in range(24)],
+    })
+    is_off_peak = EVDemandCalculator._build_is_off_peak(hours_base)
+    # Home 0-7, away 8-11, home 12-13 (off-peak lunch), away 14-16, home 17-23.
+    at_home = np.array([hour < 8 or hour in (12, 13) or hour >= 17 for hour in range(24)])
+    discharge = np.zeros(24, dtype=np.float64)
+    discharge[8:12] = 4.0 / 4.0
+    discharge[14:17] = 2.0 / 3.0
+
+    vehicle_trips = pl.DataFrame({
+        "bldg_id": ["b1", "b1"],
+        "vehicle_id": [1, 1],
+        "date": [datetime(2022, 1, 1), datetime(2022, 1, 1)],
+        "departure_hour": [8, 14],
+        "arrival_hour": [12, 17],
+        "miles_driven": [13.33, 6.67],
+    })
+    charge_allowed, _ = EVDemandCalculator._build_off_peak_charging_params(
+        at_home,
+        discharge,
+        hours_base,
+        vehicle_trips,
+        battery_capacity_kwh=90.0,
+        is_off_peak=is_off_peak,
+    )
+
+    assert not charge_allowed[12]
+    assert not charge_allowed[13]
+
+
+def test_off_peak_charging_no_emergency_override_after_low_soc_return(calculator):
+    from datetime import date
+
+    hours_base = pl.DataFrame({
+        "hour_index": list(range(24)),
+        "date": [date(2022, 1, 1)] * 24,
+        "hour": list(range(24)),
+        "timestamp": [datetime(2022, 1, 1, hour) for hour in range(24)],
+    })
+    is_off_peak = EVDemandCalculator._build_is_off_peak(hours_base)
+    at_home = np.array([hour < 8 or hour >= 17 for hour in range(24)])
+    discharge = np.zeros(24, dtype=np.float64)
+    discharge[8:17] = 30.0 / 9.0
+
+    vehicle_trips = pl.DataFrame({
+        "bldg_id": ["b1"],
+        "vehicle_id": [1],
+        "date": [datetime(2022, 1, 1)],
+        "departure_hour": [8],
+        "arrival_hour": [17],
+        "miles_driven": [100.0],
+    })
+    charge_allowed, soc_target_kwh = EVDemandCalculator._build_off_peak_charging_params(
+        at_home,
+        discharge,
+        hours_base,
+        vehicle_trips,
+        battery_capacity_kwh=90.0,
+        is_off_peak=is_off_peak,
+    )
+    charge_kwh = EVDemandCalculator._schedule_off_peak_charging(
+        at_home,
+        discharge,
+        charge_allowed=charge_allowed,
+        soc_target_kwh=soc_target_kwh,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=10.0,
+    )
+    immediate_charge = EVDemandCalculator._schedule_immediate_charging(
+        at_home,
+        discharge,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=10.0,
+    )
+    soc_kwh, _ = EVDemandCalculator._compute_hourly_soc(
+        discharge,
+        charge_kwh,
+        initial_soc_kwh=10.0,
+    )
+
+    assert charge_kwh[17:22].sum() == pytest.approx(0.0)
+    assert immediate_charge[17:22].sum() > 0.0
+    assert soc_kwh[17] < soc_target_kwh[17]
+
+
+def test_generate_vehicle_soc_schedules_off_peak(calculator):
+    profile = VehicleProfile(
+        bldg_id="b1",
+        vehicle_id=1,
+        weekday_departure_hour=[8],
+        weekday_arrival_hour=[17],
+        weekday_miles=[20.0],
+        weekday_trip_weights=[1.0],
+        weekend_departure_hour=[10],
+        weekend_arrival_hour=[19],
+        weekend_miles=[25.0],
+        weekend_trip_weights=[1.0],
+        weekday_trip_ids=[1],
+        weekend_trip_ids=[1],
+    )
+    trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
+    hours_base = calculator._build_hours_base()
+    peak_hours = list(range(17, 22))
+
+    immediate = calculator.generate_vehicle_soc_schedules(
+        trip_schedules,
+        vehicle_keys=[("b1", 1)],
+        charging_strategy="immediate",
+    )[("b1", 1)]
+    off_peak = calculator.generate_vehicle_soc_schedules(
+        trip_schedules,
+        vehicle_keys=[("b1", 1)],
+        charging_strategy="off_peak",
+    )[("b1", 1)]
+
+    peak_charge_kwh = off_peak.filter(pl.col("timestamp").dt.hour().is_in(peak_hours))["charge_kwh"].sum()
+    assert peak_charge_kwh == pytest.approx(0.0)
+    assert off_peak["charge_kwh"].sum() <= immediate["charge_kwh"].sum() + 1e-6
 
 
 def test_vehicle_hourly_schedules_to_dataframe(calculator):

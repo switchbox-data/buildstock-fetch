@@ -322,11 +322,7 @@ def select_file_types(releases: BuildstockReleases, inputs: InputsMaybe) -> set[
     )
     if set(end_use_load_curves) & available_releases.file_types:
         choices.append(_category_choice("End Use Load Curves"))
-        choices.extend(
-            _filetype_choice(ft)  # type: ignore[arg-type]
-            for ft in end_use_load_curves
-            if ft in available_releases.file_types
-        )
+        choices.extend(_filetype_choice(ft) for ft in end_use_load_curves if ft in available_releases.file_types)
 
     simulation_files = (
         "hpxml",
@@ -334,11 +330,7 @@ def select_file_types(releases: BuildstockReleases, inputs: InputsMaybe) -> set[
     )
     if set(simulation_files) & available_releases.file_types:
         choices.append(_category_choice("Simulation Files"))
-        choices.extend(
-            _filetype_choice(ft)  # type: ignore[arg-type]
-            for ft in simulation_files
-            if ft in available_releases.file_types
-        )
+        choices.extend(_filetype_choice(ft) for ft in simulation_files if ft in available_releases.file_types)
 
     if "weather" in available_releases.file_types:
         choices.append(_category_choice("Weather"))
@@ -431,8 +423,10 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[Building]
             str | None,
             questionary.text(
                 f"Enter the number of files to download for State {group.state}, Upgrade {group.upgrade_id} (0-{total_for_state_upgrade}):",
-                validate=lambda text, max_val=total_for_state_upgrade: (text.isdigit() and 0 <= int(text) <= max_val)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
-                or f"Please enter a number between 0 and {max_val}",
+                validate=lambda text, max_val=total_for_state_upgrade: (
+                    (text.isdigit() and 0 <= int(text) <= max_val)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+                    or f"Please enter a number between 0 and {max_val}"
+                ),
             ).ask(),
         )
 

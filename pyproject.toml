@@ -74,6 +74,8 @@ lint = [
 dev-utils = [
   "boto3>=1.33.0",
   "botocore>=1.33.0",
+  "cvxpy>=1.6.0",
+  "matplotlib>=3.8.0",
   "numpy>=1.26.4",
   "scikit-learn>=1.6.1",
   "awscli>=1.32.0",
@@ -173,7 +175,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"dev/*.ipynb" = ["RUF001", "RUF003", "TRY003", "S101", "E402", "RUF005"]
 "tests/*" = ["S101"]
+"utils/ev_demand.py" = ["TRY003"]
 "tests/test_release.py" = [
   "S603",   # subprocess call: check for execution of untrusted input
   "S607",   # Starting a process with a partial executable path

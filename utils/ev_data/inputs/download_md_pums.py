@@ -20,9 +20,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-CENSUS_MD_PUMS_URL = (
-    "https://www2.census.gov/programs-surveys/acs/data/pums/2021/1-Year/csv_hmd.zip"
-)
+CENSUS_MD_PUMS_URL = "https://www2.census.gov/programs-surveys/acs/data/pums/2021/1-Year/csv_hmd.zip"
 PUMS_COLUMNS = ["HINCP", "VEH", "NP", "PUMA", "WGTP"]
 DEFAULT_OUTPUT = Path(__file__).parent / "MD_2021_pums_PUMA_HINCP_VEH_NP.csv"
 
@@ -53,17 +51,21 @@ def download_md_pums(output_path: Path = DEFAULT_OUTPUT) -> Path:
                 schema_overrides={"PUMA": pl.Utf8},
             )
 
-    pums = pums.select(PUMS_COLUMNS).with_columns(
-        pl.col("HINCP").cast(pl.Int64, strict=False),
-        pl.col("VEH").cast(pl.Int64, strict=False),
-        pl.col("NP").cast(pl.Int64, strict=False),
-        pl.col("WGTP").cast(pl.Int64, strict=False),
-    ).filter(
-        pl.col("HINCP").is_not_null(),
-        pl.col("HINCP") > 0,
-        pl.col("VEH").is_not_null(),
-        pl.col("NP").is_not_null(),
-        pl.col("WGTP") > 0,
+    pums = (
+        pums.select(PUMS_COLUMNS)
+        .with_columns(
+            pl.col("HINCP").cast(pl.Int64, strict=False),
+            pl.col("VEH").cast(pl.Int64, strict=False),
+            pl.col("NP").cast(pl.Int64, strict=False),
+            pl.col("WGTP").cast(pl.Int64, strict=False),
+        )
+        .filter(
+            pl.col("HINCP").is_not_null(),
+            pl.col("HINCP") > 0,
+            pl.col("VEH").is_not_null(),
+            pl.col("NP").is_not_null(),
+            pl.col("WGTP") > 0,
+        )
     )
 
     pums.write_csv(output_path)

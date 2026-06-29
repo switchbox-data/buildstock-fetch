@@ -5,7 +5,7 @@ import sys
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, Literal, cast, overload
 
@@ -126,8 +126,14 @@ HOURS_PER_YEAR = 8760  # standard hourly load-curve length (365 days x 24 hours)
 DEFAULT_BATTERY_CAPACITY_KWH = 120.0  # uniform fleet battery assumption for SOC modeling
 DEFAULT_KWH_PER_MILE = 0.30  # simple-model assumption
 DEFAULT_LEVEL2_CHARGER_KW = 7.2  # typical 32 A @ 240 V residential Level 2 charger
+DEFAULT_PEAK_CLOCK_HOURS: Final[tuple[int, ...]] = (17, 18, 19, 20, 21)  # 5pm-9pm on-peak window
+DEFAULT_SOC_MIN_FRACTION = 0.2  # minimum comfortable SOC (SOC^min in TOU EV doc)
+DEFAULT_SOC_SAFETY_BUFFER_FRACTION = 0.2  # extra SOC buffer above daily trip energy need
+# Default shed penalty when none is passed: high enough that shedding is avoided unless
+# required for LP feasibility (e.g. trip draw exceeds available SOC with no home charging).
+DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH = 1e6
 # How home charging is scheduled before SOC is derived from discharge + charge.
-ChargingStrategy = Literal["immediate", "cost_minimizing"]
+ChargingStrategy = Literal["immediate", "cost_minimizing", "off_peak"]
 
 
 def nhts_departure_hour(start_time: int) -> int:
@@ -1228,29 +1234,37 @@ class EVDemandCalculator:
         charger_power_kw: float,
         initial_soc_kwh: float,
         hourly_price_usd_per_kwh: np.ndarray,
-    ) -> np.ndarray:
+        shed_load_penalty_usd_per_kwh: float | np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Given a vehicle's hourly presence and discharge schedule, build a perfect-foresight hourly 
         charge schedule that minimizes electricity cost (cvxpy LP).
 
-        Returns only ``charge_kwh``; pair with ``_compute_hourly_soc`` for beginning-of-hour
-        SOC and underflow flags. This is a theoretical lower bound on charging cost when the
-        driver knows all future trips and can shift charging to the cheapest home hours.
+        Returns ``(charge_kwh, shed_load_kwh)``; pair with ``_compute_hourly_soc`` using the full
+        planned ``discharge_kwh`` so ``soc_underflow`` flags hours where the battery could not
+        cover the trip draw (shed load is reported separately, not subtracted from discharge).
+        This is a theoretical lower bound on charging cost when the driver knows all future trips
+        and can shift charging to the cheapest home hours.
 
         LP formulation (``T = num_hours`` clock hours indexed ``0..T-1``):
 
         - Given: ``s_0`` (``initial_soc_kwh``), fixed discharge ``x_t^DB = discharge_kwh[t]``
-        - Decide: charge ``x_t^CB`` for ``t = 0..T-1`` and start-of-hour SOC ``s_t`` for ``t = 1..T``
-        - Minimize ``sum_{t=0}^{T-1} p_t x_t^CB``
+        - Decide: charge ``x_t^CB``, shed load ``x_t^SL``, and start-of-hour SOC ``s_t`` for ``t = 1..T``
+        - Minimize ``sum_{t=0}^{T-1} (p_t x_t^CB + w_t x_t^SL)``
         - Subject to:
-            ``s_1 = s_0 + x_0^CB - x_0^DB``
-            ``s_{t+1} = s_t + x_t^CB - x_t^DB`` for ``t = 1..T-1``
+            ``s_1 = s_0 + x_0^CB - x_0^DB + x_0^SL``
+            ``s_{t+1} = s_t + x_t^CB - x_t^DB + x_t^SL`` for ``t = 1..T-1``
             ``0 <= x_t^CB <= C^B`` (charger limit when home, else 0)
+            ``0 <= x_t^SL <= x_t^DB`` (shed load cannot exceed planned trip draw)
             ``0 <= s_t <= K^B`` for ``t = 1..T``
-            ``s_T = s_0`` (return to initial SOC at horizon end)
+
+        Shed load ``x_t^SL`` is trip energy not taken from the battery (effective draw is
+        ``x_t^DB - x_t^SL``). Shedding is always allowed (``x_t^SL >= 0``); when
+        ``shed_load_penalty_usd_per_kwh`` is ``None``, a very large default penalty is
+        used so shedding only occurs when the LP would otherwise be infeasible.
 
         Discharging and charging are mutually exclusive in this model: trip draw is
-        assigned to away hours where ``x_t^CB = 0``, so ``s_t >= x_t^DB`` follows from
+        assigned to away hours where ``x_t^CB = 0``, so ``s_t >= x_t^DB - x_t^SL`` follows from
         ``s_{t+1} >= 0`` and the transition equalities without an extra constraint.
 
         Args:
@@ -1260,12 +1274,15 @@ class EVDemandCalculator:
             charger_power_kw: Max charge rate ``C^B`` when home (kW = kWh/hour)
             initial_soc_kwh: Start-of-hour-0 SOC ``s_0`` (kWh)
             hourly_price_usd_per_kwh: Marginal price ``p_t`` each hour ($/kWh)
+            shed_load_penalty_usd_per_kwh: Penalty ``w_t`` on shed load ($/kWh); ``None`` uses
+                ``DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH`` (shed only when needed for feasibility)
 
         Returns:
-            Hourly charge energy ``x_t^CB`` (kWh), same length as ``at_home``
+            Tuple of hourly charge energy ``x_t^CB`` (kWh) and shed load ``x_t^SL`` (kWh),
+            each the same length as ``at_home``
 
         Raises:
-            ValueError: If input arrays differ in length or prices are negative
+            ValueError: If input arrays differ in length or prices/penalties are negative
             RuntimeError: If the LP solver fails to find a feasible schedule
         """
         num_hours = len(at_home)
@@ -1286,29 +1303,254 @@ class EVDemandCalculator:
         max_charge = np.where(at_home, charger_power_kw, 0.0)
         s_0 = float(initial_soc_kwh)
 
-        # Decision variables: x_t^CB (charge) and s_t for t = 1..T (s_0 is fixed).
+        # set default shed load penalty if none is passed
+        if shed_load_penalty_usd_per_kwh is None:
+            shed_penalties = np.full(num_hours, DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH, dtype=np.float64)
+        elif isinstance(shed_load_penalty_usd_per_kwh, np.ndarray):
+            shed_penalties = np.asarray(shed_load_penalty_usd_per_kwh, dtype=np.float64)
+            if len(shed_penalties) != num_hours:
+                raise ValueError(
+                    "shed_load_penalty_usd_per_kwh must match schedule length, "
+                    f"got {len(shed_penalties)} and expected {num_hours}"
+                )
+        else:
+            shed_penalties = np.full(num_hours, float(shed_load_penalty_usd_per_kwh), dtype=np.float64)
+        if np.any(shed_penalties < 0):
+            raise ValueError("shed_load_penalty_usd_per_kwh must be non-negative")
+
+        # Decision variables: x_t^CB (charge), x_t^SL (shed), and s_t for t = 1..T.
         charge = cp.Variable(num_hours, name="charge")
         soc = cp.Variable(num_hours, name="soc")  # s_1..s_T
+        shed = cp.Variable(num_hours, name="shed_load")
 
         constraints: list[cp.Constraint] = [
-            soc[0] == s_0 + charge[0] - discharge[0],  # s_1 = s_0 + x_0^CB - x_0^DB
-            # soc[-1] == s_0,  # terminal SOC: must replenish any energy drawn from s_0
-            charge >= 0,
+            soc[0] == s_0 + charge[0] - discharge[0] + shed[0], # first-hour SOC constraint
+            charge >= 0, # charge cannot be negative
             charge <= max_charge,  # zero when away (discharge and charge never overlap)
-            soc >= 0,
-            soc <= battery_capacity_kwh,
+            shed >= 0, # shed cannot be negative
+            shed <= discharge, # shed cannot exceed planned trip draw
+            soc >= 0, # SOC cannot be negative
+            soc <= battery_capacity_kwh, # SOC cannot exceed battery capacity
         ]
         if num_hours > 1:
-            # s_{t+1} = s_t + x_t^CB - x_t^DB for t = 1..T-1
-            constraints.append(soc[1:] == soc[:-1] + charge[1:] - discharge[1:])
+            constraints.append(soc[1:] == soc[:-1] + charge[1:] - discharge[1:] + shed[1:]) # hour-by-hour SOC constraints
 
-        problem = cp.Problem(cp.Minimize(prices @ charge), constraints)
+        objective = prices @ charge + shed_penalties @ shed
+
+        problem = cp.Problem(cp.Minimize(objective), constraints)
         problem.solve()
 
         if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
             raise RuntimeError(f"Cost-minimizing charging LP failed: {problem.status}")
 
-        return np.asarray(charge.value, dtype=np.float64).reshape(-1)
+        charge_kwh = np.asarray(charge.value, dtype=np.float64).reshape(-1)
+        shed_load_kwh = np.asarray(shed.value, dtype=np.float64).reshape(-1)
+        return charge_kwh, shed_load_kwh
+
+    @staticmethod
+    def _build_is_off_peak(
+        hours_base: pl.DataFrame,
+        *,
+        peak_clock_hours: Iterable[int] = DEFAULT_PEAK_CLOCK_HOURS,
+    ) -> np.ndarray:
+        """Return a boolean mask that is True during off-peak clock hours.
+        
+        Args:
+            hours_base: Hourly calendar with ``date`` and ``hour`` columns
+            peak_clock_hours: On-peak clock hours (0-23) for ``off_peak`` strategy
+
+        Returns:
+            Boolean mask aligned with ``at_home`` that is True during off-peak clock hours
+        """
+        peak_hours = set(peak_clock_hours)  # doc set H: on-peak clock hours (default 5-9pm)
+        clock_hours = hours_base["hour"].to_numpy()
+        # True = off-peak (t ∉ H); reused for every vehicle on the same calendar
+        return np.array([hour not in peak_hours for hour in clock_hours], dtype=bool)
+
+    @staticmethod
+    def _build_off_peak_charging_params(
+        at_home: np.ndarray,
+        discharge_kwh: np.ndarray,
+        hours_base: pl.DataFrame,
+        vehicle_trips: pl.DataFrame,
+        *,
+        battery_capacity_kwh: float,
+        is_off_peak: np.ndarray,
+        soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
+        soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Build per-hour TOU off-peak charging controls from daily trip bounds.
+
+        Implements the primary TOU strategy in docs_tou_ev_schedule_value_learning.qmd (no emergency
+        override): charge only in ``Window_off`` until ``SOC_req`` for the upcoming departure day
+        is met.
+
+        For each calendar day *d*:
+        - ``Window_avail`` spans from ``last_arrival`` on day *d-1* through ``first_departure``
+          on day *d* (overnight + pre-departure morning hours).
+        - ``Window_off = Window_avail ∩ off-peak hours ∩ at_home``.
+        - ``SOC_req^d = max(SOC_min, daily_trip_kWh / K^B + buffer)`` in SOC fraction,
+          converted to kWh via ``battery_capacity_kwh``.
+
+        Midday at-home hours (e.g. between same-day trips) are outside ``Window_avail`` and
+        cannot charge, even if off-peak.
+
+        Args:
+            at_home: Whether the vehicle is home at the start of each hour
+            discharge_kwh: Fixed trip draw each hour (kWh)
+            hours_base: Hourly calendar with ``date`` and ``hour`` columns
+            vehicle_trips: Trip rows for this vehicle (may be empty)
+            battery_capacity_kwh: Battery capacity ``K^B`` (kWh)
+            is_off_peak: Off-peak mask aligned with ``at_home``
+            soc_min_fraction: Minimum comfortable SOC fraction ``SOC^min``
+            soc_safety_buffer_fraction: Extra SOC fraction above daily trip energy
+
+        Returns:
+            Tuple of ``charge_allowed`` (bool) and ``soc_target_kwh`` (float) arrays
+        """
+        num_hours = len(at_home)
+        if len(discharge_kwh) != num_hours or len(is_off_peak) != num_hours:
+            raise ValueError("at_home, discharge_kwh, and is_off_peak must have the same length")
+        if hours_base.height != num_hours:
+            raise ValueError(
+                f"hours_base must have {num_hours} rows to match schedule length, got {hours_base.height}"
+            )
+        if not 0.0 <= soc_min_fraction <= 1.0:
+            raise ValueError(f"soc_min_fraction must be within [0, 1], got {soc_min_fraction}")
+        if not 0.0 <= soc_safety_buffer_fraction <= 1.0:
+            raise ValueError(
+                f"soc_safety_buffer_fraction must be within [0, 1], got {soc_safety_buffer_fraction}"
+            )
+
+        dates = hours_base["date"].to_list()
+        clock_hours = hours_base["hour"].to_numpy().astype(np.int64)
+
+        # Sum hourly trip draw into calendar-day totals (miles_total × kWh/mile in discharge_kwh).
+        daily_discharge_kwh: dict[date, float] = {}
+        for day, discharge in zip(dates, discharge_kwh, strict=True):
+            daily_discharge_kwh[day] = daily_discharge_kwh.get(day, 0.0) + float(discharge)
+
+        # Per-day trip bounds: t_dep^first and t_arr^last from trip rows.
+        daily_bounds: dict[date, tuple[int, int]] = {}
+        if not vehicle_trips.is_empty():
+            bounds_frame = (
+                vehicle_trips.with_columns(pl.col("date").cast(pl.Date).alias("date"))
+                .group_by("date")
+                .agg(
+                    pl.col("departure_hour").min().alias("first_departure"),
+                    pl.col("arrival_hour").max().alias("last_arrival"),
+                )
+            )
+            for row in bounds_frame.iter_rows(named=True):
+                daily_bounds[row["date"]] = (int(row["first_departure"]), int(row["last_arrival"]))
+
+        def soc_req_kwh_for_day(day: date) -> float:
+            """SOC_req^d = max(SOC_min, daily_trip_kWh / K^B + buffer), returned in kWh."""
+            daily_trip_kwh = daily_discharge_kwh.get(day, 0.0)
+            soc_req_fraction = max(
+                soc_min_fraction,
+                daily_trip_kwh / battery_capacity_kwh + soc_safety_buffer_fraction,
+            )
+            return soc_req_fraction * battery_capacity_kwh
+
+        charge_allowed = np.zeros(num_hours, dtype=bool)
+        soc_target_kwh = np.zeros(num_hours, dtype=np.float64)
+
+        for hour_idx, (day, clock_hour) in enumerate(zip(dates, clock_hours, strict=True)):
+            # Default (no trips that day): never depart (24), always home (0) → whole day is Window_avail.
+            first_departure, last_arrival = daily_bounds.get(day, (24, 0))
+            # Morning slice of Window_avail: hours before first departure today.
+            in_morning_window = clock_hour < first_departure
+            # Evening slice of Window_avail: hours after last arrival today (overnight for tomorrow).
+            in_evening_window = clock_hour >= last_arrival
+
+            # Midday away block (first_dep <= hour < last_arr) is outside Window_avail.
+            if not (in_morning_window or in_evening_window):
+                continue
+
+            # Decide which departure day this hour is charging toward.
+            if in_morning_window and in_evening_window:
+                # No-trip day: both windows cover all 24 hours; use today's (minimal) SOC_req.
+                target_day = day
+            elif in_morning_window:
+                target_day = day  # pre-departure hours charge toward today's trips
+            else:
+                target_day = day + timedelta(days=1)  # post-arrival hours charge toward tomorrow
+
+            soc_target_kwh[hour_idx] = soc_req_kwh_for_day(target_day)
+            # Window_off = Window_avail ∩ off-peak ∩ at_home (no emergency peak override).
+            charge_allowed[hour_idx] = bool(at_home[hour_idx] and is_off_peak[hour_idx])
+
+        return charge_allowed, soc_target_kwh
+
+    @staticmethod
+    def _schedule_off_peak_charging(
+        at_home: np.ndarray,
+        discharge_kwh: np.ndarray,
+        *,
+        charge_allowed: np.ndarray,
+        soc_target_kwh: np.ndarray,
+        battery_capacity_kwh: float,
+        charger_power_kw: float,
+        initial_soc_kwh: float,
+    ) -> np.ndarray:
+        """
+        Given a vehicle's hourly presence and discharge schedule, build an hourly charge
+        schedule using TOU off-peak charging (no emergency override).
+
+        Forward-simulates SOC hour-by-hour. Charges at max power only when
+        ``charge_allowed`` is True and SOC is below the per-hour ``soc_target_kwh``
+        threshold. Never charges during peak hours or away from home.
+
+        Args:
+            at_home: Whether the vehicle is home at the start of each hour
+            discharge_kwh: Fixed trip draw ``x_t^DB`` each hour (kWh)
+            charge_allowed: Whether off-peak charging is permitted this hour
+            soc_target_kwh: Target SOC (kWh) to reach before the next departure day
+            battery_capacity_kwh: Battery capacity ``K^B`` (kWh)
+            charger_power_kw: Max charge rate ``C^B`` when allowed (kW = kWh/hour)
+            initial_soc_kwh: Start-of-hour-0 SOC ``s_0`` (kWh)
+
+        Returns:
+            Hourly charge energy ``x_t^CB`` (kWh), same length as ``at_home``
+        """
+        if len(at_home) != len(discharge_kwh):
+            raise ValueError(
+                f"at_home and discharge_kwh must have the same length, got {len(at_home)} and {len(discharge_kwh)}"
+            )
+        if len(charge_allowed) != len(at_home) or len(soc_target_kwh) != len(at_home):
+            raise ValueError("charge_allowed and soc_target_kwh must match at_home length")
+
+        num_hours = len(at_home)
+        charge_kwh = np.zeros(num_hours, dtype=np.float64)
+        current_soc = initial_soc_kwh
+
+        for hour_idx in range(num_hours):
+            # Same hour ordering as _compute_hourly_soc: discharge first, then charge.
+            trip_draw = discharge_kwh[hour_idx]
+            if trip_draw > current_soc:
+                current_soc = 0.0  # no public charging; battery empty until next allowed hour
+            else:
+                current_soc -= trip_draw
+
+            # Primary TOU rule: Pow_max when t ∈ Window_off and SOC < SOC_req (no peak override).
+            if (
+                charge_allowed[hour_idx]
+                and at_home[hour_idx]
+                and current_soc + 1e-9 < soc_target_kwh[hour_idx]
+            ):
+                # Stop at SOC_req, not full battery (unlike immediate charging).
+                headroom = min(
+                    soc_target_kwh[hour_idx] - current_soc,
+                    battery_capacity_kwh - current_soc,
+                )
+                added = min(charger_power_kw, headroom)
+                if added > 0.0:
+                    charge_kwh[hour_idx] = added
+                    current_soc += added
+
+        return charge_kwh
 
     @staticmethod
     def _compute_hourly_soc(
@@ -1372,21 +1614,30 @@ class EVDemandCalculator:
         initial_soc_kwh: float | None = None,
         charging_strategy: ChargingStrategy = "immediate",
         hourly_price_usd_per_kwh: np.ndarray | None = None,
+        shed_load_penalty_usd_per_kwh: float | np.ndarray | None = None,
+        peak_clock_hours: Iterable[int] = DEFAULT_PEAK_CLOCK_HOURS,
+        soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
+        soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
     ) -> dict[tuple[str | int, int], pl.DataFrame]:
         """
         Map each vehicle to an hourly SOC, charging, and discharge schedule for the instance date range.
 
         Pipeline per vehicle:
         1. Spread trip miles into hourly ``discharge_kwh`` (away hours only)
-        2. Build ``charge_kwh`` via ``charging_strategy`` (immediate or cost-minimizing LP)
+        2. Build ``charge_kwh`` via ``charging_strategy`` (immediate, off-peak, or cost-minimizing LP)
         3. Derive ``soc_kwh`` and ``soc_underflow`` from discharge + charge
 
         ``soc_kwh`` is the battery level at the beginning of each hour (aligned with ``timestamp``).
 
         Charging strategies:
         - ``immediate``: charge at full power whenever home and not full (default).
+        - ``off_peak``: TOU-adapted charging per the value-learning EV doc — charge only during
+          off-peak hours in the overnight/pre-departure window until daily ``SOC_req`` is met;
+          no peak charging and no emergency override.
         - ``cost_minimizing``: perfect-foresight LP that shifts charging to the cheapest
-          home hours while meeting all trip energy needs. Requires ``hourly_price_usd_per_kwh``.
+          home hours while meeting trip energy needs. Requires ``hourly_price_usd_per_kwh``.
+          Optional ``shed_load_penalty_usd_per_kwh`` penalizes curtailed trip energy; ``None``
+          uses a very large default so shedding occurs only when required for LP feasibility.
 
         Args:
             trip_schedules: DataFrame of trip schedules
@@ -1399,8 +1650,13 @@ class EVDemandCalculator:
             charger_power_kw: Charger power in kW
             ev_adoption_rate: EV adoption rate
             initial_soc_kwh: Initial SOC in kWh at the start of hour 0
-            charging_strategy: ``immediate`` or ``cost_minimizing``
+            charging_strategy: ``immediate``, ``off_peak``, or ``cost_minimizing``
             hourly_price_usd_per_kwh: Length-``num_hours`` marginal price array for optimized charging
+            shed_load_penalty_usd_per_kwh: Penalty on curtailed trip energy for ``cost_minimizing``;
+                ``None`` uses ``DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH``
+            peak_clock_hours: On-peak clock hours (0-23) for ``off_peak`` strategy
+            soc_min_fraction: Minimum comfortable SOC fraction for ``off_peak`` strategy
+            soc_safety_buffer_fraction: Extra SOC fraction above daily trip energy for ``off_peak``
 
         Returns:
             Dict of vehicle keys to hourly SOC schedules
@@ -1427,6 +1683,8 @@ class EVDemandCalculator:
         if hours_base is None:
             hours_base = self._build_hours_base()
         num_hours = hours_base.height
+        # Shared off-peak mask for all vehicles (depends only on clock hour, not trips).
+        is_off_peak = self._build_is_off_peak(hours_base, peak_clock_hours=peak_clock_hours)
 
         if charging_strategy == "cost_minimizing":
             if hourly_price_usd_per_kwh is None:
@@ -1469,6 +1727,13 @@ class EVDemandCalculator:
                 )
             )
 
+        # Off-peak scheduling needs per-vehicle trip bounds (first departure / last arrival).
+        vehicle_trips_by_key: dict[tuple[str | int, int], pl.DataFrame] = {}
+        if charging_strategy == "off_peak" and not trip_schedules.is_empty():
+            for trip_frame in trip_schedules.partition_by(["bldg_id", "vehicle_id"], as_dict=False):
+                vehicle_key = (trip_frame["bldg_id"][0], int(trip_frame["vehicle_id"][0]))
+                vehicle_trips_by_key[vehicle_key] = trip_frame
+
         # Generate hourly SOC schedules
         soc_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] = {}
         for vehicle_key, presence in presence_by_vehicle.items():
@@ -1478,7 +1743,8 @@ class EVDemandCalculator:
                 discharge_arr[int(hour_index)] = discharge
 
             at_home = presence["at_home"].to_numpy()
-            # Step 2: choose hourly charge schedule (strategy-specific).
+            shed_load_kwh = np.zeros(num_hours, dtype=np.float64)
+            # Choose hourly charge schedule (strategy-specific).
             if charging_strategy == "immediate":
                 charge_kwh = self._schedule_immediate_charging(
                     at_home,
@@ -1487,28 +1753,54 @@ class EVDemandCalculator:
                     charger_power_kw=charger_power_kw,
                     initial_soc_kwh=start_soc,
                 )
+            elif charging_strategy == "off_peak":
+                # Derive Window_off and per-hour SOC_req from trip calendar.
+                charge_allowed, soc_target_kwh = self._build_off_peak_charging_params(
+                    at_home,
+                    discharge_arr,
+                    hours_base,
+                    vehicle_trips_by_key.get(vehicle_key, pl.DataFrame()),
+                    battery_capacity_kwh=battery_capacity_kwh,
+                    is_off_peak=is_off_peak,
+                    soc_min_fraction=soc_min_fraction,
+                    soc_safety_buffer_fraction=soc_safety_buffer_fraction,
+                )
+                # Forward-simulate charge_kwh under the TOU rule (no peak override).
+                charge_kwh = self._schedule_off_peak_charging(
+                    at_home,
+                    discharge_arr,
+                    charge_allowed=charge_allowed,
+                    soc_target_kwh=soc_target_kwh,
+                    battery_capacity_kwh=battery_capacity_kwh,
+                    charger_power_kw=charger_power_kw,
+                    initial_soc_kwh=start_soc,
+                )
             else:
-                charge_kwh = self._schedule_cost_minimizing_charging(
+                charge_kwh, shed_load_kwh = self._schedule_cost_minimizing_charging(
                     at_home,
                     discharge_arr,
                     battery_capacity_kwh=battery_capacity_kwh,
                     charger_power_kw=charger_power_kw,
                     initial_soc_kwh=start_soc,
                     hourly_price_usd_per_kwh=np.asarray(hourly_price_usd_per_kwh, dtype=np.float64),
+                    shed_load_penalty_usd_per_kwh=shed_load_penalty_usd_per_kwh,
                 )
-            # Step 3: derive beginning-of-hour SOC from discharge + charge (shared logic).
+            # Derive beginning-of-hour SOC from discharge + charge (shared logic).
             soc_kwh, soc_underflow = self._compute_hourly_soc(
                 discharge_arr,
                 charge_kwh,
                 initial_soc_kwh=start_soc,
             )
 
-            soc_by_vehicle[vehicle_key] = presence.with_columns(
+            output_columns = [
                 pl.Series("discharge_kwh", discharge_arr),
                 pl.Series("charge_kwh", charge_kwh),
                 pl.Series("soc_kwh", soc_kwh),
                 pl.Series("soc_underflow", soc_underflow),
-            )
+            ]
+            if charging_strategy == "cost_minimizing":
+                output_columns.append(pl.Series("shed_load_kwh", shed_load_kwh))
+            soc_by_vehicle[vehicle_key] = presence.with_columns(*output_columns)
 
         return soc_by_vehicle  # dict[(bldg_id, vehicle_id)] -> hourly SOC DataFrame
 
