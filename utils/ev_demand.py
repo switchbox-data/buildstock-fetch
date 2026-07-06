@@ -78,6 +78,8 @@ class EVDemandConfig:
     metadata_path: str | None = None
     pums_path: str | None = None
     nhts_path: str = f"{BASEPATH}/ev_data/inputs/NHTS_v2_1_trip_surveys.csv"
+    # NREL conditional P(EV) lookup; required by predict_num_EVs()
+    ev_ownership_path: str | None = None
     output_dir: Path | None = None
 
     def __post_init__(self) -> None:
@@ -85,6 +87,10 @@ class EVDemandConfig:
             self.metadata_path = f"{BASEPATH}/ev_data/inputs/{self.release}/metadata/{self.state}/metadata.parquet"
         if self.pums_path is None:
             self.pums_path = f"{BASEPATH}/ev_data/inputs/{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
+        if self.ev_ownership_path is None:
+            self.ev_ownership_path = str(
+                BASEPATH / "ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Ownership.tsv"
+            )
         if self.output_dir is None:
             self.output_dir = Path(f"{BASEPATH}/ev_data/outputs/{self.state}_{self.release}")
 
@@ -234,9 +240,10 @@ class EVDemandCalculator:
     This class implements the workflow described in the methodology:
     1. Load ResStock metadata
     2. Fit vehicle ownership model using PUMS data
-    3. Predict number of vehicles per household
-    4. Sample vehicle driving profiles from NHTS
-    5. Generate annual trip schedules
+    3. Predict number of vehicles per household (``predict_num_vehicles``)
+    4. Predict EV ownership per household via NREL lookup (``predict_num_EVs``)
+    5. Sample vehicle driving profiles from NHTS
+    6. Generate annual trip schedules
     """
 
     def __init__(
@@ -244,6 +251,8 @@ class EVDemandCalculator:
         metadata_df: pl.DataFrame,
         nhts_df: pl.DataFrame,
         pums_df: pl.DataFrame,
+        ev_ownership_df: pl.DataFrame,
+        state_ev_rate: float,
         start_date: datetime,
         end_date: datetime,
         max_vehicles: int = 2,
@@ -257,6 +266,8 @@ class EVDemandCalculator:
             metadata_df: ResStock metadata DataFrame
             nhts_df: NHTS trip data DataFrame
             pums_df: PUMS data DataFrame
+            ev_ownership_df: NREL EV ownership lookup (from load_ev_ownership_lookup)
+            state_ev_rate: PUMS-weighted mean P(EV) for the state; fallback when lookup join misses
             start_date: Start date for trip generation
             end_date: End date for trip generation
             max_vehicles: Maximum number of vehicles per household
@@ -267,6 +278,8 @@ class EVDemandCalculator:
         np.random.seed(random_state)
 
         self.max_vehicles = max_vehicles
+        self.ev_ownership_df = ev_ownership_df
+        self.state_ev_rate = state_ev_rate
 
         self.metadata_df = metadata_df
         self.nhts_df = nhts_df
@@ -480,6 +493,69 @@ class EVDemandCalculator:
         bldg_veh_df = df.with_columns(pl.Series(predictions_decoded).alias("vehicles"))
 
         return bldg_veh_df
+
+    def predict_num_EVs(self, metadata_df: pl.DataFrame | None = None) -> pl.DataFrame:
+        """
+        Predict whether each household has an EV (0 or 1) using NREL's ResStock lookup.
+
+        Joins metadata to NREL's conditional P(EV) by FPL, building type, PUMA, and tenure,
+        then Bernoulli-samples ownership (max one EV per household). Vacant units always
+        receive 0 EVs; occupied units with no lookup match use the state-weighted fallback rate.
+
+        Args:
+            metadata_df: DataFrame with ResStock metadata including fpl, building_type,
+                tenure, puma_dependency, and is_vacant columns.
+
+        Returns:
+            DataFrame with added columns: ev_ownership_probability, has_ev, evs
+
+        Raises:
+            MetadataDataFrameError: If the metadata DataFrame is None
+            ValueError: If the metadata DataFrame is missing required columns
+        """
+        df = self.metadata_df if metadata_df is None else metadata_df
+        if df is None:
+            raise MetadataDataFrameError()
+
+        required_columns = {"fpl", "building_type", "tenure", "puma_dependency", "is_vacant"}
+        missing_columns = required_columns - set(df.columns)
+        if missing_columns:
+            raise ValueError(
+                "Missing EV adoption metadata columns: "
+                + ", ".join(sorted(missing_columns))
+                + ". Ensure load_metadata() was used or provide these columns."
+            )
+
+        # source_weight is only needed for the state fallback rate, not per-building joins
+        ev_lookup = self.ev_ownership_df.drop("source_weight")
+        state_ev_rate = self.state_ev_rate
+
+        # join metadata → conditional P(EV) by housing segment
+        metadata_with_prob = df.join(
+            ev_lookup,
+            on=["fpl", "building_type", "puma_dependency", "tenure"],
+            how="left",
+        ).with_columns(
+            pl.when(pl.col("is_vacant"))
+            .then(0.0)  # vacant units: Tenure/FPL = "Not Available"
+            .when(pl.col("ev_ownership_probability").is_null())
+            .then(state_ev_rate)  # rare: occupied but no exact segment match
+            .otherwise(pl.col("ev_ownership_probability"))
+            .alias("ev_ownership_probability"),
+        )
+
+        # Bernoulli sample — each household gets 0 or 1 EV (max one per household).
+        # Matches ev_adoption.ipynb; differs from ResStock 2025 which uses quota sampling.
+        rng = np.random.default_rng(self.random_state)
+        probabilities = metadata_with_prob["ev_ownership_probability"].to_numpy()
+        has_ev = rng.random(probabilities.shape[0]) < probabilities
+        is_vacant = metadata_with_prob["is_vacant"].to_numpy()
+        evs = np.where(is_vacant, 0, has_ev.astype(np.int8))
+
+        return metadata_with_prob.with_columns(
+            pl.Series("has_ev", has_ev),
+            pl.Series("evs", evs),  # 0/1 count; aliased to "vehicles" downstream for NHTS sampling
+        )
 
     def find_best_matches(
         self, target_income: int, target_occupants: int, target_vehicles: int, num_samples: int, weekday: bool = True
@@ -971,9 +1047,12 @@ class EVDemandCalculator:
         Returns:
             pl.DataFrame: DataFrame of trip schedules for all buildings
         """
-        # Assign cars to metadata buildings
-        logging.info("Assigning cars to metadata buildings")
-        bldg_veh_df = self.predict_num_vehicles()
+        # EV adoption (0/1 per household) drives which buildings get trip profiles.
+        # predict_num_vehicles() is kept separately for total-vehicle-count analysis.
+        logging.info("Predicting EV ownership for metadata buildings")
+        bldg_ev_df = self.predict_num_EVs()
+        # sample_vehicle_profiles() expects a "vehicles" column = number of slots to fill
+        bldg_veh_df = bldg_ev_df.with_columns(pl.col("evs").alias("vehicles"))
         # Get all vehicle profiles
         logging.info("Assigning vehicle profiles")
         vehicle_profiles = cast(
@@ -1875,6 +1954,13 @@ def parse_arguments():
         "--upload-s3", action="store_true", default=False, help="Upload results to S3 bucket instead of saving locally"
     )
 
+    # Optional path to NREL EV ownership lookup TSV (defaults to utils/ev_data/inputs/resstock_ev_reference/)
+    parser.add_argument(
+        "--ev-ownership-path",
+        default=None,
+        help="Path to NREL Electric_Vehicle_Ownership.tsv (run `just download-resstock-ev-reference` first)",
+    )
+
     return parser.parse_args()
 
 
@@ -1943,12 +2029,18 @@ def main():
 
     # Step 1: Create configuration
     config = EVDemandConfig(state=args.state, release=args.release)
+    if args.ev_ownership_path is not None:
+        config.ev_ownership_path = args.ev_ownership_path
 
-    # Step 2: Load all data
+    # Step 2: Load all data (lookup loaded once and shared across batches)
     metadata_df, nhts_df, pums_df = ev_utils.load_all_input_data(config)
+    ev_ownership_df = ev_utils.load_ev_ownership_lookup(config.ev_ownership_path)
+    state_ev_rate = ev_utils.state_ev_ownership_rate(ev_ownership_df, config.state)
     print(f"Loaded metadata: {len(metadata_df)} rows")
     print(f"Loaded NHTS data: {len(nhts_df)} rows")
     print(f"Loaded PUMS data: {len(pums_df)} rows")
+    print(f"Loaded EV ownership lookup: {ev_ownership_df.height:,} rows")
+    print(f"State fallback P(EV) for {config.state}: {state_ev_rate:.4f}")
 
     # Process metadata in batches of 20,000 rows
     batch_size = 20000
@@ -1969,6 +2061,8 @@ def main():
             metadata_df=batch_metadata,
             nhts_df=nhts_df,
             pums_df=pums_df,
+            ev_ownership_df=ev_ownership_df,
+            state_ev_rate=state_ev_rate,
             start_date=start_date,
             end_date=end_date,
             max_workers=8,  # Use worker threads for parallel processing

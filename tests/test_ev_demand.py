@@ -58,11 +58,13 @@ def mock_metadata_with_zero():
 
 
 @pytest.fixture
-def calculator(mock_nhts_data, mock_metadata):
+def calculator(mock_nhts_data, mock_metadata, ev_ownership_df, state_ev_rate):
     return EVDemandCalculator(
         metadata_df=mock_metadata,
         nhts_df=mock_nhts_data,
         pums_df=mock_metadata,  # Using same data for simplicity
+        ev_ownership_df=ev_ownership_df,
+        state_ev_rate=state_ev_rate,
         start_date=datetime(2022, 1, 1),
         end_date=datetime(2022, 1, 7),
         random_state=42,
@@ -242,12 +244,16 @@ def test_sample_vehicle_profiles_match_catalog(calculator):
     assert gap_summary["share_of_vehicle_slots"][0] == pytest.approx(vehicle_slots_with_any_gap / 4)
 
 
-def test_sample_vehicle_profiles_zero_vehicles(calculator, mock_nhts_data, mock_metadata_with_zero):
+def test_sample_vehicle_profiles_zero_vehicles(
+    calculator, mock_nhts_data, mock_metadata_with_zero, ev_ownership_df, state_ev_rate
+):
     # Create new calculator with metadata that includes a zero-vehicle building
     calculator = EVDemandCalculator(
         metadata_df=mock_metadata_with_zero,
         nhts_df=mock_nhts_data,
         pums_df=mock_metadata_with_zero,
+        ev_ownership_df=ev_ownership_df,
+        state_ev_rate=state_ev_rate,
         start_date=datetime(2022, 1, 1),
         end_date=datetime(2022, 1, 7),
         random_state=42,
@@ -886,11 +892,15 @@ def test_vehicle_hourly_schedules_to_dataframe(calculator):
 
 @patch("utils.ev_demand.EVDemandCalculator.generate_daily_trip_schedules")
 @patch("utils.ev_demand.EVDemandCalculator.sample_vehicle_profiles")
-@patch("utils.ev_demand.EVDemandCalculator.predict_num_vehicles")
-def test_match_and_generate_trip_schedules(predict_vehicles, sample_profiles, generate_schedule, calculator):
+@patch("utils.ev_demand.EVDemandCalculator.predict_num_EVs")
+def test_match_and_generate_trip_schedules(predict_evs, sample_profiles, generate_schedule, calculator):
     # Setup expected data
     metadata = calculator.metadata_df
-    predict_vehicles.return_value = metadata
+    predict_evs.return_value = metadata.with_columns(
+        pl.lit(1).alias("evs"),
+        pl.lit(True).alias("has_ev"),
+        pl.lit(0.05).alias("ev_ownership_probability"),
+    )
 
     profile = VehicleProfile(
         bldg_id="b1",
@@ -935,6 +945,6 @@ def test_match_and_generate_trip_schedules(predict_vehicles, sample_profiles, ge
     assert [d.strftime("%Y-%m-%d") for d in result["date"]] == [d.strftime("%Y-%m-%d") for d in schedule_data["date"]]
 
     # Verify mock calls
-    predict_vehicles.assert_called_once()
+    predict_evs.assert_called_once()
     sample_profiles.assert_called_once()
     generate_schedule.assert_called_once()

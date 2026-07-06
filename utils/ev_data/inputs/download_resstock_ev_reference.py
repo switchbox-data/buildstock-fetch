@@ -26,6 +26,12 @@ RESSTOCK_BASE = "https://raw.githubusercontent.com/NREL/resstock/develop"
 SATURATIONS_URL = f"{RESSTOCK_BASE}/project_national/resources/options_saturations.csv"
 LOOKUP_URL = f"{RESSTOCK_BASE}/resources/options_lookup.tsv"
 EV_OWNERSHIP_URL = f"{RESSTOCK_BASE}/project_national/housing_characteristics/Electric%20Vehicle%20Ownership.tsv"
+# Dependency tables ResStock uses to assign FPL, tenure, and building type to each unit.
+# Not required for predict_num_EVs() (which only needs Electric_Vehicle_Ownership.tsv),
+# but included here for EDA and cross-checking against metadata values.
+FPL_URL = f"{RESSTOCK_BASE}/project_national/housing_characteristics/Federal%20Poverty%20Level.tsv"
+TENURE_URL = f"{RESSTOCK_BASE}/project_national/housing_characteristics/Tenure.tsv"
+BUILDING_TYPE_URL = f"{RESSTOCK_BASE}/project_national/housing_characteristics/Geometry%20Building%20Type%20RECS.tsv"
 
 # NREL/TP-5500-93766 Table 208 (Autonomie 2022 via TEMPO)
 AUTONOMIE_2022_VEHICLES: list[dict[str, object]] = [
@@ -96,13 +102,23 @@ def download_resstock_ev_reference(output_dir: Path) -> dict[str, str]:
     saturations_text = _fetch_text(SATURATIONS_URL)
     lookup_text = _fetch_text(LOOKUP_URL)
     ev_ownership_text = _fetch_text(EV_OWNERSHIP_URL)
+    # Housing-characteristic dependency tables (for reference / EDA)
+    fpl_text = _fetch_text(FPL_URL)
+    tenure_text = _fetch_text(TENURE_URL)
+    building_type_text = _fetch_text(BUILDING_TYPE_URL)
 
     saturations_path = output_dir / "resstock_options_saturations.csv"
     lookup_path = output_dir / "resstock_options_lookup.tsv"
     ev_ownership_path = output_dir / "Electric_Vehicle_Ownership.tsv"
+    fpl_path = output_dir / "Federal_Poverty_Level.tsv"
+    tenure_path = output_dir / "Tenure.tsv"
+    building_type_path = output_dir / "Geometry_Building_Type_RECS.tsv"
     saturations_path.write_text(saturations_text)
     lookup_path.write_text(lookup_text)
     ev_ownership_path.write_text(ev_ownership_text)
+    fpl_path.write_text(fpl_text)
+    tenure_path.write_text(tenure_text)
+    building_type_path.write_text(building_type_text)
 
     vmt_df = (
         pl.read_csv(io.StringIO(saturations_text))
@@ -146,6 +162,9 @@ def download_resstock_ev_reference(output_dir: Path) -> dict[str, str]:
         "resstock_options_saturations.csv": str(saturations_path),
         "resstock_options_lookup.tsv": str(lookup_path),
         "Electric_Vehicle_Ownership.tsv": str(ev_ownership_path),
+        "Federal_Poverty_Level.tsv": str(fpl_path),
+        "Tenure.tsv": str(tenure_path),
+        "Geometry_Building_Type_RECS.tsv": str(building_type_path),
         "resstock_ev_miles_traveled_distribution.csv": str(vmt_path),
         "resstock_autonomie_2022_vehicle_params.csv": str(autonomie_path),
     }

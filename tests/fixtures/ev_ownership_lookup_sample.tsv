@@ -1,0 +1,5 @@
+Dependency=Federal Poverty Level	Dependency=Geometry Building Type RECS	Dependency=PUMA	Dependency=Tenure	Option=No	Option=Yes	Option=Void	source_count	source_weight	sampling_probability
+400%+	Single-Family Detached	MD, 00805	Owner	0.975855	0.0241447	0	87	1614.07	1.33477e-05
+0-100%	Single-Family Attached	MD, 00506	Renter	0.998655	0.0013446	0	45	1112.9	6.57712e-06
+400%+	Multi-Family with 5+ Units	MD, 01202	Renter	0.993	0.007	0	100	5000	1e-05
+0-100%	Single-Family Detached	MD, 00805	Not Available	0	0	1	0	0	0

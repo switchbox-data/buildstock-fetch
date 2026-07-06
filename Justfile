@@ -87,6 +87,12 @@ download-pums:
         https://buildstock-fetch.s3.amazonaws.com/ev_demand/pums/NY_2021_pums_PUMA_HINCP_VEH_NP.csv
     echo "✅ PUMS data downloaded successfully"
 
+# Download ResStock EV adoption reference data (ownership lookup + dependency tables)
+download-resstock-ev-reference:
+    echo "🚀 Downloading ResStock EV reference data from NREL/resstock"
+    uv run python utils/ev_data/inputs/download_resstock_ev_reference.py
+    echo "✅ ResStock EV reference data downloaded successfully"
+
 # Download Maryland ACS 2021 PUMS from Census (for EV vehicle-ownership model)
 download-pums-md:
     echo "🚀 Downloading Maryland PUMS from Census ACS 2021 1-year microdata"

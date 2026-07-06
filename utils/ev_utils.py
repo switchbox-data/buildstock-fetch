@@ -17,12 +17,20 @@ import polars as pl
 __all__ = [
     "get_census_division_for_state",
     "load_all_input_data",
+    "load_ev_ownership_lookup",
     "load_metadata",
     "load_metro_puma_map",
     "load_nhts_data",
     "load_pums_data",
+    "resstock_puma_dependency",
+    "state_ev_ownership_rate",
 ]
 
+# NREL ResStock EV ownership lookup (downloaded via `just download-resstock-ev-reference`).
+# Maps (fpl, building_type, puma, tenure) → conditional P(EV) from TEMPO/Experian + RECS.
+EV_OWNERSHIP_DEFAULT_PATH = (
+    Path(__file__).resolve().parent / "ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Ownership.tsv"
+)
 
 STATE_TO_CENSUS_DIVISION: dict[str, int] = {
     # New England (1)
@@ -177,6 +185,89 @@ def assign_nhts_income_bucket(income: int) -> int:
     return 11  # Should never reach here due to inf threshold, but makes mypy happy
 
 
+def resstock_puma_dependency(state: str, puma_geoid: str) -> str:
+    """Convert a ResStock PUMA GEOID to the NREL EV lookup key, e.g. G24000901 → 'MD, 00901'.
+    
+    Args:
+        state: State abbreviation (e.g., "NY", "CA")
+        puma_geoid: ResStock PUMA GEOID (e.g., "G24000901")
+
+    Returns:
+        NREL EV lookup key (e.g., "MD, 00901")
+    """
+    # ResStock stores full Census GEOIDs (e.g. G24000901); NREL's lookup uses "ST, NNNNN".
+    return f"{state}, {puma_geoid[-5:].zfill(5)}"
+
+
+def load_ev_ownership_lookup(ev_ownership_path: str | Path | None = None) -> pl.DataFrame:
+    """
+    Load NREL's ResStock EV ownership lookup table.
+
+    Args:
+        ev_ownership_path: Path to the EV ownership lookup file
+
+    Returns:
+        DataFrame with columns including 'fpl', 'building_type', 'puma_dependency', 'tenure', 'ev_ownership_probability', 'source_weight'
+    """
+    path = Path(ev_ownership_path) if ev_ownership_path is not None else EV_OWNERSHIP_DEFAULT_PATH
+    if not path.exists():
+        msg = (
+            f"EV ownership lookup not found: {path}. "
+            "Run `just download-resstock-ev-reference` to download the data."
+        )
+        raise FileNotFoundError(msg)
+
+    # Column names follow ResStock's housing_characteristics TSV convention
+    # (Dependency=… / Option=Yes). We rename to short join keys used in metadata.
+    return (
+        pl.read_csv(path, separator="\t")
+        .rename({
+            "Dependency=Federal Poverty Level": "fpl",
+            "Dependency=Geometry Building Type RECS": "building_type",
+            "Dependency=PUMA": "puma_dependency",
+            "Dependency=Tenure": "tenure",
+            "Option=Yes": "ev_ownership_probability",
+        })
+        .select(
+            "fpl",
+            "building_type",
+            "puma_dependency",
+            "tenure",
+            "ev_ownership_probability",
+            "source_weight",  # PUMS weight for this segment; used in state_ev_ownership_rate()
+        )
+    )
+
+
+def state_ev_ownership_rate(ev_lookup: pl.DataFrame, state: str) -> float:
+    """
+    PUMS-weighted mean P(EV) over occupied lookup segments for a state.
+
+    Used as a fallback when an occupied building has no exact lookup match.
+
+    ResStock documents vacant units as ``Tenure = 'Not Available'``.
+    Those lookup rows carry vacant-unit PUMS weight and must be excluded when computing
+    an occupied-segment fallback rate.
+
+    Args:
+        ev_lookup: NREL EV ownership lookup from load_ev_ownership_lookup()
+        state: State abbreviation (e.g., "MD", "NY")
+
+    Returns:
+        PUMS-weighted mean P(EV) over occupied lookup segments for the state
+    """
+    # Vacant stock in the EV lookup: tenure="Not Available" 
+    state_lookup = ev_lookup.filter(
+        pl.col("puma_dependency").str.starts_with(f"{state},"),
+        pl.col("tenure") != "Not Available",
+    )
+    total_weight = state_lookup["source_weight"].sum()
+    if total_weight == 0:
+        msg = f"No occupied EV lookup rows found for state {state}"
+        raise ValueError(msg)
+    return float((state_lookup["ev_ownership_probability"] * state_lookup["source_weight"]).sum() / total_weight)
+
+
 def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
     """
     Load and parse the ResStock metadata parquet file.
@@ -205,6 +296,13 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
             pl.col("in.puma").alias("puma"),
             pl.col("in.income").alias("income"),
             pl.col("in.occupants").alias("occupants"),
+            # EV adoption join keys — must match NREL Electric_Vehicle_Ownership.tsv exactly
+            pl.col("in.federal_poverty_level").alias("fpl"),
+            pl.col("in.geometry_building_type_recs").alias("building_type"),
+            pl.col("in.tenure").alias("tenure"),
+            # ResStock: vacant units have Tenure/FPL = "Not Available"
+            # we key off in.vacancy_status directly for is_vacant.
+            (pl.col("in.vacancy_status") == "Vacant").alias("is_vacant"),
         ])
         # Process household size - replace "10+" with "10" and cast to numeric
         .with_columns([
@@ -215,7 +313,7 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
             .alias("occupants")
         ])
         .filter(pl.col("occupants") > 0)
-        # Process income categories - convert to standard ranges first
+        # Process income categories - convert to standard ranges
         .with_columns([
             pl.when(pl.col("income") == "<10000")
             .then(pl.lit("0-10000"))
@@ -231,8 +329,12 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
         .with_columns([
             pl.col("income").map_elements(assign_nhts_income_bucket, return_dtype=pl.Int64).alias("income_bucket")
         ])
-        # Extract last 5 characters from PUMA
+        # Extract last 5 characters from PUMA (used for puma_dependency keys)
         .with_columns([pl.col("puma").str.slice(-5).alias("puma")])
+        # Build NREL lookup key: "MD, 00805" (same format as Dependency=PUMA in the TSV)
+        .with_columns(
+            pl.concat_str([pl.lit(f"{state}, "), pl.col("puma").str.zfill(5)]).alias("puma_dependency"),
+        )
         .with_columns([
             pl.col("occupants").cast(pl.UInt8),  # Instead of Int64
             pl.col("income_bucket").cast(pl.UInt8),  # 1-11 fits in UInt8

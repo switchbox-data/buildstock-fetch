@@ -3,14 +3,32 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import polars as pl
 import pytest
 
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
+from utils.ev_utils import load_ev_ownership_lookup
+
+EV_OWNERSHIP_FIXTURE_PATH = Path(__file__).parent / "fixtures/ev_ownership_lookup_sample.tsv"
 
 
 @pytest.fixture(scope="session")
 def vcr_config():
     return {"record_mode": "new_episodes"}
+
+
+@pytest.fixture(scope="session")
+def ev_ownership_df() -> pl.DataFrame:
+    """Small NREL EV ownership lookup for unit tests."""
+    return load_ev_ownership_lookup(EV_OWNERSHIP_FIXTURE_PATH)
+
+
+@pytest.fixture(scope="session")
+def state_ev_rate(ev_ownership_df) -> float:
+    """Fallback P(EV) for MD, matching the fixture lookup rows."""
+    from utils.ev_utils import state_ev_ownership_rate
+
+    return state_ev_ownership_rate(ev_ownership_df, "MD")
 
 
 @pytest.fixture(scope="function")
