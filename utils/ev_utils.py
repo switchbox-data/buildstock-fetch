@@ -26,12 +26,6 @@ __all__ = [
     "state_ev_ownership_rate",
 ]
 
-# NREL ResStock EV ownership lookup (downloaded via `just download-resstock-ev-reference`).
-# Maps (fpl, building_type, puma, tenure) → conditional P(EV) from TEMPO/Experian + RECS.
-EV_OWNERSHIP_DEFAULT_PATH = (
-    Path(__file__).resolve().parent / "ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Ownership.tsv"
-)
-
 STATE_TO_CENSUS_DIVISION: dict[str, int] = {
     # New England (1)
     "CT": 1,
@@ -199,17 +193,18 @@ def resstock_puma_dependency(state: str, puma_geoid: str) -> str:
     return f"{state}, {puma_geoid[-5:].zfill(5)}"
 
 
-def load_ev_ownership_lookup(ev_ownership_path: str | Path | None = None) -> pl.DataFrame:
+def load_ev_ownership_lookup(ev_ownership_path: str | Path, state: str) -> pl.DataFrame:
     """
-    Load NREL's ResStock EV ownership lookup table.
+    Load NREL's ResStock EV ownership lookup table for a single state.
 
     Args:
         ev_ownership_path: Path to the EV ownership lookup file
+        state: State abbreviation to filter lookup rows for (e.g., "MD", "NY")
 
     Returns:
         DataFrame with columns including 'fpl', 'building_type', 'puma_dependency', 'tenure', 'ev_ownership_probability', 'source_weight'
     """
-    path = Path(ev_ownership_path) if ev_ownership_path is not None else EV_OWNERSHIP_DEFAULT_PATH
+    path = Path(ev_ownership_path)
     if not path.exists():
         msg = (
             f"EV ownership lookup not found: {path}. "
@@ -228,6 +223,7 @@ def load_ev_ownership_lookup(ev_ownership_path: str | Path | None = None) -> pl.
             "Dependency=Tenure": "tenure",
             "Option=Yes": "ev_ownership_probability",
         })
+        .filter(pl.col("puma_dependency").str.starts_with(f"{state},"))
         .select(
             "fpl",
             "building_type",
@@ -243,7 +239,7 @@ def state_ev_ownership_rate(ev_lookup: pl.DataFrame, state: str) -> float:
     """
     PUMS-weighted mean P(EV) over occupied lookup segments for a state.
 
-    Used as a fallback when an occupied building has no exact lookup match.
+    Expects a state-filtered lookup from load_ev_ownership_lookup().
 
     ResStock documents vacant units as ``Tenure = 'Not Available'``.
     Those lookup rows carry vacant-unit PUMS weight and must be excluded when computing
@@ -369,7 +365,7 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         "STRTTIME",  # start time
         "ENDTIME",  # end time
         "TRPMILES",  # miles driven
-        "TDWKND",  # weekday(2)/weekend(1) flag
+        "TRAVDAY",  # day of week the trip was taken (1=Sun ... 7=Sat)
         "HHSIZE",  # occupants
         "HHFAMINC",  # household income
         "HHVEHCNT",  # total number of vehicles
@@ -394,12 +390,22 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
     # Remove the CENSUS_D column since we don't need it anymore
     nhts_df = nhts_df.drop("CENSUS_D")
 
+    # Derive the weekday/weekend flag from TRAVDAY (day the trip was taken) rather than
+    # NHTS's TDWKND, which reclassifies Friday trips starting at/after 18:00 as weekend.
+    # Using TRAVDAY keeps a full travel day together (weekday=2 for Mon-Fri, 1 for Sat/Sun).
+    nhts_df = nhts_df.with_columns(
+        pl.when(pl.col("TRAVDAY").is_in([1, 7]))
+        .then(1)  # Sunday(1) or Saturday(7) -> weekend
+        .otherwise(2)  # Monday-Friday -> weekday
+        .alias("TRAVDAY")
+    )
+
     nhts_df = nhts_df.rename({
         "HHSIZE": "occupants",
         "HHFAMINC": "income_bucket",
         "HHVEHCNT": "vehicles",
         "URBRUR": "urban",
-        "TDWKND": "weekday",
+        "TRAVDAY": "weekday",
         "VEHCASEID": "hh_vehicle_id",
         "VEHID": "vehicle_id",
         "STRTTIME": "start_time",
@@ -472,18 +478,22 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
     return metro_lookup_df
 
 
-def load_all_input_data(ev_demand_config: Any) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def load_all_input_data(ev_demand_config: Any) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """
     Load all input data for the EV demand calculator.
 
     Returns:
-        Tuple of (metadata_df, nhts_df, pums_df)
+        Tuple of (metadata_df, nhts_df, pums_df, ev_ownership_df)
     """
     metadata_df = load_metadata(ev_demand_config.metadata_path, ev_demand_config.state)
     nhts_df = load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state)
     pums_df = load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path)
+    ev_ownership_df = load_ev_ownership_lookup(
+        ev_demand_config.ev_ownership_path,
+        ev_demand_config.state,
+    )
 
-    return metadata_df, nhts_df, pums_df
+    return metadata_df, nhts_df, pums_df, ev_ownership_df
 
 
 def assign_battery_capacity(battery_capacities, daily_kwh: pl.Series) -> pl.Series:

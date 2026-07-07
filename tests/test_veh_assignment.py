@@ -47,16 +47,15 @@ def mock_nhts_data():
 
 
 @pytest.fixture
-def calculator(sample_metadata, mock_nhts_data, ev_ownership_df, state_ev_rate):
+def calculator(sample_metadata, mock_nhts_data, ev_ownership_df):
     """Create EVDemandCalculator instance for testing."""
     return EVDemandCalculator(
         metadata_df=sample_metadata,
         nhts_df=mock_nhts_data,
-        pums_df=pl.DataFrame(),  # Will be overridden in tests
         ev_ownership_df=ev_ownership_df,
-        state_ev_rate=state_ev_rate,
         start_date=datetime(2020, 1, 1),  # One week starting from Monday
         end_date=datetime(2020, 1, 7),  # to Sunday
+        pums_df=pl.DataFrame(),  # Will be overridden in tests
         max_vehicles=2,
         random_state=42,
     )
