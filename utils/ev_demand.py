@@ -3,21 +3,50 @@ import logging
 import os
 import sys
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, Literal, cast, overload
 
-import cvxpy as cp
 import numpy as np
 import polars as pl
-from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
-from sklearn.preprocessing import LabelEncoder, StandardScaler  # type: ignore[import-untyped]
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils import ev_utils
+from utils.ChargingSimulator import ChargingSimulator
+from utils.NHTSProfileSampler import (
+    NHTSDataError,
+    NHTSProfileSampler,
+    TripProfile,
+    VehicleProfile,
+    nhts_arrival_hour,
+    nhts_departure_hour,
+    summarize_nhts_match_catalog,
+)
+from utils.EVAdoptionSampler import EVAdoptionSampler
+from utils.TripScheduleGenerator import (
+    MAX_ARRIVAL_HOUR,
+    MAX_DEPARTURE_HOUR,
+    MIN_TRIP_AWAY_HOURS,
+    TripScheduleGenerator,
+)
+from utils.VehicleOwnershipModel import VehicleOwnershipModel
+from utils.charging import (
+    ChargingStrategy,
+    DEFAULT_PEAK_CLOCK_HOURS,
+    DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH,
+    DEFAULT_SOC_MIN_FRACTION,
+    DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
+    build_hours_base,
+    build_hourly_timestamps,
+    build_is_off_peak,
+    build_off_peak_charging_params,
+    compute_hourly_soc,
+    schedule_cost_minimizing_charging,
+    schedule_immediate_charging,
+    schedule_off_peak_charging,
+)
 
 BASEPATH: Final[Path] = Path(__file__).resolve().parent  # just one level up
 
@@ -40,12 +69,6 @@ class MetadataDataFrameError(Exception):
 
 class VehicleOwnershipModelError(Exception):
     """Raised when vehicle ownership model is not fitted."""
-
-    pass
-
-
-class NHTSDataError(Exception):
-    """Raised when NHTS data is not loaded."""
 
     pass
 
@@ -92,155 +115,22 @@ class EVDemandConfig:
             self.output_dir = Path(f"{BASEPATH}/ev_data/outputs/{self.state}_{self.release}")
 
 
-@dataclass
-class VehicleProfile:
-    """Represents a vehicle's driving profile parameters."""
-
-    bldg_id: str
-    vehicle_id: int
-    weekday_departure_hour: list[int] = field(default_factory=list)  # List of departure hours for each weekday trip
-    weekday_arrival_hour: list[int] = field(default_factory=list)  # First hour at home (exclusive end of away interval)
-    weekday_miles: list[float] = field(default_factory=list)  # List of miles for each weekday trip
-    weekday_trip_weights: list[float] = field(default_factory=list)  # List of trip weights for each weekday trip
-    weekend_departure_hour: list[int] = field(default_factory=list)  # List of departure hours for each weekend trip
-    weekend_arrival_hour: list[int] = field(default_factory=list)  # First hour at home (exclusive end of away interval)
-    weekend_miles: list[float] = field(default_factory=list)  # List of miles for each weekend trip
-    weekend_trip_weights: list[float] = field(default_factory=list)  # List of trip weights for each weekend trip
-    weekday_trip_ids: list[int] = field(default_factory=list)  # List of trip IDs for weekdays
-    weekend_trip_ids: list[int] = field(default_factory=list)  # List of trip IDs for weekends
-
-
-@dataclass
-class TripSchedule:
-    """Represents a daily trip schedule for a vehicle."""
-
-    bldg_id: int  # Changed from int to str to match VehicleProfile
-    vehicle_id: int
-    date: datetime
-    departure_hour: int  # first away hour (inclusive)
-    arrival_hour: int  # first hour at home after trip ends (exclusive end of away interval)
-    miles_driven: float
-
-
-MIN_TRIP_AWAY_HOURS = 1  # hourly model: each trip is away for at least one clock hour
-MAX_DEPARTURE_HOUR = 23  # latest hour a same-day trip can start (hour 0..23)
-MAX_ARRIVAL_HOUR = 24  # latest allowed arrival hour (exclusive end of away interval)
 HOURS_PER_YEAR = 8760  # standard hourly load-curve length (365 days x 24 hours)
 DEFAULT_BATTERY_CAPACITY_KWH = 90.0  # uniform fleet battery assumption for SOC modeling
 DEFAULT_KWH_PER_MILE = 0.30  # simple-model assumption
 DEFAULT_LEVEL2_CHARGER_KW = 7.2  # typical 32 A @ 240 V residential Level 2 charger
-DEFAULT_PEAK_CLOCK_HOURS: Final[tuple[int, ...]] = (17, 18, 19, 20, 21)  # 5pm-9pm on-peak window
-DEFAULT_SOC_MIN_FRACTION = 0.2  # minimum comfortable SOC (SOC^min in TOU EV doc)
-DEFAULT_SOC_SAFETY_BUFFER_FRACTION = 0.2  # extra SOC buffer above daily trip energy need
-# Default shed penalty when none is passed: high enough that shedding is avoided unless
-# required for LP feasibility (e.g. trip draw exceeds available SOC with no home charging).
-DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH = 1e6
-# How home charging is scheduled before SOC is derived from discharge + charge.
-ChargingStrategy = Literal["immediate", "cost_minimizing", "off_peak"]
-
-
-def nhts_departure_hour(start_time: int) -> int:
-    """Clock hour when a trip starts (vehicle is away during this hour).
-
-    NHTS ``STRTTIME`` is HHMM; e.g. 830 → hour 8.
-
-    Args:
-        start_time (int): NHTS ``STRTTIME`` in HHMM format
-
-    Returns:
-        int: Clock hour when a trip starts
-    """
-    return int(start_time) // 100
-
-
-def nhts_arrival_hour(end_time: int) -> int:
-    """First clock hour at home after a trip ends (exclusive end of the away interval).
-
-    NHTS ``ENDTIME`` is HHMM. If the trip ends exactly on the hour (e.g. 1700),
-    the vehicle is home starting that hour. If it ends mid-hour (e.g. 1715),
-    it is still away for that full hour and home starting the next hour.
-
-    Away hours are ``range(departure_hour, arrival_hour)``.
-
-    Args:
-        end_time (int): NHTS ``ENDTIME`` in HHMM format
-
-    Returns:
-        int: First clock hour at home after a trip ends
-    """
-    end_time = int(end_time)
-    hour, minute = divmod(end_time, 100)
-    return hour if minute == 0 else hour + 1
-
-
-def summarize_nhts_match_catalog(catalog: pl.DataFrame) -> pl.DataFrame:
-    """Summarize NHTS household/vehicle matching gaps from sample_vehicle_profiles catalog.
-
-    A number of NHTS vehicle profiles are missing a weekday or weekend trip profile.
-    This function summarizes the number of missing profiles and vehicle slots with any gap.
-
-    Args:
-        catalog (pl.DataFrame): Catalog of vehicle profiles and NHTS matches
-
-    Returns:
-        pl.DataFrame: summary metrics
-    """
-    if catalog.is_empty():
-        return pl.DataFrame({"metric": [], "count": [], "share_of_vehicle_slots": []})
-
-    vehicle_slots = catalog.height
-    n_missing_nhts = catalog.filter(~pl.col("nhts_vehicle_matched")).height
-    matched = catalog.filter(pl.col("nhts_vehicle_matched"))
-    n_missing_weekday = matched.filter(~pl.col("has_weekday_trips")).height
-    n_missing_weekend = matched.filter(~pl.col("has_weekend_trips")).height
-    n_missing_both = matched.filter(~pl.col("has_weekday_trips") & ~pl.col("has_weekend_trips")).height
-
-    vehicle_slots_with_any_gap = catalog.filter(
-        ~pl.col("nhts_vehicle_matched") | ~pl.col("has_weekday_trips") | ~pl.col("has_weekend_trips")
-    ).height
-
-    def share(count: int) -> float:
-        return count / vehicle_slots if vehicle_slots else 0.0
-
-    return pl.DataFrame({
-        "metric": [
-            "vehicle_slots",
-            "missing_nhts_vehicle_match",
-            "missing_weekday_trip_profile",
-            "missing_weekend_trip_profile",
-            "missing_both_trip_profiles",
-            "vehicle_slots_with_any_gap",
-        ],
-        "count": [
-            vehicle_slots,
-            n_missing_nhts,
-            n_missing_weekday,
-            n_missing_weekend,
-            n_missing_both,
-            vehicle_slots_with_any_gap,
-        ],
-        "share_of_vehicle_slots": [
-            1.0,
-            share(n_missing_nhts),
-            share(n_missing_weekday),
-            share(n_missing_weekend),
-            share(n_missing_both),
-            share(vehicle_slots_with_any_gap),
-        ],
-    })
 
 
 class EVDemandCalculator:
     """
-    Calculator for EV demand based on ResStock metadata, PUMS data, and NHTS trip data.
+    Facade over the EV demand pipeline components.
 
-    This class implements the workflow described in the methodology:
-    1. Load ResStock metadata
-    2. Fit vehicle ownership model using PUMS data
-    3. Predict number of vehicles per household (``predict_num_vehicles``)
-    4. Predict EV ownership per household via NREL lookup (``predict_num_EVs``)
-    5. Sample vehicle driving profiles from NHTS
-    6. Generate annual trip schedules
+    Constructs ``VehicleOwnershipModel``, ``EVAdoptionSampler``, ``NHTSProfileSampler``,
+    ``TripScheduleGenerator``, and ``ChargingSimulator``, then exposes the original
+    ``EVDemandCalculator`` public API as thin delegations.
+
+    ``match_and_generate_trip_schedules()`` remains the end-to-end orchestrator:
+    predict EV adoption → sample NHTS profiles → generate daily trip schedules.
     """
 
     def __init__(
@@ -256,7 +146,7 @@ class EVDemandCalculator:
         max_workers: int | None = None,
     ):
         """
-        Initialize the EV demand calculator.
+        Initialize the EV demand calculator facade and its pipeline components.
 
         Args:
             metadata_df: ResStock metadata DataFrame
@@ -269,431 +159,111 @@ class EVDemandCalculator:
             random_state: Random seed for reproducible results
             max_workers: Maximum number of worker threads for parallel execution (None = use all cores)
         """
-        # Set random seed for reproducible results
         np.random.seed(random_state)
 
-        self.max_vehicles = max_vehicles
-        self.ev_ownership_df = ev_ownership_df
-
+        # Shared inputs retained for orchestration and backward-compatible attribute access.
         self.metadata_df = metadata_df
         self.nhts_df = nhts_df
         self.pums_df = pums_df
-
+        self.ev_ownership_df = ev_ownership_df
         self.start_date = start_date
         self.end_date = end_date
+        self.max_vehicles = max_vehicles
+        self.random_state = random_state
+        self.max_workers = max_workers
         self.num_days = (self.end_date - self.start_date).days + 1
         self.num_hours = self.num_days * 24
 
-        self.vehicle_ownership_model: Any | None = None
-        self.random_state = random_state
-        self.max_workers = max_workers
+        # Pipeline components.
+        self.vehicle_ownership = VehicleOwnershipModel(
+            max_vehicles=max_vehicles,
+            random_state=random_state,
+        )
+        self.ev_adoption_sampler = EVAdoptionSampler(
+            ev_ownership_df=ev_ownership_df,
+            random_state=random_state,
+        )
+        self.nhts_sampler = NHTSProfileSampler(
+            nhts_df=nhts_df,
+            max_vehicles=max_vehicles,
+            random_state=random_state,
+        )
+        self.trip_schedule_generator = TripScheduleGenerator(
+            start_date=start_date,
+            end_date=end_date,
+            random_state=random_state,
+            max_workers=max_workers,
+        )
+        self.charging_simulator = ChargingSimulator(
+            start_date=start_date,
+            end_date=end_date,
+        )
 
-        # Features used for vehicle assignment
-        self.veh_assign_features = ["occupants", "income", "metro"]
+    # --- Vehicle ownership (delegates to VehicleOwnershipModel) ---
 
-        # Cache for NHTS data to avoid repeated filtering (weekday/weekend pools)
-        self._nhts_cache: dict[str, dict] | None = None
+    @property
+    def veh_assign_features(self) -> list[str]:
+        return self.vehicle_ownership.feature_columns
 
-        # Yuksel and Michalek (2015) polynomial coefficients for energy consumption
-        # c(T) = sum(a_n * T^n) for n=0 to 5, units: kWh/mi/°F^n
-        # self.efficiency_coefficients = np.array([
-        #     0.3950,  # a_0 (constant term)
-        #     -0.0022,  # a_1 (linear term)
-        #     9.1978e-5,  # a_2 (quadratic term)
-        #     -3.9249e-6,  # a_3 (cubic term)
-        #     5.2918e-8,  # a_4 (quartic term)
-        #     -2.0659e-10,  # a_5 (quintic term)
-        # ])
+    @property
+    def vehicle_ownership_model(self) -> Any | None:
+        return self.vehicle_ownership.vehicle_ownership_model
 
-    def _log_progress(self, current: int, total: int, description: str, progress_interval: int = 10000) -> None:
-        """
-        Log progress if at the right interval or at completion.
+    @vehicle_ownership_model.setter
+    def vehicle_ownership_model(self, value: Any | None) -> None:
+        self.vehicle_ownership.vehicle_ownership_model = value
 
-        Args:
-            current: Current number of items processed
-            total: Total number of items to process
-            description: Description for the progress message
-            progress_interval: Interval for logging (calculated if None)
-        """
+    @property
+    def label_encoders(self) -> dict[str, Any]:
+        return self.vehicle_ownership.label_encoders
 
-        if current % progress_interval == 0 or current == total:
-            percent_complete = (current / total) * 100
-            logging.info(f"{description}: {current}/{total} ({percent_complete:.1f}%)")
+    @property
+    def target_encoder(self) -> Any | None:
+        return self.vehicle_ownership.target_encoder
+
+    @property
+    def scaler(self) -> Any | None:
+        return self.vehicle_ownership.scaler
 
     def fit_vehicle_ownership_model(self, pums_df: pl.DataFrame) -> Any:
-        """
-        Fit a multinomial logistic regression model to predict number of vehicles per household using PUMS data.
-        Results limited to 0, 1, or 2 vehicles.
-
-        Args:
-            pums_df: DataFrame with PUMS household data, including 'occupants', 'income', 'metro', 'vehicles'
-
-        Returns:
-            Trained model object
-        """
-        # Preprocess data: replace vehicles > 2 with 2, drop nulls, encode categorical
-        pums_df = pums_df.with_columns(
-            pl.when(pl.col("vehicles") > self.max_vehicles)
-            .then(self.max_vehicles)
-            .otherwise(pl.col("vehicles"))
-            .alias("vehicles")
-        )
-
-        # Drop rows with missing values in required features
-        feature_columns = self.veh_assign_features
-
-        # Drop rows with missing values in required features and target variable
-        initial_count = len(pums_df)
-        pums_df = pums_df.drop_nulls(subset=[*feature_columns, "vehicles"])
-        dropped_count = initial_count - len(pums_df)
-
-        if dropped_count > 0:
-            logging.warning(f"Dropped {dropped_count} records with missing values in vehicle ownership model features")
-
-        # Prepare features and encode categorical
-        X = pums_df.select(feature_columns)
-        y = pums_df.select("vehicles")
-
-        # Encode metro (only categorical feature)
-        self.label_encoders = {}
-        le = LabelEncoder()
-        metro_encoded = le.fit_transform(X.get_column("metro").to_numpy())
-        X_encoded = X.with_columns(pl.Series(metro_encoded).alias("metro"))
-        self.label_encoders["metro"] = le
-
-        # Encode target and scale features
-        self.target_encoder = LabelEncoder()
-        y_encoded = self.target_encoder.fit_transform(y.get_column("vehicles").to_numpy())
-
-        self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X_encoded.to_numpy())
-
-        # Fit model with sample weights
-        self.vehicle_ownership_model = LogisticRegression(solver="lbfgs", max_iter=1000, random_state=self.random_state)
-        self.vehicle_ownership_model.fit(X_scaled, y_encoded, sample_weight=pums_df.get_column("hh_weight").to_numpy())
-
-        return self.vehicle_ownership_model
-
-    def _prepare_nhts_cache(self, *, weekday: bool) -> dict:
-        """
-        Pre-group NHTS data by household demographics for fast matching lookups.
-
-        Weekday and weekend caches only include vehicles with at least one logged trip
-        on that day type (weekday=2 Mon–Fri, weekend=1 Sat/Sun).
-
-        Args:
-            weekday (bool): If True, prepare weekday cache; otherwise prepare weekend cache
-
-        Returns:
-            Dictionary mapping key tuples to sorted hh_vehicle_id lists for deterministic random sampling
-
-        Raises:
-            NHTSDataError: If the NHTS data is not loaded
-        """
-        if self._nhts_cache is None:
-            self._nhts_cache = {}
-
-        cache_key = "weekday" if weekday else "weekend"
-        if cache_key in self._nhts_cache:
-            return self._nhts_cache[cache_key]
-
-        if self.nhts_df is None:
-            raise NHTSDataError()
-
-        logging.info("Preparing NHTS %s matching cache...", cache_key)
-
-        # Cap household vehicle count to max_vehicles (default 2).
-        # NHTS stores HHVEHCNT on every trip row; some households have 3+ vehicles.
-        # Our pipeline also caps PUMS training data and ResStock predictions at max_vehicles,
-        # so a building with 2 vehicles should match NHTS households bucketed as 2, not 3+.
-        nhts_df = self.nhts_df.with_columns(
-            pl.when(pl.col("vehicles") > self.max_vehicles)
-            .then(self.max_vehicles)
-            .otherwise(pl.col("vehicles"))
-            .alias("vehicles")
-        )
-
-        # Keep only trips taken on the requested day type (weekday=2 Mon–Fri, weekend=1 Sat/Sun).
-        # This ensures find_best_matches only returns hh_vehicle_ids that actually drove
-        # on that day type, so sampled profiles have real trip data to copy.
-        day_flag = 2 if weekday else 1
-        day_df = nhts_df.filter(pl.col("weekday") == day_flag)
-
-        self._nhts_cache[cache_key] = self._build_matching_cache(day_df)
-
-        logging.info("NHTS %s cache prepared successfully", cache_key)
-        return self._nhts_cache[cache_key]
-
-    def _build_matching_cache(self, df: pl.DataFrame) -> dict:
-        """
-        Build a lookup dict for find_best_matches().
-
-        Keys are tuples of (income_bucket, ...) with increasing specificity; values are
-        sorted hh_vehicle_id lists for deterministic random sampling.
-
-        Args:
-            df (pl.DataFrame): DataFrame with NHTS data including income_bucket, occupants, vehicles, and hh_vehicle_id
-
-        Returns:
-            Dictionary mapping key tuples to sorted hh_vehicle_id lists for deterministic random sampling
-        """
-        cache = {}
-
-        # Tier 1 — exact match on household demographics: (income_bucket, occupants, vehicles).
-        # Each NHTS vehicle id appears once per tier it qualifies for.
-        exact_groups = df.group_by(["income_bucket", "occupants", "vehicles"]).agg(pl.col("hh_vehicle_id").unique())
-
-        for row in exact_groups.iter_rows(named=True):
-            key = (row["income_bucket"], row["occupants"], row["vehicles"])
-            # Sort to ensure consistent ordering for deterministic results
-            cache[key] = sorted(row["hh_vehicle_id"])
-
-        # Tier 2 — relax vehicle count: (income_bucket, occupants).
-        # Used when no exact match has enough vehicles; keys are 2-tuples so they
-        # never collide with tier-1's 3-tuple keys.
-        income_occ_groups = df.group_by(["income_bucket", "occupants"]).agg(pl.col("hh_vehicle_id").unique())
-
-        for row in income_occ_groups.iter_rows(named=True):
-            key = (row["income_bucket"], row["occupants"])
-            if key not in cache:  # Don't overwrite exact matches
-                # Sort to ensure consistent ordering for deterministic results
-                cache[key] = sorted(row["hh_vehicle_id"])
-
-        # Tier 3 — relax occupants too: (income_bucket,).
-        # Last structured fallback before find_best_matches picks the closest income bucket.
-        income_groups = df.group_by(["income_bucket"]).agg(pl.col("hh_vehicle_id").unique())
-
-        for row in income_groups.iter_rows(named=True):
-            key = (row["income_bucket"],)
-            # Sort to ensure consistent ordering for deterministic results
-            cache[key] = sorted(row["hh_vehicle_id"])
-
-        return cache
+        return self.vehicle_ownership.fit(pums_df)
 
     def predict_num_vehicles(self, metadata_df: pl.DataFrame | None = None) -> pl.DataFrame:
-        """
-        Predict number of vehicles for each household in the metadata using the fitted model.
-        If the model hasn't been fitted yet, it will be fitted automatically using the PUMS data.
-
-        Args:
-            metadata_df: DataFrame with ResStock metadata.
-
-        Returns:
-            DataFrame with an added 'vehicles' column
-        """
         df = self.metadata_df if metadata_df is None else metadata_df
         if df is None:
             raise MetadataDataFrameError()
 
-        # Automatically fit the model if it hasn't been fitted yet
-        if self.vehicle_ownership_model is None:
+        if self.vehicle_ownership.vehicle_ownership_model is None:
             if self.pums_df is None:
                 raise ValueError(
                     "pums_df is required to fit the vehicle ownership model. "
                     "Pass pums_df to EVDemandCalculator or call fit_vehicle_ownership_model() first."
                 )
             logging.info("Vehicle ownership model not fitted yet. Fitting model...")
-            self.fit_vehicle_ownership_model(self.pums_df)
+            self.vehicle_ownership.fit(self.pums_df)
 
-        # Step 1: Prepare features from metadata
-        feature_columns = self.veh_assign_features
-        X = df.select(["bldg_id", *feature_columns])
+        return self.vehicle_ownership.predict(df)
 
-        # Validate no missing values in required features
-        if X.select(feature_columns).null_count().sum_horizontal().item() > 0:
-            # Find building IDs with missing values
-            missing_data = X.filter(
-                pl.col("occupants").is_null() | pl.col("income").is_null() | pl.col("metro").is_null()
-            )
-            missing_bldg_ids = missing_data.get_column("bldg_id").to_list()
-            raise ValueError("Missing vehicle ownership model input data for building IDs: " + str(missing_bldg_ids))
-
-        # Separate features and building IDs
-        features = X.select(feature_columns)
-
-        # Step 2: Encode categorical variables
-        features_encoded = features.clone()
-        metro_encoded = self.label_encoders["metro"].transform(features.get_column("metro").to_numpy())
-        features_encoded = features_encoded.with_columns(pl.Series(metro_encoded).alias("metro"))
-
-        # Step 3: Scale features
-        features_scaled = self.scaler.transform(features_encoded.to_numpy())
-
-        if self.vehicle_ownership_model is None:
-            raise ValueError("vehicle_ownership_model")
-
-        # Step 4: Make predictions
-        predictions_encoded = self.vehicle_ownership_model.predict(features_scaled)
-
-        # Step 5: Decode predictions and add to DataFrame
-        predictions_decoded = self.target_encoder.inverse_transform(predictions_encoded)
-
-        # Add predictions to original DataFrame
-        bldg_veh_df = df.with_columns(pl.Series(predictions_decoded).alias("vehicles"))
-
-        return bldg_veh_df
+    # --- EV adoption (delegates to EVAdoptionSampler) ---
 
     def predict_num_EVs(self, metadata_df: pl.DataFrame | None = None) -> pl.DataFrame:
-        """
-        Predict whether each household has an EV (0 or 1) using NREL's ResStock lookup.
-
-        Joins metadata to NREL's conditional P(EV) by FPL, building type, PUMA, and tenure,
-        then Bernoulli-samples ownership (max one EV per household). Vacant units always
-        receive 0 EVs.
-
-        Args:
-            metadata_df: DataFrame with ResStock metadata including fpl, building_type,
-                puma_dependency, tenure, and is_vacant columns.
-
-        Returns:
-            DataFrame with added columns: ev_ownership_probability, evs
-
-        Raises:
-            MetadataDataFrameError: If the metadata DataFrame is None
-            ValueError: If the metadata DataFrame is missing required columns or an occupied
-                building has no matching EV ownership lookup row
-        """
         df = self.metadata_df if metadata_df is None else metadata_df
         if df is None:
             raise MetadataDataFrameError()
+        return self.ev_adoption_sampler.sample(df)
 
-        required_columns = {"fpl", "building_type", "tenure", "puma_dependency", "is_vacant"}
-        missing_columns = required_columns - set(df.columns)
-        if missing_columns:
-            raise ValueError(
-                "Missing EV adoption metadata columns: "
-                + ", ".join(sorted(missing_columns))
-                + ". Ensure load_metadata() was used or provide these columns."
-            )
-
-        # conditional P(EV) lookup by FPL, building type, PUMA, and tenure
-        ev_lookup = self.ev_ownership_df.select(
-            "fpl",
-            "building_type",
-            "puma_dependency",
-            "tenure",
-            "ev_ownership_probability",
-        )
-
-        # join metadata to conditional P(EV) lookup
-        metadata_with_prob = df.join(
-            ev_lookup,
-            on=["fpl", "building_type", "puma_dependency", "tenure"],
-            how="left",
-        ).with_columns(
-            pl.when(pl.col("is_vacant"))
-            .then(0.0)  # vacant units: Tenure/FPL = "Not Available", set P(EV) = 0
-            .otherwise(pl.col("ev_ownership_probability"))
-            .alias("ev_ownership_probability"),
-        )
-
-        # Fail fast if any occupied building misses the lookup join.
-        unmatched = metadata_with_prob.filter(
-            ~pl.col("is_vacant") & pl.col("ev_ownership_probability").is_null()
-        )
-        if unmatched.height > 0:
-            sample_ids = unmatched.get_column("bldg_id").head(5).to_list() if "bldg_id" in unmatched.columns else []
-            raise ValueError(
-                f"EV ownership lookup join missed for {unmatched.height} occupied building(s)"
-                + (f" (e.g. bldg_id={sample_ids})" if sample_ids else "")
-                + ". Check fpl, building_type, puma_dependency, and tenure against the lookup table."
-            )
-
-        # Bernoulli sample — each household gets 0 or 1 EV (max one per household).
-        # Matches ev_adoption.ipynb; differs from ResStock 2025 which uses quota sampling.
-        rng = np.random.default_rng(self.random_state)
-        return metadata_with_prob.with_columns(
-            pl.Series("_draw", rng.random(metadata_with_prob.height)),
-        ).with_columns(
-            pl.when(pl.col("is_vacant"))
-            .then(pl.lit(0))
-            .when(pl.col("_draw") < pl.col("ev_ownership_probability"))
-            .then(pl.lit(1))
-            .otherwise(pl.lit(0))
-            .cast(pl.Int8)
-            .alias("evs"),  # aliased to "vehicles" downstream for NHTS sampling
-        ).drop("_draw")
+    # --- NHTS profile sampling (delegates to NHTSProfileSampler) ---
 
     def find_best_matches(
         self, target_income: int, target_occupants: int, target_vehicles: int, num_samples: int, *, weekday: bool = True
     ) -> tuple[str, list[str]]:
-        """
-        Find the best matching vehicles in NHTS data based on prioritized criteria.
-        Will return num_samples different vehicles, falling back to less exact matches if needed.
-
-        Uses pre-built cache to eliminate expensive filtering operations.
-        Only considers NHTS vehicles that have at least one trip on the requested day type.
-
-        Args:
-            target_income: Target income bucket to match
-            target_occupants: Target number of occupants to match
-            target_vehicles: Target number of vehicles to match
-            num_samples: Number of different vehicles to sample
-            weekday: If True, match against weekday trip profiles; otherwise weekend
-
-        Returns:
-            Tuple of (match_type, list of matched_vehicle_ids)
-        """
-        cache = self._prepare_nhts_cache(weekday=weekday)
-
-        # Try exact match first: (income, occupants, vehicles)
-        exact_key = (target_income, target_occupants, target_vehicles)
-        if exact_key in cache and len(cache[exact_key]) >= num_samples:
-            return "exact", np.random.choice(cache[exact_key], size=num_samples, replace=False).tolist()
-
-        # Try matching only income and occupants: (income, occupants)
-        income_occ_key = (target_income, target_occupants)
-        if income_occ_key in cache and len(cache[income_occ_key]) >= num_samples:
-            return "income_occupants", np.random.choice(cache[income_occ_key], size=num_samples, replace=False).tolist()
-
-        # Try matching only income: (income,)
-        income_key = (target_income,)
-        if income_key in cache and len(cache[income_key]) >= num_samples:
-            return "income_only", np.random.choice(cache[income_key], size=num_samples, replace=False).tolist()
-
-        # If still no match, find closest income bucket
-        available_incomes = [key[0] for key in cache if len(key) == 1]  # Get all single-income keys
-        if available_incomes:
-            closest_income = min(available_incomes, key=lambda x: abs(x - target_income))
-            closest_key = (closest_income,)
-            if closest_key in cache and len(cache[closest_key]) >= num_samples:
-                return "closest_income", np.random.choice(cache[closest_key], size=num_samples, replace=False).tolist()
-            else:
-                # If not enough samples, take all available
-                return "closest_income", cache[closest_key]
-
-        # Fallback: return empty list if no matches found
-        return "no_match", []
-
-    @staticmethod
-    def _trip_profile_from_nhts(
-        nhts_df: pl.DataFrame,
-        matched_vehicle_id: str,
-        *,
-        weekday: bool,
-    ) -> tuple[list[int], list[int], list[float], list[float], list[int]]:
-        """
-        Extract trip profile from NHTS data for a given vehicle id and day type.
-
-        Args:
-            nhts_df (pl.DataFrame): NHTS trip data DataFrame
-            matched_vehicle_id (str): Vehicle id to match
-            weekday (bool): If True, extract weekday trip profile; otherwise extract weekend trip profile
-
-        Returns:
-            Tuple of (departures, arrivals, miles, weights, trip_ids)
-        """
-        # filter NHTS data for the given vehicle id and day type
-        day_flag = 2 if weekday else 1
-        trip_data = nhts_df.filter(
-            (pl.col("hh_vehicle_id") == matched_vehicle_id) & (pl.col("weekday") == day_flag)
+        return self.nhts_sampler.find_best_matches(
+            target_income=target_income,
+            target_occupants=target_occupants,
+            target_vehicles=target_vehicles,
+            num_samples=num_samples,
+            weekday=weekday,
         )
-        departures = [nhts_departure_hour(t) for t in trip_data["start_time"]]
-        arrivals = [nhts_arrival_hour(t) for t in trip_data["end_time"]]
-        miles = trip_data["miles_driven"].to_list()
-        weights = trip_data["trip_weight"].to_list()
-        trip_ids = list(range(1, len(departures) + 1))
-        return departures, arrivals, miles, weights, trip_ids
 
     @overload
     def sample_vehicle_profiles(
@@ -720,417 +290,37 @@ class EVDemandCalculator:
         *,
         return_catalog: bool = False,
     ) -> dict[tuple[str, int], VehicleProfile] | tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]:
-        """
-        For each household and vehicle, select separate weekday and weekend trip profiles from NHTS.
-
-        Uses pre-built vehicle trips cache to eliminate expensive per-vehicle filtering.
-
-        Args:
-            bldg_veh_df: DataFrame with household and vehicle info, including a ``vehicles`` column.
-            nhts_df: NHTS trip data DataFrame with trip weights; defaults to ``self.nhts_df``
-            return_catalog: If True, also return a per-vehicle-slot match diagnostics DataFrame.
-
-        Returns:
-            Dict mapping (bldg_id, vehicle_id) to sampled trip profile parameters.
-            When return_catalog=True, returns (profiles, catalog) where catalog has one row
-            per predicted vehicle slot with NHTS match and weekday/weekend trip availability.
-        """
-        df = bldg_veh_df
-        if df is None:
+        if bldg_veh_df is None:
             raise MetadataDataFrameError()
 
         if nhts_df is None:
             nhts_df = self.nhts_df
-        if nhts_df is None:
-            raise NHTSDataError()
 
-        profiles: dict[tuple[str, int], VehicleProfile] = {}
-        catalog_records: list[dict[str, Any]] = []
-        total_buildings = len(df)
-        processed_buildings = 0
+        return self.nhts_sampler.sample_vehicle_profiles(
+            bldg_veh_df,
+            nhts_df,
+            return_catalog=return_catalog,
+        )
 
-        logging.info(f"Sampling vehicle profiles for {total_buildings} buildings...")
-
-        for row in df.iter_rows(named=True):
-            bldg_id = row["bldg_id"]
-            num_vehicles = row["vehicles"]
-            processed_buildings += 1
-
-            if num_vehicles is None:
-                raise ValueError(
-                    f"bldg_id={bldg_id} has null vehicles; ensure predict_num_EVs() completed "
-                    "without lookup join misses before sampling profiles."
-                )
-            if num_vehicles == 0:
-                # Log progress for zero-vehicle buildings too
-                self._log_progress(processed_buildings, total_buildings, "Building progress")
-                continue
-
-            # Match weekday and weekend profiles independently from NHTS vehicles
-            # that have at least one logged trip on each day type.
-            weekday_match_type, weekday_vehicle_ids = self.find_best_matches(
-                target_income=row["income_bucket"],
-                target_occupants=row["occupants"],
-                target_vehicles=num_vehicles,
-                num_samples=num_vehicles,
-                weekday=True,
-            )
-            weekend_match_type, weekend_vehicle_ids = self.find_best_matches(
-                target_income=row["income_bucket"],
-                target_occupants=row["occupants"],
-                target_vehicles=num_vehicles,
-                num_samples=num_vehicles,
-                weekday=False,
-            )
-
-            if len(weekday_vehicle_ids) < num_vehicles:
-                raise ValueError(
-                    f"bldg_id={bldg_id}: weekday NHTS matching found {len(weekday_vehicle_ids)} "
-                    f"profile(s) but {num_vehicles} required (weekday_match_type={weekday_match_type})."
-                )
-            if len(weekend_vehicle_ids) < num_vehicles:
-                raise ValueError(
-                    f"bldg_id={bldg_id}: weekend NHTS matching found {len(weekend_vehicle_ids)} "
-                    f"profile(s) but {num_vehicles} required (weekend_match_type={weekend_match_type})."
-                )
-
-            # Create profiles for each vehicle
-            for vehicle_id in range(1, num_vehicles + 1):
-                weekday_vehicle_id = weekday_vehicle_ids[vehicle_id - 1]
-                weekend_vehicle_id = weekend_vehicle_ids[vehicle_id - 1]
-
-                (
-                    weekday_departures,
-                    weekday_arrivals,
-                    weekday_miles,
-                    weekday_weights,
-                    weekday_trip_ids,
-                ) = self._trip_profile_from_nhts(nhts_df, weekday_vehicle_id, weekday=True)
-                (
-                    weekend_departures,
-                    weekend_arrivals,
-                    weekend_miles,
-                    weekend_weights,
-                    weekend_trip_ids,
-                ) = self._trip_profile_from_nhts(nhts_df, weekend_vehicle_id, weekday=False)
-
-                # Create VehicleProfile for this specific vehicle
-                profiles[(bldg_id, vehicle_id)] = VehicleProfile(
-                    bldg_id=bldg_id,
-                    vehicle_id=vehicle_id,
-                    weekday_departure_hour=weekday_departures,
-                    weekday_arrival_hour=weekday_arrivals,
-                    weekday_miles=weekday_miles,
-                    weekday_trip_weights=weekday_weights,
-                    weekend_departure_hour=weekend_departures,
-                    weekend_arrival_hour=weekend_arrivals,
-                    weekend_miles=weekend_miles,
-                    weekend_trip_weights=weekend_weights,
-                    weekday_trip_ids=weekday_trip_ids,
-                    weekend_trip_ids=weekend_trip_ids,
-                )
-
-                if return_catalog:
-                    has_weekday_trips = len(weekday_miles) > 0
-                    has_weekend_trips = len(weekend_miles) > 0
-                    catalog_records.append({
-                        "bldg_id": bldg_id,
-                        "vehicle_slot": vehicle_id,
-                        "predicted_vehicles": num_vehicles,
-                        "weekday_match_type": weekday_match_type,
-                        "weekend_match_type": weekend_match_type,
-                        "nhts_vehicle_matched": True,
-                        "nhts_weekday_matched": has_weekday_trips,
-                        "nhts_weekend_matched": has_weekend_trips,
-                        "matched_hh_vehicle_id": weekday_vehicle_id,
-                        "matched_weekday_hh_vehicle_id": weekday_vehicle_id,
-                        "matched_weekend_hh_vehicle_id": weekend_vehicle_id,
-                        "has_weekday_trips": has_weekday_trips,
-                        "has_weekend_trips": has_weekend_trips,
-                        "weekday_trip_count": len(weekday_miles),
-                        "weekend_trip_count": len(weekend_miles),
-                    })
-
-            # Log progress for buildings with vehicles
-            self._log_progress(processed_buildings, total_buildings, "Building progress")
-
-        logging.info(f"Generated {len(profiles)} vehicle profiles from {total_buildings} buildings")
-        if return_catalog:
-            return profiles, pl.DataFrame(catalog_records)
-        return profiles
+    # --- Trip schedule generation (delegates to TripScheduleGenerator) ---
 
     @staticmethod
     def _normalize_day_trip_times(
         departures: np.ndarray,
         arrival_hours: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Enforce arrival_hour > departure_hour per trip and non-overlapping away intervals within a day.
+        return TripScheduleGenerator._normalize_day_trip_times(departures, arrival_hours)
 
-        Away hours are ``range(departure_hour, arrival_hour)`` (departure inclusive, arrival exclusive).
-        Independent random offsets can produce arrival_hour <= departure_hour or overlapping intervals.
-        Trips are repacked in departure order on a single calendar day (no overnight trips).
-        Each trip's away interval ends before the next trip's departure hour begins.
-        There is no minimum dwell-at-home between trips — the next departure may equal the prior arrival.
-        Returns arrays in the original input order. Trips that no longer fit before hour 23
-        are dropped (keep_mask=False).
-
-        Args:
-            departures: Array of departure hours
-            arrival_hours: Array of first-at-home hours (exclusive end of away interval)
-
-        Returns:
-            tuple[np.ndarray, np.ndarray, np.ndarray]: Tuple of normalized departure hours,
-                arrival hours, and keep mask
-        """
-        if len(departures) != len(arrival_hours):
-            raise ValueError(
-                f"departures and arrival_hours must have the same length, got {len(departures)} and {len(arrival_hours)}"
-            )
-
-        n = len(departures)
-        keep = np.ones(n, dtype=bool)
-        if n == 0:
-            return departures.astype(int), arrival_hours.astype(int), keep
-
-        order = np.argsort(departures, kind="stable")
-        dep_sorted = departures[order].astype(int)
-        arrival_sorted = arrival_hours[order].astype(int)
-        keep_sorted = np.ones(n, dtype=bool)
-
-        earliest_next_dep = 0
-        for i in range(n):
-            if earliest_next_dep > MAX_DEPARTURE_HOUR:
-                keep_sorted[i:] = False
-                break
-
-            dep = min(max(int(dep_sorted[i]), earliest_next_dep), MAX_DEPARTURE_HOUR)
-            arrival = min(max(int(arrival_sorted[i]), dep + MIN_TRIP_AWAY_HOURS), MAX_ARRIVAL_HOUR)
-            if arrival <= dep:
-                keep_sorted[i] = False
-                continue
-
-            dep_sorted[i] = dep
-            arrival_sorted[i] = arrival
-            earliest_next_dep = arrival
-
-        dep_out = np.empty(n, dtype=int)
-        arrival_out = np.empty(n, dtype=int)
-        dep_out[order] = dep_sorted
-        arrival_out[order] = arrival_sorted
-        keep[order] = keep_sorted
-        return dep_out, arrival_out, keep
-
-    def _generate_vehicle_daily_trip_schedules(  # noqa: C901
+    def _generate_vehicle_daily_trip_schedules(
         self, profile: VehicleProfile, rng: np.random.RandomState | None = None
     ) -> pl.DataFrame:
-        """Generate trip schedules for a vehicle for all days in the date range as a DataFrame.
-
-        For each day, the departure and arrival times and miles traveled are generated from random 
-        perturbations of the base values in the vehicle profile. Trips are measured in hourly increments. 
-
-        Args:
-            profile (VehicleProfile): Vehicle profile to generate schedules for
-            rng (np.random.RandomState): Random number generator
-
-        Returns:
-            pl.DataFrame: DataFrame of hourly trip schedules for the vehicle
-        """
-        if rng is None:
-            rng = np.random.random.__self__  # Use global numpy random if no rng provided
-
-        # Pre-compute constants (move outside loops)
-        time_offsets = np.array([-2, -1, 0, 1, 2])
-        time_probabilities = np.array([0.05, 0.10, 0.70, 0.10, 0.05])
-
-        # Pre-process weekday data
-        weekday_available = len(profile.weekday_trip_ids)
-        weekday_weights = None
-        weekday_departures = None
-        weekday_arrivals = None
-        weekday_miles = None
-
-        if weekday_available > 0:
-            weekday_weights = np.array(profile.weekday_trip_weights)
-            weekday_weights = weekday_weights / weekday_weights.sum()  # Pre-normalize
-            weekday_departures = np.array(profile.weekday_departure_hour)
-            weekday_arrivals = np.array(profile.weekday_arrival_hour)
-            weekday_miles = np.array(profile.weekday_miles)
-
-        # Pre-process weekend data
-        weekend_available = len(profile.weekend_trip_ids)
-        weekend_weights = None
-        weekend_departures = None
-        weekend_arrivals = None
-        weekend_miles = None
-
-        if weekend_available > 0:
-            weekend_weights = np.array(profile.weekend_trip_weights)
-            weekend_weights = weekend_weights / weekend_weights.sum()  # Pre-normalize
-            weekend_departures = np.array(profile.weekend_departure_hour)
-            weekend_arrivals = np.array(profile.weekend_arrival_hour)
-            weekend_miles = np.array(profile.weekend_miles)
-
-        # Calculate number of days and pre-compute date information
-        days = (self.end_date - self.start_date).days + 1
-
-        # Pre-allocate lists for batch operations
-        bldg_ids = []
-        vehicle_ids = []
-        dates = []
-        departure_hours = []
-        arrival_hours = []
-        miles_driven = []
-
-        for day_offset in range(days):
-            current_date = self.start_date + timedelta(days=day_offset)
-            is_weekday = current_date.weekday() < 5  # Monday-Friday are weekdays
-
-            # Select pre-processed data based on day type
-            if is_weekday:
-                available_trips = weekday_available
-                weights = weekday_weights
-                departures = weekday_departures
-                arrivals = weekday_arrivals
-                base_miles_array = weekday_miles
-            else:
-                available_trips = weekend_available
-                weights = weekend_weights
-                departures = weekend_departures
-                arrivals = weekend_arrivals
-                base_miles_array = weekend_miles
-
-            if available_trips == 0:
-                continue  # Skip days where we have no trips
-
-            # Replicate all available trips for this day
-            num_trips = available_trips
-
-            # Sample trip indices using the pre-normalized weights
-            trip_indices = rng.choice(
-                available_trips,
-                size=num_trips,
-                replace=False,
-                p=weights,
-            )
-
-            # Vectorized operations for all trips in this day
-            if departures is None:
-                raise ValueError("departures")
-            if arrivals is None:
-                raise ValueError("arrivals")
-            if base_miles_array is None:
-                raise ValueError("base_miles_array")
-            selected_departures = departures[trip_indices]
-            selected_arrivals = arrivals[trip_indices]
-            selected_base_miles = base_miles_array[trip_indices]
-
-            # Vectorized variance calculations
-            miles_variance = rng.normal(selected_base_miles, selected_base_miles * 0.1)
-
-            # Vectorized time offset sampling
-            departure_offsets = rng.choice(time_offsets, size=num_trips, p=time_probabilities)
-            arrival_offsets = rng.choice(time_offsets, size=num_trips, p=time_probabilities)
-
-            # Apply offsets with bounds checking
-            departures_with_variance = np.clip(selected_departures + departure_offsets, 0, MAX_DEPARTURE_HOUR)
-            arrival_hours_with_variance = np.clip(selected_arrivals + arrival_offsets, 1, MAX_ARRIVAL_HOUR)
-
-            # Offsets are drawn independently per trip, so fix invalid intervals and
-            # overlaps before writing the day's schedule (may drop trips that spill past 23:00).
-            departures_with_variance, arrival_hours_with_variance, keep_trip = self._normalize_day_trip_times(
-                departures_with_variance,
-                arrival_hours_with_variance,
-            )
-            miles_variance = miles_variance[keep_trip]
-            num_trips = int(keep_trip.sum())
-            if num_trips == 0:
-                continue  # e.g. weekday template missing or every trip dropped after packing
-
-            # Batch append to lists
-            bldg_ids.extend([profile.bldg_id] * num_trips)
-            vehicle_ids.extend([profile.vehicle_id] * num_trips)
-            dates.extend([current_date] * num_trips)
-            departure_hours.extend(departures_with_variance[keep_trip].tolist())
-            arrival_hours.extend(arrival_hours_with_variance[keep_trip].tolist())
-            miles_driven.extend(miles_variance.tolist())
-
-        # Create DataFrame directly from lists (vectorized approach)
-        schedule_data = {
-            "bldg_id": bldg_ids,
-            "vehicle_id": vehicle_ids,
-            "date": dates,
-            "departure_hour": departure_hours,
-            "arrival_hour": arrival_hours,
-            "miles_driven": miles_driven,
-        }
-
-        return pl.DataFrame(schedule_data)
+        return self.trip_schedule_generator._generate_vehicle_daily_trip_schedules(profile, rng=rng)
 
     def generate_daily_trip_schedules(
         self,
         profile_params: dict[tuple[str, int], VehicleProfile],
     ) -> pl.DataFrame:
-        """
-        Generate trip schedules for all given vehicle profiles for all days in the date range as a DataFrame.
-
-        For each day, the departure and arrival times and miles traveled are generated from random 
-        perturbations of the base values in the vehicle profile. Trips are measured in hourly increments. 
-
-        Args:
-            profile_params (dict[tuple[str, int], VehicleProfile]): Dict of vehicle profiles and their associated building and vehicle IDs 
-
-        Returns:
-            pl.DataFrame: daily departure/arrival times and miles driven for each vehicle
-        """
-        def process_profile_with_seed(profile_and_index):
-            profile, index = profile_and_index
-            # Create unique seed for this profile
-            profile_seed = self.random_state + index
-            rng = np.random.RandomState(profile_seed)
-            return self._generate_vehicle_daily_trip_schedules(profile, rng=rng)
-
-        profiles_list = list(profile_params.values())
-        profiles_with_index = [(profile, i) for i, profile in enumerate(profiles_list)]
-
-        all_schedules = []
-
-        total_profiles = len(profiles_list)
-        logging.info(f"Processing {total_profiles} vehicle profiles...")
-
-        # Use parallel processing if we have multiple profiles and max_workers != 1
-        if len(profiles_list) > 1 and self.max_workers != 1:
-            logging.info(f"Using parallel processing with {self.max_workers or 'all available'} workers")
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = [
-                    executor.submit(process_profile_with_seed, profile_and_index)
-                    for profile_and_index in profiles_with_index
-                ]
-
-                for completed, future in enumerate(as_completed(futures), 1):
-                    schedules = future.result()
-                    all_schedules.append(schedules)  # Fixed: append DataFrame, don't extend
-
-                    # Log progress every 5%
-                    self._log_progress(completed, total_profiles, "Progress")
-        else:
-            # Fall back to sequential processing
-            logging.info("Using sequential processing")
-            for i, profile_and_index in enumerate(profiles_with_index, 1):
-                schedules = process_profile_with_seed(profile_and_index)
-                all_schedules.append(schedules)  # Fixed: append DataFrame, don't extend
-
-                # Log progress every 5%
-                self._log_progress(i, total_profiles, "Progress")
-
-        # Combine all DataFrames (already in DataFrame format)
-        total_schedules = sum(len(schedule_df) for schedule_df in all_schedules)
-        logging.info(f"Generated {total_schedules} trip schedules from {total_profiles} vehicle profiles")
-
-        if all_schedules:
-            return pl.concat(all_schedules)
-        else:
-            return pl.DataFrame()
+        return self.trip_schedule_generator.generate(profile_params)
 
     def match_and_generate_trip_schedules(self) -> pl.DataFrame:
         """
@@ -1161,47 +351,16 @@ class EVDemandCalculator:
 
         return trip_schedules
 
+    # --- Charging / SOC (delegates to ChargingSimulator and charging.py) ---
+
     def _build_hourly_timestamps(self) -> pl.DataFrame:
-        """Build hourly timestamps for the instance date range (inclusive, aligned to whole hours).
-
-        Returns:
-            pl.DataFrame: hourly timestamps from ``self.start_date`` 00:00 through ``self.end_date`` 23:00
-
-        Raises:
-            ValueError: If ``self.end_date`` is before ``self.start_date``
-        """
-        start_hour = self.start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_hour = self.end_date.replace(hour=23, minute=0, second=0, microsecond=0)
-        if end_hour < start_hour:
-            raise ValueError(
-                f"end_date {self.end_date} must be on or after start_date {self.start_date}"
-            )
-
-        timestamps: list[datetime] = []
-        current = start_hour
-        while current <= end_hour:
-            timestamps.append(current)
-            current += timedelta(hours=1)
-
-        return pl.DataFrame({"timestamp": timestamps})
+        return build_hourly_timestamps(self.start_date, self.end_date)
 
     def _build_hours_base(self) -> pl.DataFrame:
-        """Build the hourly calendar for the instance date range, used for trip-to-hour joins.
-
-        Returns:
-            pl.DataFrame: hourly calendar for the instance date range
-        """
         if self.start_date is None or self.end_date is None:
             raise NoDateRangeError()
-        return (
-            self._build_hourly_timestamps()
-            .with_row_index("hour_index")  # stable 0..num_hours-1 index in chronological order
-            .with_columns(
-                pl.col("timestamp").dt.date().alias("date"),  # calendar date for joining daily trip rows
-                pl.col("timestamp").dt.hour().alias("hour"),  # clock hour (0..23) for joining trip rows
-            )
-        )
-    
+        return build_hours_base(self.start_date, self.end_date)
+
     def generate_vehicle_presence_schedules(
         self,
         trip_schedules: pl.DataFrame,
@@ -1209,84 +368,11 @@ class EVDemandCalculator:
         hours_base: pl.DataFrame | None = None,
         vehicle_keys: Iterable[tuple[str | int, int]] | None = None,
     ) -> dict[tuple[str | int, int], pl.DataFrame]:
-        """
-        Map each vehicle's trip schedule to an hourly schedule of home/away status for the instance date range.
-
-        Uses the same away-hour model as generate_daily_trip_schedules: a vehicle is
-        away from home for hours ``range(departure_hour, arrival_hour)`` on each trip day,
-        where ``arrival_hour`` is the first hour at home. It is at home (and available to
-        charge) in all other hours.
-
-        Args:
-            trip_schedules (pl.DataFrame): DataFrame of trip schedules
-            hours_base (pl.DataFrame): hourly calendar for the instance date range
-            vehicle_keys (Iterable[tuple[str | int, int]]): Iterable of vehicle keys to generate presence schedules for
-
-        Returns:
-            dict[tuple[str | int, int], pl.DataFrame]: Dict of vehicle keys to hourly presence schedules
-        """
-        if hours_base is None:
-            hours_base = self._build_hours_base()  # shared calendar with join keys for matching trip rows to hours
-
-        if vehicle_keys is None:
-            if trip_schedules.is_empty():
-                return {}  # no vehicles requested and no trips to infer vehicle ids from
-            vehicle_keys_df = trip_schedules.select("bldg_id", "vehicle_id").unique()  # infer vehicles from trips
-        else:
-            vehicle_keys_df = pl.DataFrame({
-                "bldg_id": [key[0] for key in vehicle_keys],  # building id for each requested vehicle slot
-                "vehicle_id": [key[1] for key in vehicle_keys],  # 1-based vehicle index within the building
-            }).unique()  # caller may pass vehicle_profiles.keys(); dedupe just in case
-
-        if trip_schedules.is_empty():
-            # no trips means the vehicle never leaves home; every hour is chargeable
-            hourly_presence = (
-                vehicle_keys_df.join(hours_base, how="cross")  # one hourly schedule per requested vehicle
-                .with_columns(
-                    pl.lit(True).alias("at_home"),  # default presence state without trip evidence
-                    pl.lit(False).alias("away_from_home"),  # explicit complement of at_home
-                    pl.lit(True).alias("can_charge"),  # home charging assumed available whenever at home
-                )
-                .select("bldg_id", "vehicle_id", "hour_index", "timestamp", "at_home", "away_from_home", "can_charge")
-            )
-        else:
-            away_hours = (
-                trip_schedules.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
-                .with_columns(
-                    # away from departure_hour (inclusive) through arrival_hour (exclusive)
-                    pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour")).alias("hour"),
-                )
-                .explode("hour")  # one row per away hour instead of one row per trip interval
-                .select("bldg_id", "vehicle_id", "date", "hour")  # minimal join keys for marking away hours
-                .unique()  # overlapping trips on the same day collapse to a single away marker
-            )
-
-            hourly_presence = (
-                vehicle_keys_df.join(hours_base, how="cross")  # hourly rows x number of vehicles
-                .join(
-                    away_hours.with_columns(pl.lit(False).alias("at_home")),  # away rows carry at_home=False
-                    on=["bldg_id", "vehicle_id", "date", "hour"],  # match a specific vehicle-hour to a trip hour
-                    how="left",  # keep all hours; hours without trips remain null until filled below
-                )
-                .with_columns(
-                    pl.col("at_home").fill_null(True).alias("at_home"),
-                )
-                .with_columns(
-                    (~pl.col("at_home")).alias("away_from_home"),
-                    pl.col("at_home").alias("can_charge"),
-                )
-                .select("bldg_id", "vehicle_id", "hour_index", "timestamp", "at_home", "away_from_home", "can_charge")
-            )
-
-        presence_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] = {}
-        for vehicle_frame in hourly_presence.partition_by(["bldg_id", "vehicle_id"], as_dict=False):
-            bldg_id = vehicle_frame["bldg_id"][0]
-            vehicle_id = int(vehicle_frame["vehicle_id"][0])
-            presence_by_vehicle[(bldg_id, vehicle_id)] = vehicle_frame.drop("bldg_id", "vehicle_id").sort(
-                "hour_index"
-            )
-
-        return presence_by_vehicle
+        return self.charging_simulator.generate_presence(
+            trip_schedules,
+            hours_base=hours_base,
+            vehicle_keys=vehicle_keys,
+        )
 
     @staticmethod
     def _build_hourly_discharge_kwh(
@@ -1296,55 +382,12 @@ class EVDemandCalculator:
         kwh_per_mile: float,
         ev_adoption_rate: float,
     ) -> pl.DataFrame:
-        """
-        Map each vehicle's trip schedule to an hourly schedule of discharge kWh for the instance date range.
-        Spread each trip's driving energy uniformly over its away-from-home hours.
-
-        Away hours are ``range(departure_hour, arrival_hour)`` where ``arrival_hour`` is the
-        first hour at home (exclusive end of the away interval).
-        
-        Args:
-            trip_schedules (pl.DataFrame): DataFrame of trip schedules
-            hours_base (pl.DataFrame): hourly calendar for the instance date range
-            kwh_per_mile (float): kWh per mile
-            ev_adoption_rate (float): EV adoption rate
-
-        Returns:
-            pl.DataFrame: hourly discharge kWh for each trip
-        """
-        if trip_schedules.is_empty():
-            # no trips -> no driving discharge; return typed empty frame for downstream joins
-            return pl.DataFrame(
-                schema={
-                    "bldg_id": pl.Int64,
-                    "vehicle_id": pl.Int64,
-                    "hour_index": pl.UInt32,
-                    "discharge_kwh": pl.Float64,
-                }
-            )
-
-        away_hour_discharge = (
-            trip_schedules.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
-            .with_columns(
-                # away from departure_hour (inclusive) through arrival_hour (exclusive)
-                pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour")).alias("hour"),
-                (pl.col("miles_driven") * kwh_per_mile * ev_adoption_rate).alias("trip_kwh"),
-            )
-            .with_columns(
-                # divide total trip energy evenly across all away hours for that trip
-                (pl.col("trip_kwh") / pl.col("hour").list.len()).alias("discharge_kwh_per_away_hour")
-            )
-            .explode("hour")  # one row per away hour instead of one row per trip
-            .join(
-                hours_base.select("date", "hour", "hour_index"),  # map calendar (date, hour) -> hour_index index
-                on=["date", "hour"],
-                how="inner",
-            )
-            .group_by("bldg_id", "vehicle_id", "hour_index")
-            # overlapping trips contributing to the same hour add their discharge shares together
-            .agg(pl.col("discharge_kwh_per_away_hour").sum().alias("discharge_kwh"))
+        return ChargingSimulator._build_hourly_discharge_kwh(
+            trip_schedules,
+            hours_base,
+            kwh_per_mile=kwh_per_mile,
+            ev_adoption_rate=ev_adoption_rate,
         )
-        return away_hour_discharge
 
     @staticmethod
     def _schedule_immediate_charging(
@@ -1355,49 +398,13 @@ class EVDemandCalculator:
         charger_power_kw: float,
         initial_soc_kwh: float,
     ) -> np.ndarray:
-        """
-        Given a vehicle's hourly presence and discharge schedule, build an hourly charge schedule 
-        by plugging in at max power whenever home and not full.
-
-        This is the naive "charge as soon as you get home" policy. It forward-simulates SOC
-        hour-by-hour because each hour's charge limit depends on energy remaining after that
-        hour's trip draw. Returns only ``charge_kwh``; pair with ``_compute_hourly_soc`` for
-        beginning-of-hour SOC and underflow flags.
-
-        Args:
-            at_home: Whether the vehicle is home at the start of each hour
-            discharge_kwh: Fixed trip draw ``x_t^DB`` each hour (kWh)
-            battery_capacity_kwh: Battery capacity ``K^B`` (kWh)
-            charger_power_kw: Max charge rate ``C^B`` when home (kW = kWh/hour)
-            initial_soc_kwh: Start-of-hour-0 SOC ``s_0`` (kWh)
-
-        Returns:
-            Hourly charge energy ``x_t^CB`` (kWh), same length as ``at_home``
-        """
-        if len(at_home) != len(discharge_kwh):
-            raise ValueError(
-                f"at_home and discharge_kwh must have the same length, got {len(at_home)} and {len(discharge_kwh)}"
-            )
-
-        num_hours = len(at_home)
-        charge_kwh = np.zeros(num_hours, dtype=np.float64)
-        current_soc = initial_soc_kwh
-
-        for hour_idx in range(num_hours):
-            # Discharge first (same order as _compute_hourly_soc).
-            trip_draw = discharge_kwh[hour_idx]
-            if trip_draw > current_soc:
-                current_soc = 0.0  # no public charging; battery empty until next charge
-            else:
-                current_soc -= trip_draw
-
-            # Charge at Level 2 whenever home and below full capacity.
-            if at_home[hour_idx] and current_soc < battery_capacity_kwh:
-                added = min(charger_power_kw, battery_capacity_kwh - current_soc)
-                charge_kwh[hour_idx] = added
-                current_soc += added
-
-        return charge_kwh
+        return schedule_immediate_charging(
+            at_home,
+            discharge_kwh,
+            battery_capacity_kwh=battery_capacity_kwh,
+            charger_power_kw=charger_power_kw,
+            initial_soc_kwh=initial_soc_kwh,
+        )
 
     @staticmethod
     def _schedule_cost_minimizing_charging(
@@ -1410,116 +417,15 @@ class EVDemandCalculator:
         hourly_price_usd_per_kwh: np.ndarray,
         shed_load_penalty_usd_per_kwh: float | np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Given a vehicle's hourly presence and discharge schedule, build a perfect-foresight hourly 
-        charge schedule that minimizes electricity cost (cvxpy LP).
-
-        Returns ``(charge_kwh, shed_load_kwh)``; pair with ``_compute_hourly_soc`` using the full
-        planned ``discharge_kwh`` so ``soc_underflow`` flags hours where the battery could not
-        cover the trip draw (shed load is reported separately, not subtracted from discharge).
-        This is a theoretical lower bound on charging cost when the driver knows all future trips
-        and can shift charging to the cheapest home hours.
-
-        LP formulation (``T = num_hours`` clock hours indexed ``0..T-1``):
-
-        - Given: ``s_0`` (``initial_soc_kwh``), fixed discharge ``x_t^DB = discharge_kwh[t]``
-        - Decide: charge ``x_t^CB``, shed load ``x_t^SL``, and start-of-hour SOC ``s_t`` for ``t = 1..T``
-        - Minimize ``sum_{t=0}^{T-1} (p_t x_t^CB + w_t x_t^SL)``
-        - Subject to:
-            ``s_1 = s_0 + x_0^CB - x_0^DB + x_0^SL``
-            ``s_{t+1} = s_t + x_t^CB - x_t^DB + x_t^SL`` for ``t = 1..T-1``
-            ``0 <= x_t^CB <= C^B`` (charger limit when home, else 0)
-            ``0 <= x_t^SL <= x_t^DB`` (shed load cannot exceed planned trip draw)
-            ``0 <= s_t <= K^B`` for ``t = 1..T``
-
-        Shed load ``x_t^SL`` is trip energy not taken from the battery (effective draw is
-        ``x_t^DB - x_t^SL``). Shedding is always allowed (``x_t^SL >= 0``); when
-        ``shed_load_penalty_usd_per_kwh`` is ``None``, a very large default penalty is
-        used so shedding only occurs when the LP would otherwise be infeasible.
-
-        Discharging and charging are mutually exclusive in this model: trip draw is
-        assigned to away hours where ``x_t^CB = 0``, so ``s_t >= x_t^DB - x_t^SL`` follows from
-        ``s_{t+1} >= 0`` and the transition equalities without an extra constraint.
-
-        Args:
-            at_home: Whether the vehicle is home at the start of each hour
-            discharge_kwh: Fixed trip draw ``x_t^DB`` each hour (kWh)
-            battery_capacity_kwh: Battery capacity ``K^B`` (kWh)
-            charger_power_kw: Max charge rate ``C^B`` when home (kW = kWh/hour)
-            initial_soc_kwh: Start-of-hour-0 SOC ``s_0`` (kWh)
-            hourly_price_usd_per_kwh: Marginal price ``p_t`` each hour ($/kWh)
-            shed_load_penalty_usd_per_kwh: Penalty ``w_t`` on shed load ($/kWh); ``None`` uses
-                ``DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH`` (shed only when needed for feasibility)
-
-        Returns:
-            Tuple of hourly charge energy ``x_t^CB`` (kWh) and shed load ``x_t^SL`` (kWh),
-            each the same length as ``at_home``
-
-        Raises:
-            ValueError: If input arrays differ in length or prices/penalties are negative
-            RuntimeError: If the LP solver fails to find a feasible schedule
-        """
-        num_hours = len(at_home)
-        if len(discharge_kwh) != num_hours:
-            raise ValueError(
-                f"at_home and discharge_kwh must have the same length, got {len(at_home)} and {len(discharge_kwh)}"
-            )
-        if len(hourly_price_usd_per_kwh) != num_hours:
-            raise ValueError(
-                "hourly_price_usd_per_kwh must match schedule length, "
-                f"got {len(hourly_price_usd_per_kwh)} and expected {num_hours}"
-            )
-        if np.any(hourly_price_usd_per_kwh < 0):
-            raise ValueError("hourly_price_usd_per_kwh must be non-negative")
-
-        discharge = np.asarray(discharge_kwh, dtype=np.float64)
-        prices = np.asarray(hourly_price_usd_per_kwh, dtype=np.float64)
-        max_charge = np.where(at_home, charger_power_kw, 0.0)
-        s_0 = float(initial_soc_kwh)
-
-        # set default shed load penalty if none is passed
-        if shed_load_penalty_usd_per_kwh is None:
-            shed_penalties = np.full(num_hours, DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH, dtype=np.float64)
-        elif isinstance(shed_load_penalty_usd_per_kwh, np.ndarray):
-            shed_penalties = np.asarray(shed_load_penalty_usd_per_kwh, dtype=np.float64)
-            if len(shed_penalties) != num_hours:
-                raise ValueError(
-                    "shed_load_penalty_usd_per_kwh must match schedule length, "
-                    f"got {len(shed_penalties)} and expected {num_hours}"
-                )
-        else:
-            shed_penalties = np.full(num_hours, float(shed_load_penalty_usd_per_kwh), dtype=np.float64)
-        if np.any(shed_penalties < 0):
-            raise ValueError("shed_load_penalty_usd_per_kwh must be non-negative")
-
-        # Decision variables: x_t^CB (charge), x_t^SL (shed), and s_t for t = 1..T.
-        charge = cp.Variable(num_hours, name="charge")
-        soc = cp.Variable(num_hours, name="soc")  # s_1..s_T
-        shed = cp.Variable(num_hours, name="shed_load")
-
-        constraints: list[cp.Constraint] = [
-            soc[0] == s_0 + charge[0] - discharge[0] + shed[0], # first-hour SOC constraint
-            charge >= 0, # charge cannot be negative
-            charge <= max_charge,  # zero when away (discharge and charge never overlap)
-            shed >= 0, # shed cannot be negative
-            shed <= discharge, # shed cannot exceed planned trip draw
-            soc >= 0, # SOC cannot be negative
-            soc <= battery_capacity_kwh, # SOC cannot exceed battery capacity
-        ]
-        if num_hours > 1:
-            constraints.append(soc[1:] == soc[:-1] + charge[1:] - discharge[1:] + shed[1:]) # hour-by-hour SOC constraints
-
-        objective = prices @ charge + shed_penalties @ shed
-
-        problem = cp.Problem(cp.Minimize(objective), constraints)
-        problem.solve()
-
-        if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
-            raise RuntimeError(f"Cost-minimizing charging LP failed: {problem.status}")
-
-        charge_kwh = np.asarray(charge.value, dtype=np.float64).reshape(-1)
-        shed_load_kwh = np.asarray(shed.value, dtype=np.float64).reshape(-1)
-        return charge_kwh, shed_load_kwh
+        return schedule_cost_minimizing_charging(
+            at_home,
+            discharge_kwh,
+            battery_capacity_kwh=battery_capacity_kwh,
+            charger_power_kw=charger_power_kw,
+            initial_soc_kwh=initial_soc_kwh,
+            hourly_price_usd_per_kwh=hourly_price_usd_per_kwh,
+            shed_load_penalty_usd_per_kwh=shed_load_penalty_usd_per_kwh,
+        )
 
     @staticmethod
     def _build_is_off_peak(
@@ -1527,19 +433,7 @@ class EVDemandCalculator:
         *,
         peak_clock_hours: Iterable[int] = DEFAULT_PEAK_CLOCK_HOURS,
     ) -> np.ndarray:
-        """Return a boolean mask that is True during off-peak clock hours.
-        
-        Args:
-            hours_base: Hourly calendar with ``date`` and ``hour`` columns
-            peak_clock_hours: On-peak clock hours (0-23) for ``off_peak`` strategy
-
-        Returns:
-            Boolean mask aligned with ``at_home`` that is True during off-peak clock hours
-        """
-        peak_hours = set(peak_clock_hours)  # doc set H: on-peak clock hours (default 5-9pm)
-        clock_hours = hours_base["hour"].to_numpy()
-        # True = off-peak (t ∉ H); reused for every vehicle on the same calendar
-        return np.array([hour not in peak_hours for hour in clock_hours], dtype=bool)
+        return build_is_off_peak(hours_base, peak_clock_hours=peak_clock_hours)
 
     @staticmethod
     def _build_off_peak_charging_params(
@@ -1553,110 +447,16 @@ class EVDemandCalculator:
         soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
         soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Build per-hour TOU off-peak charging controls from daily trip bounds.
-
-        Implements the primary TOU strategy in docs_tou_ev_schedule_value_learning.qmd (no emergency
-        override): charge only in ``Window_off`` until ``SOC_req`` for the upcoming departure day
-        is met.
-
-        For each calendar day *d*:
-        - ``Window_avail`` spans from ``last_arrival`` on day *d-1* through ``first_departure``
-          on day *d* (overnight + pre-departure morning hours).
-        - ``Window_off = Window_avail ∩ off-peak hours ∩ at_home``.
-        - ``SOC_req^d = max(SOC_min, daily_trip_kWh / K^B + buffer)`` in SOC fraction,
-          converted to kWh via ``battery_capacity_kwh``.
-
-        Midday at-home hours (e.g. between same-day trips) are outside ``Window_avail`` and
-        cannot charge, even if off-peak.
-
-        Args:
-            at_home: Whether the vehicle is home at the start of each hour
-            discharge_kwh: Fixed trip draw each hour (kWh)
-            hours_base: Hourly calendar with ``date`` and ``hour`` columns
-            vehicle_trips: Trip rows for this vehicle (may be empty)
-            battery_capacity_kwh: Battery capacity ``K^B`` (kWh)
-            is_off_peak: Off-peak mask aligned with ``at_home``
-            soc_min_fraction: Minimum comfortable SOC fraction ``SOC^min``
-            soc_safety_buffer_fraction: Extra SOC fraction above daily trip energy
-
-        Returns:
-            Tuple of ``charge_allowed`` (bool) and ``soc_target_kwh`` (float) arrays
-        """
-        num_hours = len(at_home)
-        if len(discharge_kwh) != num_hours or len(is_off_peak) != num_hours:
-            raise ValueError("at_home, discharge_kwh, and is_off_peak must have the same length")
-        if hours_base.height != num_hours:
-            raise ValueError(
-                f"hours_base must have {num_hours} rows to match schedule length, got {hours_base.height}"
-            )
-        if not 0.0 <= soc_min_fraction <= 1.0:
-            raise ValueError(f"soc_min_fraction must be within [0, 1], got {soc_min_fraction}")
-        if not 0.0 <= soc_safety_buffer_fraction <= 1.0:
-            raise ValueError(
-                f"soc_safety_buffer_fraction must be within [0, 1], got {soc_safety_buffer_fraction}"
-            )
-
-        dates = hours_base["date"].to_list()
-        clock_hours = hours_base["hour"].to_numpy().astype(np.int64)
-
-        # Sum hourly trip draw into calendar-day totals (miles_total × kWh/mile in discharge_kwh).
-        daily_discharge_kwh: dict[date, float] = {}
-        for day, discharge in zip(dates, discharge_kwh, strict=True):
-            daily_discharge_kwh[day] = daily_discharge_kwh.get(day, 0.0) + float(discharge)
-
-        # Per-day trip bounds: t_dep^first and t_arr^last from trip rows.
-        daily_bounds: dict[date, tuple[int, int]] = {}
-        if not vehicle_trips.is_empty():
-            bounds_frame = (
-                vehicle_trips.with_columns(pl.col("date").cast(pl.Date).alias("date"))
-                .group_by("date")
-                .agg(
-                    pl.col("departure_hour").min().alias("first_departure"),
-                    pl.col("arrival_hour").max().alias("last_arrival"),
-                )
-            )
-            for row in bounds_frame.iter_rows(named=True):
-                daily_bounds[row["date"]] = (int(row["first_departure"]), int(row["last_arrival"]))
-
-        def soc_req_kwh_for_day(day: date) -> float:
-            """SOC_req^d = max(SOC_min, daily_trip_kWh / K^B + buffer), returned in kWh."""
-            daily_trip_kwh = daily_discharge_kwh.get(day, 0.0)
-            soc_req_fraction = max(
-                soc_min_fraction,
-                daily_trip_kwh / battery_capacity_kwh + soc_safety_buffer_fraction,
-            )
-            return soc_req_fraction * battery_capacity_kwh
-
-        charge_allowed = np.zeros(num_hours, dtype=bool)
-        soc_target_kwh = np.zeros(num_hours, dtype=np.float64)
-
-        for hour_idx, (day, clock_hour) in enumerate(zip(dates, clock_hours, strict=True)):
-            # Default (no trips that day): never depart (24), always home (0) → whole day is Window_avail.
-            first_departure, last_arrival = daily_bounds.get(day, (24, 0))
-            # Morning slice of Window_avail: hours before first departure today.
-            in_morning_window = clock_hour < first_departure
-            # Evening slice of Window_avail: hours after last arrival today (overnight for tomorrow).
-            in_evening_window = clock_hour >= last_arrival
-
-            # Midday away block (first_dep <= hour < last_arr) is outside Window_avail.
-            if not (in_morning_window or in_evening_window):
-                continue
-
-            # Decide which departure day this hour is charging toward.
-            if in_morning_window and in_evening_window:
-                # No-trip day: both windows cover all 24 hours; use today's (minimal) SOC_req.
-                target_day = day
-            elif in_morning_window:
-                target_day = day  # pre-departure hours charge toward today's trips
-            else:
-                target_day = day + timedelta(days=1)  # post-arrival hours charge toward tomorrow
-
-            soc_target_kwh[hour_idx] = soc_req_kwh_for_day(target_day)
-            # Window_off = Window_avail ∩ off-peak ∩ at_home (no emergency peak override).
-            charge_allowed[hour_idx] = bool(at_home[hour_idx] and is_off_peak[hour_idx])
-
-        return charge_allowed, soc_target_kwh
+        return build_off_peak_charging_params(
+            at_home,
+            discharge_kwh,
+            hours_base,
+            vehicle_trips,
+            battery_capacity_kwh=battery_capacity_kwh,
+            is_off_peak=is_off_peak,
+            soc_min_fraction=soc_min_fraction,
+            soc_safety_buffer_fraction=soc_safety_buffer_fraction,
+        )
 
     @staticmethod
     def _schedule_off_peak_charging(
@@ -1669,62 +469,15 @@ class EVDemandCalculator:
         charger_power_kw: float,
         initial_soc_kwh: float,
     ) -> np.ndarray:
-        """
-        Given a vehicle's hourly presence and discharge schedule, build an hourly charge
-        schedule using TOU off-peak charging (no emergency override).
-
-        Forward-simulates SOC hour-by-hour. Charges at max power only when
-        ``charge_allowed`` is True and SOC is below the per-hour ``soc_target_kwh``
-        threshold. Never charges during peak hours or away from home.
-
-        Args:
-            at_home: Whether the vehicle is home at the start of each hour
-            discharge_kwh: Fixed trip draw ``x_t^DB`` each hour (kWh)
-            charge_allowed: Whether off-peak charging is permitted this hour
-            soc_target_kwh: Target SOC (kWh) to reach before the next departure day
-            battery_capacity_kwh: Battery capacity ``K^B`` (kWh)
-            charger_power_kw: Max charge rate ``C^B`` when allowed (kW = kWh/hour)
-            initial_soc_kwh: Start-of-hour-0 SOC ``s_0`` (kWh)
-
-        Returns:
-            Hourly charge energy ``x_t^CB`` (kWh), same length as ``at_home``
-        """
-        if len(at_home) != len(discharge_kwh):
-            raise ValueError(
-                f"at_home and discharge_kwh must have the same length, got {len(at_home)} and {len(discharge_kwh)}"
-            )
-        if len(charge_allowed) != len(at_home) or len(soc_target_kwh) != len(at_home):
-            raise ValueError("charge_allowed and soc_target_kwh must match at_home length")
-
-        num_hours = len(at_home)
-        charge_kwh = np.zeros(num_hours, dtype=np.float64)
-        current_soc = initial_soc_kwh
-
-        for hour_idx in range(num_hours):
-            # Same hour ordering as _compute_hourly_soc: discharge first, then charge.
-            trip_draw = discharge_kwh[hour_idx]
-            if trip_draw > current_soc:
-                current_soc = 0.0  # no public charging; battery empty until next allowed hour
-            else:
-                current_soc -= trip_draw
-
-            # Primary TOU rule: Pow_max when t ∈ Window_off and SOC < SOC_req (no peak override).
-            if (
-                charge_allowed[hour_idx]
-                and at_home[hour_idx]
-                and current_soc + 1e-9 < soc_target_kwh[hour_idx]
-            ):
-                # Stop at SOC_req, not full battery (unlike immediate charging).
-                headroom = min(
-                    soc_target_kwh[hour_idx] - current_soc,
-                    battery_capacity_kwh - current_soc,
-                )
-                added = min(charger_power_kw, headroom)
-                if added > 0.0:
-                    charge_kwh[hour_idx] = added
-                    current_soc += added
-
-        return charge_kwh
+        return schedule_off_peak_charging(
+            at_home,
+            discharge_kwh,
+            charge_allowed=charge_allowed,
+            soc_target_kwh=soc_target_kwh,
+            battery_capacity_kwh=battery_capacity_kwh,
+            charger_power_kw=charger_power_kw,
+            initial_soc_kwh=initial_soc_kwh,
+        )
 
     @staticmethod
     def _compute_hourly_soc(
@@ -1733,46 +486,7 @@ class EVDemandCalculator:
         *,
         initial_soc_kwh: float,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Given a vehicle's hourly discharge and charge schedule, derive the beginning-of-hour SOC 
-        and underflow flags.
-
-        Shared by both charging strategies: once ``charge_kwh`` is chosen, SOC is computed with
-        the same hour-by-hour rules. ``soc_kwh[t]`` is the battery level at the **start** of
-        hour *t*; within the hour, discharge is applied first, then charge.
-
-        Args:
-            discharge_kwh: Fixed trip draw each hour (kWh)
-            charge_kwh: Scheduled charge each hour (kWh), from immediate or cost-minimizing policy
-            initial_soc_kwh: Start-of-hour-0 SOC (kWh)
-
-        Returns:
-            Tuple of beginning-of-hour SOC (kWh) and per-hour underflow flag (True when trip
-            draw exceeds available SOC at the start of that hour; SOC is clamped to zero)
-        """
-        if len(discharge_kwh) != len(charge_kwh):
-            raise ValueError(
-                f"discharge_kwh and charge_kwh must have the same length, got {len(discharge_kwh)} and {len(charge_kwh)}"
-            )
-
-        num_hours = len(discharge_kwh)
-        soc_kwh = np.empty(num_hours, dtype=np.float64)
-        soc_underflow = np.zeros(num_hours, dtype=bool)
-
-        current_soc = initial_soc_kwh
-        for hour_idx in range(num_hours):
-            soc_kwh[hour_idx] = current_soc  # record beginning-of-hour SOC
-
-            trip_draw = discharge_kwh[hour_idx]
-            if trip_draw > current_soc + 1e-9:
-                soc_underflow[hour_idx] = True
-                current_soc = 0.0
-            else:
-                current_soc -= trip_draw
-
-            current_soc += charge_kwh[hour_idx]  # charge after discharge within the hour
-
-        return soc_kwh, soc_underflow
+        return compute_hourly_soc(discharge_kwh, charge_kwh, initial_soc_kwh=initial_soc_kwh)
 
     def generate_soc_schedules(
         self,
@@ -1793,242 +507,36 @@ class EVDemandCalculator:
         soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
         soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
     ) -> pl.DataFrame:
-        """
-        Map each vehicle to an hourly SOC, charging, and discharge schedule for the instance date range.
-
-        Pipeline per vehicle:
-        1. Spread trip miles into hourly ``discharge_kwh`` (away hours only)
-        2. Build ``charge_kwh`` via ``charging_strategy`` (immediate, off-peak, or cost-minimizing LP)
-        3. Derive ``soc_kwh`` and ``soc_underflow`` from discharge + charge
-
-        ``soc_kwh`` is the battery level at the beginning of each hour (aligned with ``timestamp``).
-
-        Charging strategies:
-        - ``immediate``: charge at full power whenever home and not full (default).
-        - ``off_peak``: TOU-adapted charging per the value-learning EV doc — charge only during
-          off-peak hours in the overnight/pre-departure window until daily ``SOC_req`` is met;
-          no peak charging and no emergency override.
-        - ``cost_minimizing``: perfect-foresight LP that shifts charging to the cheapest
-          home hours while meeting trip energy needs. Requires ``hourly_price_usd_per_kwh``.
-          Optional ``shed_load_penalty_usd_per_kwh`` penalizes curtailed trip energy; ``None``
-          uses a very large default so shedding occurs only when required for LP feasibility.
-
-        Args:
-            trip_schedules: DataFrame of trip schedules
-            vehicle_keys: Vehicle keys to include when building presence schedules internally
-            presence_by_vehicle: Pre-built hourly presence schedules per vehicle; when provided,
-                presence is not recomputed and ``vehicle_keys`` is ignored
-            hours_base: Hourly calendar for trip-to-hour joins; built from the instance date range if None
-            battery_capacity_kwh: Battery capacity in kWh
-            kwh_per_mile: kWh per mile
-            charger_power_kw: Charger power in kW
-            ev_adoption_rate: EV adoption rate
-            initial_soc_kwh: Initial SOC in kWh at the start of hour 0
-            charging_strategy: ``immediate``, ``off_peak``, or ``cost_minimizing``
-            hourly_price_usd_per_kwh: Length-``num_hours`` marginal price array for optimized charging
-            shed_load_penalty_usd_per_kwh: Penalty on curtailed trip energy for ``cost_minimizing``;
-                ``None`` uses ``DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH``
-            peak_clock_hours: On-peak clock hours (0-23) for ``off_peak`` strategy
-            soc_min_fraction: Minimum comfortable SOC fraction for ``off_peak`` strategy
-            soc_safety_buffer_fraction: Extra SOC fraction above daily trip energy for ``off_peak``
-
-        Returns:
-            Long-form DataFrame with one row per vehicle-hour, including presence and SOC columns.
-
-        Raises:
-            ValueError: If ``battery_capacity_kwh`` is not positive
-            ValueError: If ``charger_power_kw`` is negative
-            ValueError: If ``kwh_per_mile`` is negative
-            ValueError: If ``initial_soc_kwh`` is not within [0, ``battery_capacity_kwh``]
-            ValueError: If a pre-built presence schedule does not match the hourly calendar length
-            ValueError: If ``charging_strategy`` is ``cost_minimizing`` without hourly prices
-        """
-        if battery_capacity_kwh <= 0:
-            raise ValueError(f"battery_capacity_kwh must be positive, got {battery_capacity_kwh}")
-        if charger_power_kw < 0:
-            raise ValueError(f"charger_power_kw must be non-negative, got {charger_power_kw}")
-        if kwh_per_mile < 0:
-            raise ValueError(f"kwh_per_mile must be non-negative, got {kwh_per_mile}")
-
-        start_soc = battery_capacity_kwh if initial_soc_kwh is None else initial_soc_kwh
-        if not 0.0 <= start_soc <= battery_capacity_kwh:
-            raise ValueError(f"initial_soc_kwh must be within [0, {battery_capacity_kwh}], got {start_soc}")
-
-        if hours_base is None:
-            hours_base = self._build_hours_base()
-        num_hours = hours_base.height
-        # Shared off-peak mask for all vehicles (depends only on clock hour, not trips).
-        is_off_peak = self._build_is_off_peak(hours_base, peak_clock_hours=peak_clock_hours)
-
-        if charging_strategy == "cost_minimizing":
-            if hourly_price_usd_per_kwh is None:
-                raise ValueError("hourly_price_usd_per_kwh is required when charging_strategy='cost_minimizing'")
-            if len(hourly_price_usd_per_kwh) != num_hours:
-                raise ValueError(
-                    f"hourly_price_usd_per_kwh must have length {num_hours}, got {len(hourly_price_usd_per_kwh)}"
-                )
-
-        if presence_by_vehicle is None:
-            presence_by_vehicle = self.generate_vehicle_presence_schedules(
-                trip_schedules,
-                hours_base=hours_base,
-                vehicle_keys=vehicle_keys,
-            )
-        else:
-            for vehicle_key, presence in presence_by_vehicle.items():
-                if presence.height != num_hours:
-                    raise ValueError(
-                        f"presence schedule for {vehicle_key} has {presence.height} rows, "
-                        f"expected {num_hours} for the instance date range"
-                    )
-
-        # Build hourly discharge kWh
-        discharge_by_hour = self._build_hourly_discharge_kwh(
+        return self.charging_simulator.generate_soc(
             trip_schedules,
-            hours_base,
+            vehicle_keys=vehicle_keys,
+            hours_base=hours_base,
+            presence_by_vehicle=presence_by_vehicle,
+            battery_capacity_kwh=battery_capacity_kwh,
             kwh_per_mile=kwh_per_mile,
+            charger_power_kw=charger_power_kw,
             ev_adoption_rate=ev_adoption_rate,
+            initial_soc_kwh=initial_soc_kwh,
+            charging_strategy=charging_strategy,
+            hourly_price_usd_per_kwh=hourly_price_usd_per_kwh,
+            shed_load_penalty_usd_per_kwh=shed_load_penalty_usd_per_kwh,
+            peak_clock_hours=peak_clock_hours,
+            soc_min_fraction=soc_min_fraction,
+            soc_safety_buffer_fraction=soc_safety_buffer_fraction,
         )
 
-        discharge_lookup: dict[tuple[str | int, int], dict[int, float]] = {}
-        for discharge_frame in discharge_by_hour.partition_by(["bldg_id", "vehicle_id"], as_dict=False):
-            vehicle_key = (discharge_frame["bldg_id"][0], int(discharge_frame["vehicle_id"][0]))
-            discharge_lookup[vehicle_key] = dict(
-                zip(
-                    discharge_frame["hour_index"].to_list(),
-                    discharge_frame["discharge_kwh"].to_list(),
-                    strict=True,
-                )
-            )
-
-        # Off-peak scheduling needs per-vehicle trip bounds (first departure / last arrival).
-        vehicle_trips_by_key: dict[tuple[str | int, int], pl.DataFrame] = {}
-        if charging_strategy == "off_peak" and not trip_schedules.is_empty():
-            for trip_frame in trip_schedules.partition_by(["bldg_id", "vehicle_id"], as_dict=False):
-                vehicle_key = (trip_frame["bldg_id"][0], int(trip_frame["vehicle_id"][0]))
-                vehicle_trips_by_key[vehicle_key] = trip_frame
-
-        # Generate hourly SOC schedules
-        soc_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] = {}
-        for vehicle_key, presence in presence_by_vehicle.items():
-            discharge_arr = np.zeros(num_hours, dtype=np.float64)  # default: no driving this hour
-            # Look up discharge kWh for each hour of the day
-            for hour_index, discharge in discharge_lookup.get(vehicle_key, {}).items():
-                discharge_arr[int(hour_index)] = discharge
-
-            at_home = presence["at_home"].to_numpy()
-            shed_load_kwh = np.zeros(num_hours, dtype=np.float64)
-            # Choose hourly charge schedule (strategy-specific).
-            if charging_strategy == "immediate":
-                charge_kwh = self._schedule_immediate_charging(
-                    at_home,
-                    discharge_arr,
-                    battery_capacity_kwh=battery_capacity_kwh,
-                    charger_power_kw=charger_power_kw,
-                    initial_soc_kwh=start_soc,
-                )
-            elif charging_strategy == "off_peak":
-                # Derive Window_off and per-hour SOC_req from trip calendar.
-                charge_allowed, soc_target_kwh = self._build_off_peak_charging_params(
-                    at_home,
-                    discharge_arr,
-                    hours_base,
-                    vehicle_trips_by_key.get(vehicle_key, pl.DataFrame()),
-                    battery_capacity_kwh=battery_capacity_kwh,
-                    is_off_peak=is_off_peak,
-                    soc_min_fraction=soc_min_fraction,
-                    soc_safety_buffer_fraction=soc_safety_buffer_fraction,
-                )
-                # Forward-simulate charge_kwh under the TOU rule (no peak override).
-                charge_kwh = self._schedule_off_peak_charging(
-                    at_home,
-                    discharge_arr,
-                    charge_allowed=charge_allowed,
-                    soc_target_kwh=soc_target_kwh,
-                    battery_capacity_kwh=battery_capacity_kwh,
-                    charger_power_kw=charger_power_kw,
-                    initial_soc_kwh=start_soc,
-                )
-            else:
-                charge_kwh, shed_load_kwh = self._schedule_cost_minimizing_charging(
-                    at_home,
-                    discharge_arr,
-                    battery_capacity_kwh=battery_capacity_kwh,
-                    charger_power_kw=charger_power_kw,
-                    initial_soc_kwh=start_soc,
-                    hourly_price_usd_per_kwh=np.asarray(hourly_price_usd_per_kwh, dtype=np.float64),
-                    shed_load_penalty_usd_per_kwh=shed_load_penalty_usd_per_kwh,
-                )
-            # Derive beginning-of-hour SOC from discharge + charge (shared logic).
-            soc_kwh, soc_underflow = self._compute_hourly_soc(
-                discharge_arr,
-                charge_kwh,
-                initial_soc_kwh=start_soc,
-            )
-
-            output_columns = [
-                pl.Series("discharge_kwh", discharge_arr),
-                pl.Series("charge_kwh", charge_kwh),
-                pl.Series("soc_kwh", soc_kwh),
-                pl.Series("soc_underflow", soc_underflow),
-            ]
-            if charging_strategy == "cost_minimizing":
-                output_columns.append(pl.Series("shed_load_kwh", shed_load_kwh))
-            soc_by_vehicle[vehicle_key] = presence.with_columns(*output_columns)
-
-        return self.vehicle_hourly_schedules_to_dataframe(soc_by_vehicle)
+    def generate_vehicle_soc_schedules(
+        self,
+        trip_schedules: pl.DataFrame,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        return self.generate_soc_schedules(trip_schedules, **kwargs)
 
     @staticmethod
     def vehicle_hourly_schedules_to_dataframe(
         schedules_by_vehicle: dict[tuple[str | int, int], pl.DataFrame],
     ) -> pl.DataFrame:
-        """Flatten per-vehicle hourly schedule dicts into a single long-form DataFrame.
-
-        Stacks one row per vehicle-hour so building-level aggregations (e.g. TOU cost) can
-        use ``group_by("bldg_id")`` instead of looping over the input dict.
-
-        Args:
-            schedules_by_vehicle: Dict keyed by ``(bldg_id, vehicle_id)`` with hourly frames
-                from ``generate_vehicle_presence_schedules`` or ``generate_soc_schedules``
-
-        Returns:
-            DataFrame with the following columns:
-            - bldg_id: Building ID
-            - vehicle_id: Vehicle ID
-            - hour_index: Hour index
-            - timestamp: Timestamp
-            - at_home: Whether the vehicle is at home
-            - away_from_home: Whether the vehicle is away from home
-            - can_charge: Whether the vehicle can charge
-            - discharge_kwh: Discharge kWh
-            - charge_kwh: Charge kWh
-            - soc_kwh: SOC kWh
-            - soc_underflow: Whether the vehicle has a SOC underflow
-        """
-        if not schedules_by_vehicle:
-            return pl.DataFrame()
-
-        # Tag each per-vehicle frame with its building/vehicle keys, then stack.
-        frames = [
-            frame.with_columns(
-                pl.lit(bldg_id).alias("bldg_id"),
-                pl.lit(vehicle_id).alias("vehicle_id"),
-            )
-            for (bldg_id, vehicle_id), frame in schedules_by_vehicle.items()
-        ]
-        return pl.concat(frames).select(
-            "bldg_id",
-            "vehicle_id",
-            "hour_index",
-            "timestamp",
-            "at_home",
-            "away_from_home",
-            "can_charge",
-            "discharge_kwh",
-            "charge_kwh",
-            "soc_kwh",
-            "soc_underflow",
-        )
+        return ChargingSimulator.to_dataframe(schedules_by_vehicle)
 
 
 def parse_arguments():

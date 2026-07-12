@@ -9,11 +9,43 @@ import pytest
 from utils.ev_demand import (
     HOURS_PER_YEAR,
     EVDemandCalculator,
+    TripProfile,
     VehicleProfile,
     nhts_departure_hour,
     nhts_arrival_hour,
     summarize_nhts_match_catalog,
 )
+
+
+def make_trip_profile(
+    departure_hours: list[int],
+    arrival_hours: list[int],
+    miles: list[float],
+    trip_weights: list[float] | None = None,
+    trip_ids: list[int] | None = None,
+) -> TripProfile:
+    n = len(departure_hours)
+    return TripProfile(
+        departure_hours=departure_hours,
+        arrival_hours=arrival_hours,
+        miles=miles,
+        trip_weights=trip_weights or [1.0] * n,
+        trip_ids=trip_ids or list(range(1, n + 1)),
+    )
+
+
+def make_vehicle_profile(
+    bldg_id: str = "b1",
+    vehicle_id: int = 1,
+    weekday: TripProfile | None = None,
+    weekend: TripProfile | None = None,
+) -> VehicleProfile:
+    return VehicleProfile(
+        bldg_id=bldg_id,
+        vehicle_id=vehicle_id,
+        weekday=weekday or TripProfile(),
+        weekend=weekend or TripProfile(),
+    )
 
 
 # Test data fixtures
@@ -154,53 +186,69 @@ def test_sample_vehicle_profiles(calculator):
 
     # Expected profiles with calculator's random_state=42
     expected_profiles = {
-        ("b1", 1): {  # Building 1 has 1 vehicle (matches v1)
-            "weekday_departure_hour": [8],
-            "weekday_arrival_hour": [17],
-            "weekday_miles": [20.0],
-            "weekday_trip_weights": [1.0],
-            "weekend_departure_hour": [11],  # Now has weekend trips
-            "weekend_arrival_hour": [15],
-            "weekend_miles": [25.0],
-            "weekend_trip_weights": [1.0],
-            "weekday_trip_ids": [1],
-            "weekend_trip_ids": [1],
+        ("b1", 1): {
+            "weekday": {
+                "departure_hours": [8],
+                "arrival_hours": [17],
+                "miles": [20.0],
+                "trip_weights": [1.0],
+                "trip_ids": [1],
+            },
+            "weekend": {
+                "departure_hours": [11],
+                "arrival_hours": [15],
+                "miles": [25.0],
+                "trip_weights": [1.0],
+                "trip_ids": [1],
+            },
         },
-        ("b2", 1): {  # Building 2 first vehicle (weekday v3, weekend v2)
-            "weekday_departure_hour": [10],
-            "weekday_arrival_hour": [19],
-            "weekday_miles": [40.0],
-            "weekday_trip_weights": [1.0],
-            "weekend_departure_hour": [12],
-            "weekend_arrival_hour": [16],
-            "weekend_miles": [28.0],
-            "weekend_trip_weights": [1.0],
-            "weekday_trip_ids": [1],
-            "weekend_trip_ids": [1],
+        ("b2", 1): {
+            "weekday": {
+                "departure_hours": [10],
+                "arrival_hours": [19],
+                "miles": [40.0],
+                "trip_weights": [1.0],
+                "trip_ids": [1],
+            },
+            "weekend": {
+                "departure_hours": [12],
+                "arrival_hours": [16],
+                "miles": [28.0],
+                "trip_weights": [1.0],
+                "trip_ids": [1],
+            },
         },
-        ("b2", 2): {  # Building 2 second vehicle (weekday v2, weekend v3)
-            "weekday_departure_hour": [9],
-            "weekday_arrival_hour": [18],
-            "weekday_miles": [30.0],
-            "weekday_trip_weights": [1.0],
-            "weekend_departure_hour": [14],
-            "weekend_arrival_hour": [18],
-            "weekend_miles": [35.0],
-            "weekend_trip_weights": [1.0],
-            "weekday_trip_ids": [1],
-            "weekend_trip_ids": [1],
+        ("b2", 2): {
+            "weekday": {
+                "departure_hours": [9],
+                "arrival_hours": [18],
+                "miles": [30.0],
+                "trip_weights": [1.0],
+                "trip_ids": [1],
+            },
+            "weekend": {
+                "departure_hours": [14],
+                "arrival_hours": [18],
+                "miles": [35.0],
+                "trip_weights": [1.0],
+                "trip_ids": [1],
+            },
         },
-        ("b3", 1): {  # Building 3 weekday from v4, weekend from v3
-            "weekday_departure_hour": [8, 13],
-            "weekday_arrival_hour": [12, 17],
-            "weekday_miles": [10.0, 15.0],
-            "weekday_trip_weights": [1.0, 1.0],
-            "weekend_departure_hour": [14],
-            "weekend_arrival_hour": [18],
-            "weekend_miles": [35.0],
-            "weekend_trip_weights": [1.0],
-            "weekday_trip_ids": [1, 2],
-            "weekend_trip_ids": [1],
+        ("b3", 1): {
+            "weekday": {
+                "departure_hours": [8, 13],
+                "arrival_hours": [12, 17],
+                "miles": [10.0, 15.0],
+                "trip_weights": [1.0, 1.0],
+                "trip_ids": [1, 2],
+            },
+            "weekend": {
+                "departure_hours": [14],
+                "arrival_hours": [18],
+                "miles": [35.0],
+                "trip_weights": [1.0],
+                "trip_ids": [1],
+            },
         },
     }
     print(profiles)
@@ -215,23 +263,19 @@ def test_sample_vehicle_profiles(calculator):
         assert profile.bldg_id == bldg_id
         assert profile.vehicle_id == vehicle_id
 
-        # Check exact values for weekday trips
-        assert len(profile.weekday_departure_hour) == len(expected["weekday_departure_hour"])
-        assert profile.weekday_departure_hour == expected["weekday_departure_hour"]
-        assert profile.weekday_arrival_hour == expected["weekday_arrival_hour"]
-        assert profile.weekday_miles == expected["weekday_miles"]
-        assert profile.weekday_trip_weights == expected["weekday_trip_weights"]
+        expected_weekday = expected["weekday"]
+        assert profile.weekday.departure_hours == expected_weekday["departure_hours"]
+        assert profile.weekday.arrival_hours == expected_weekday["arrival_hours"]
+        assert profile.weekday.miles == expected_weekday["miles"]
+        assert profile.weekday.trip_weights == expected_weekday["trip_weights"]
+        assert profile.weekday.trip_ids == expected_weekday["trip_ids"]
 
-        # Check exact values for weekend trips
-        assert len(profile.weekend_departure_hour) == len(expected["weekend_departure_hour"])
-        assert profile.weekend_departure_hour == expected["weekend_departure_hour"]
-        assert profile.weekend_arrival_hour == expected["weekend_arrival_hour"]
-        assert profile.weekend_miles == expected["weekend_miles"]
-        assert profile.weekend_trip_weights == expected["weekend_trip_weights"]
-
-        # Check trip IDs
-        assert profile.weekday_trip_ids == expected["weekday_trip_ids"]
-        assert profile.weekend_trip_ids == expected["weekend_trip_ids"]
+        expected_weekend = expected["weekend"]
+        assert profile.weekend.departure_hours == expected_weekend["departure_hours"]
+        assert profile.weekend.arrival_hours == expected_weekend["arrival_hours"]
+        assert profile.weekend.miles == expected_weekend["miles"]
+        assert profile.weekend.trip_weights == expected_weekend["trip_weights"]
+        assert profile.weekend.trip_ids == expected_weekend["trip_ids"]
 
 
 def test_sample_vehicle_profiles_match_catalog(calculator):
@@ -289,19 +333,9 @@ def test_sample_vehicle_profiles_zero_vehicles(
 
 def test_generate_daily_schedules(calculator):
     # Create a sample profile with known values
-    profile = VehicleProfile(
-        bldg_id="b1",
-        vehicle_id=1,
-        weekday_departure_hour=[8],
-        weekday_arrival_hour=[17],
-        weekday_miles=[20.0],
-        weekday_trip_weights=[1.0],
-        weekend_departure_hour=[10],
-        weekend_arrival_hour=[19],
-        weekend_miles=[25.0],
-        weekend_trip_weights=[1.0],
-        weekday_trip_ids=[1],
-        weekend_trip_ids=[1],
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([8], [17], [20.0]),
+        weekend=make_trip_profile([10], [19], [25.0]),
     )
 
     schedules = calculator._generate_vehicle_daily_trip_schedules(profile)
@@ -346,19 +380,9 @@ def test_normalize_day_trip_times_enforces_order_and_non_overlap(calculator):
 
 
 def test_generate_daily_schedules_no_invalid_or_overlapping_trips(calculator):
-    profile = VehicleProfile(
-        bldg_id="b1",
-        vehicle_id=1,
-        weekday_departure_hour=[8, 13],
-        weekday_arrival_hour=[12, 17],
-        weekday_miles=[20.0, 10.0],
-        weekday_trip_weights=[1.0, 1.0],
-        weekend_departure_hour=[10, 15],
-        weekend_arrival_hour=[14, 18],
-        weekend_miles=[25.0, 5.0],
-        weekend_trip_weights=[1.0, 1.0],
-        weekday_trip_ids=[1, 2],
-        weekend_trip_ids=[1, 2],
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([8, 13], [12, 17], [20.0, 10.0]),
+        weekend=make_trip_profile([10, 15], [14, 18], [25.0, 5.0], trip_ids=[1, 2]),
     )
 
     schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
@@ -386,19 +410,9 @@ def _vehicle_hourly_schedule(df: pl.DataFrame, bldg_id: str, vehicle_id: int) ->
 
 
 def test_generate_vehicle_presence_schedules_marks_trip_hours_away(calculator):
-    profile = VehicleProfile(
-        bldg_id="b1",
-        vehicle_id=1,
-        weekday_departure_hour=[8],
-        weekday_arrival_hour=[17],
-        weekday_miles=[20.0],
-        weekday_trip_weights=[1.0],
-        weekend_departure_hour=[10],
-        weekend_arrival_hour=[19],
-        weekend_miles=[25.0],
-        weekend_trip_weights=[1.0],
-        weekday_trip_ids=[1],
-        weekend_trip_ids=[1],
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([8], [17], [20.0]),
+        weekend=make_trip_profile([10], [19], [25.0]),
     )
     trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
     presence = calculator.generate_vehicle_presence_schedules(
@@ -438,19 +452,9 @@ def test_generate_vehicle_presence_schedules_all_home_without_trips(calculator):
 
 
 def test_generate_vehicle_soc_schedules_energy_balance(calculator):
-    profile = VehicleProfile(
-        bldg_id="b1",
-        vehicle_id=1,
-        weekday_departure_hour=[8],
-        weekday_arrival_hour=[17],
-        weekday_miles=[20.0],
-        weekday_trip_weights=[1.0],
-        weekend_departure_hour=[10],
-        weekend_arrival_hour=[19],
-        weekend_miles=[25.0],
-        weekend_trip_weights=[1.0],
-        weekday_trip_ids=[1],
-        weekend_trip_ids=[1],
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([8], [17], [20.0]),
+        weekend=make_trip_profile([10], [19], [25.0]),
     )
     battery_capacity_kwh = 90.0
     trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
@@ -477,19 +481,9 @@ def test_generate_vehicle_soc_schedules_energy_balance(calculator):
 
 
 def test_generate_vehicle_soc_schedules_flags_underflow(calculator):
-    profile = VehicleProfile(
-        bldg_id="b1",
-        vehicle_id=1,
-        weekday_departure_hour=[8],
-        weekday_arrival_hour=[10],
-        weekday_miles=[100.0],
-        weekday_trip_weights=[1.0],
-        weekend_departure_hour=[10],
-        weekend_arrival_hour=[12],
-        weekend_miles=[100.0],
-        weekend_trip_weights=[1.0],
-        weekday_trip_ids=[1],
-        weekend_trip_ids=[1],
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([8], [10], [100.0]),
+        weekend=make_trip_profile([10], [12], [100.0]),
     )
     trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
     soc_schedule = _vehicle_hourly_schedule(
@@ -509,19 +503,9 @@ def test_generate_vehicle_soc_schedules_flags_underflow(calculator):
 
 
 def test_generate_vehicle_soc_schedules_uses_prebuilt_presence(calculator):
-    profile = VehicleProfile(
-        bldg_id="b1",
-        vehicle_id=1,
-        weekday_departure_hour=[8],
-        weekday_arrival_hour=[17],
-        weekday_miles=[20.0],
-        weekday_trip_weights=[1.0],
-        weekend_departure_hour=[10],
-        weekend_arrival_hour=[19],
-        weekend_miles=[25.0],
-        weekend_trip_weights=[1.0],
-        weekday_trip_ids=[1],
-        weekend_trip_ids=[1],
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([8], [17], [20.0]),
+        weekend=make_trip_profile([10], [19], [25.0]),
     )
     trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
     presence_by_vehicle = calculator.generate_vehicle_presence_schedules(
@@ -662,19 +646,9 @@ def test_cost_minimizing_charging_sheds_trip_when_cheaper_than_charging(calculat
 
 
 def test_generate_vehicle_soc_schedules_cost_minimizing_not_more_expensive(calculator):
-    profile = VehicleProfile(
-        bldg_id="b1",
-        vehicle_id=1,
-        weekday_departure_hour=[8],
-        weekday_arrival_hour=[17],
-        weekday_miles=[20.0],
-        weekday_trip_weights=[1.0],
-        weekend_departure_hour=[10],
-        weekend_arrival_hour=[19],
-        weekend_miles=[25.0],
-        weekend_trip_weights=[1.0],
-        weekday_trip_ids=[1],
-        weekend_trip_ids=[1],
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([8], [17], [20.0]),
+        weekend=make_trip_profile([10], [19], [25.0]),
     )
     trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
     hours_base = calculator._build_hours_base()
@@ -871,19 +845,9 @@ def test_off_peak_charging_no_emergency_override_after_low_soc_return(calculator
 
 
 def test_generate_vehicle_soc_schedules_off_peak(calculator):
-    profile = VehicleProfile(
-        bldg_id="b1",
-        vehicle_id=1,
-        weekday_departure_hour=[8],
-        weekday_arrival_hour=[17],
-        weekday_miles=[20.0],
-        weekday_trip_weights=[1.0],
-        weekend_departure_hour=[10],
-        weekend_arrival_hour=[19],
-        weekend_miles=[25.0],
-        weekend_trip_weights=[1.0],
-        weekday_trip_ids=[1],
-        weekend_trip_ids=[1],
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([8], [17], [20.0]),
+        weekend=make_trip_profile([10], [19], [25.0]),
     )
     trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
     hours_base = calculator._build_hours_base()
@@ -914,19 +878,9 @@ def test_generate_vehicle_soc_schedules_off_peak(calculator):
 
 
 def test_vehicle_hourly_schedules_to_dataframe(calculator):
-    profile = VehicleProfile(
-        bldg_id="b1",
-        vehicle_id=1,
-        weekday_departure_hour=[8],
-        weekday_arrival_hour=[17],
-        weekday_miles=[20.0],
-        weekday_trip_weights=[1.0],
-        weekend_departure_hour=[10],
-        weekend_arrival_hour=[19],
-        weekend_miles=[25.0],
-        weekend_trip_weights=[1.0],
-        weekday_trip_ids=[1],
-        weekend_trip_ids=[1],
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([8], [17], [20.0]),
+        weekend=make_trip_profile([10], [19], [25.0]),
     )
     trip_schedules = calculator._generate_vehicle_daily_trip_schedules(profile, rng=np.random.RandomState(0))
     soc_df = calculator.generate_vehicle_soc_schedules(
@@ -950,19 +904,9 @@ def test_match_and_generate_trip_schedules(predict_evs, sample_profiles, generat
         pl.lit(0.05).alias("ev_ownership_probability"),
     )
 
-    profile = VehicleProfile(
-        bldg_id="b1",
-        vehicle_id=1,
-        weekday_departure_hour=[8],
-        weekday_arrival_hour=[17],
-        weekday_miles=[20.0],
-        weekday_trip_weights=[1.0],
-        weekend_departure_hour=[10],
-        weekend_arrival_hour=[19],
-        weekend_miles=[25.0],
-        weekend_trip_weights=[1.0],
-        weekday_trip_ids=[1],
-        weekend_trip_ids=[1],
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([8], [17], [20.0]),
+        weekend=make_trip_profile([10], [19], [25.0]),
     )
     sample_profiles.return_value = {("b1", 1): profile}
 
