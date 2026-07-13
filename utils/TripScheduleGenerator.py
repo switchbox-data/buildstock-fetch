@@ -118,7 +118,7 @@ class TripScheduleGenerator:
             np.array(trip_profile.miles),
         )
 
-    def _generate_vehicle_daily_trip_schedules(  # noqa: C901
+    def generate_daily_trip_schedule(
         self, profile: VehicleProfile, rng: np.random.RandomState | None = None
     ) -> pl.DataFrame:
         """Generate trip schedules for a vehicle for all days in the date range as a DataFrame.
@@ -267,7 +267,7 @@ class TripScheduleGenerator:
             # Create unique seed for this profile
             profile_seed = self.random_state + index
             rng = np.random.RandomState(profile_seed)
-            return self._generate_vehicle_daily_trip_schedules(profile, rng=rng)
+            return self.generate_daily_trip_schedule(profile, rng=rng)
 
         profiles_list = list(profile_params.values())
         profiles_with_index = [(profile, i) for i, profile in enumerate(profiles_list)]

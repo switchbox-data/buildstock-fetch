@@ -142,6 +142,7 @@ class EVDemandCalculator:
         end_date: datetime,
         pums_df: pl.DataFrame | None = None,
         max_vehicles: int = 2,
+        match_on_vehicles: bool = False,
         random_state: int = 42,
         max_workers: int | None = None,
     ):
@@ -156,6 +157,8 @@ class EVDemandCalculator:
             end_date: End date for trip generation
             pums_df: PUMS data DataFrame; required only for ``predict_num_vehicles()``
             max_vehicles: Maximum number of vehicles per household when fitting the PUMS model
+            match_on_vehicles: If True, include household vehicle count in NHTS profile matching.
+                Defaults to False for the max-1-EV model.
             random_state: Random seed for reproducible results
             max_workers: Maximum number of worker threads for parallel execution (None = use all cores)
         """
@@ -171,8 +174,6 @@ class EVDemandCalculator:
         self.max_vehicles = max_vehicles
         self.random_state = random_state
         self.max_workers = max_workers
-        self.num_days = (self.end_date - self.start_date).days + 1
-        self.num_hours = self.num_days * 24
 
         # Pipeline components.
         self.vehicle_ownership = VehicleOwnershipModel(
@@ -186,6 +187,7 @@ class EVDemandCalculator:
         self.nhts_sampler = NHTSProfileSampler(
             nhts_df=nhts_df,
             max_vehicles=max_vehicles,
+            match_on_vehicles=match_on_vehicles,
             random_state=random_state,
         )
         self.trip_schedule_generator = TripScheduleGenerator(
@@ -246,7 +248,7 @@ class EVDemandCalculator:
 
     # --- EV adoption (delegates to EVAdoptionSampler) ---
 
-    def predict_num_EVs(self, metadata_df: pl.DataFrame | None = None) -> pl.DataFrame:
+    def sample_num_EVs(self, metadata_df: pl.DataFrame | None = None) -> pl.DataFrame:
         df = self.metadata_df if metadata_df is None else metadata_df
         if df is None:
             raise MetadataDataFrameError()
@@ -255,7 +257,14 @@ class EVDemandCalculator:
     # --- NHTS profile sampling (delegates to NHTSProfileSampler) ---
 
     def find_best_matches(
-        self, target_income: int, target_occupants: int, target_vehicles: int, num_samples: int, *, weekday: bool = True
+        self,
+        target_income: int,
+        target_occupants: int,
+        target_vehicles: int,
+        num_samples: int,
+        *,
+        weekday: bool = True,
+        match_on_vehicles: bool | None = None,
     ) -> tuple[str, list[str]]:
         return self.nhts_sampler.find_best_matches(
             target_income=target_income,
@@ -263,6 +272,7 @@ class EVDemandCalculator:
             target_vehicles=target_vehicles,
             num_samples=num_samples,
             weekday=weekday,
+            match_on_vehicles=match_on_vehicles,
         )
 
     @overload
@@ -272,6 +282,7 @@ class EVDemandCalculator:
         nhts_df: pl.DataFrame | None = None,
         *,
         return_catalog: Literal[False] = False,
+        match_on_vehicles: bool | None = None,
     ) -> dict[tuple[str, int], VehicleProfile]: ...
 
     @overload
@@ -281,6 +292,7 @@ class EVDemandCalculator:
         nhts_df: pl.DataFrame | None = None,
         *,
         return_catalog: Literal[True],
+        match_on_vehicles: bool | None = None,
     ) -> tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]: ...
 
     def sample_vehicle_profiles(
@@ -289,6 +301,7 @@ class EVDemandCalculator:
         nhts_df: pl.DataFrame | None = None,
         *,
         return_catalog: bool = False,
+        match_on_vehicles: bool | None = None,
     ) -> dict[tuple[str, int], VehicleProfile] | tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]:
         if bldg_veh_df is None:
             raise MetadataDataFrameError()
@@ -300,6 +313,7 @@ class EVDemandCalculator:
             bldg_veh_df,
             nhts_df,
             return_catalog=return_catalog,
+            match_on_vehicles=match_on_vehicles,
         )
 
     # --- Trip schedule generation (delegates to TripScheduleGenerator) ---
@@ -311,10 +325,10 @@ class EVDemandCalculator:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         return TripScheduleGenerator._normalize_day_trip_times(departures, arrival_hours)
 
-    def _generate_vehicle_daily_trip_schedules(
+    def generate_daily_trip_schedule(
         self, profile: VehicleProfile, rng: np.random.RandomState | None = None
     ) -> pl.DataFrame:
-        return self.trip_schedule_generator._generate_vehicle_daily_trip_schedules(profile, rng=rng)
+        return self.trip_schedule_generator.generate_daily_trip_schedule(profile, rng=rng)
 
     def generate_daily_trip_schedules(
         self,
@@ -337,7 +351,7 @@ class EVDemandCalculator:
         # EV adoption (0/1 per household) drives which buildings get trip profiles.
         # predict_num_vehicles() is kept separately for total-vehicle-count analysis.
         logging.info("Predicting EV ownership for metadata buildings")
-        bldg_ev_df = self.predict_num_EVs()
+        bldg_ev_df = self.sample_num_EVs()
         bldg_veh_df = bldg_ev_df.with_columns(pl.col("evs").alias("vehicles"))
         logging.info("Assigning vehicle profiles")
         vehicle_profiles = cast(
@@ -361,7 +375,7 @@ class EVDemandCalculator:
             raise NoDateRangeError()
         return build_hours_base(self.start_date, self.end_date)
 
-    def generate_vehicle_presence_schedules(
+    def generate_presence_schedules(
         self,
         trip_schedules: pl.DataFrame,
         *,
@@ -524,13 +538,6 @@ class EVDemandCalculator:
             soc_min_fraction=soc_min_fraction,
             soc_safety_buffer_fraction=soc_safety_buffer_fraction,
         )
-
-    def generate_vehicle_soc_schedules(
-        self,
-        trip_schedules: pl.DataFrame,
-        **kwargs: Any,
-    ) -> pl.DataFrame:
-        return self.generate_soc_schedules(trip_schedules, **kwargs)
 
     @staticmethod
     def vehicle_hourly_schedules_to_dataframe(

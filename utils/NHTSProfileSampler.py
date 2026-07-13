@@ -134,6 +134,7 @@ class NHTSProfileSampler:
 
     nhts_df: pl.DataFrame | None = None
     max_vehicles: int = 2
+    match_on_vehicles: bool = False
     random_state: int = 42
     _cache: dict[str, dict] | None = field(default=None, init=False, repr=False)
 
@@ -253,7 +254,14 @@ class NHTSProfileSampler:
         return cache
 
     def find_best_matches(
-        self, target_income: int, target_occupants: int, target_vehicles: int, num_samples: int, *, weekday: bool = True
+        self,
+        target_income: int,
+        target_occupants: int,
+        target_vehicles: int,
+        num_samples: int,
+        *,
+        weekday: bool = True,
+        match_on_vehicles: bool | None = None,
     ) -> tuple[str, list[str]]:
         """
         Find the best matching vehicles in NHTS data based on prioritized criteria.
@@ -265,21 +273,30 @@ class NHTSProfileSampler:
         Args:
             target_income: Target income bucket to match
             target_occupants: Target number of occupants to match
-            target_vehicles: Target number of vehicles to match
+            target_vehicles: Target number of vehicles to match (used only when
+                ``match_on_vehicles`` is True)
             num_samples: Number of different vehicles to sample
             weekday: If True, match against weekday trip profiles; otherwise weekend
+            match_on_vehicles: If True, try an exact (income, occupants, vehicles) match
+                before looser tiers. Defaults to ``self.match_on_vehicles`` (False for
+                the max-1-EV model).
 
         Returns:
             Tuple of (match_type, list of matched_vehicle_ids)
         """
+        if match_on_vehicles is None:
+            match_on_vehicles = self.match_on_vehicles
+
         cache = self._prepare_cache(weekday=weekday)
 
-        # Try exact match first: (income, occupants, vehicles)
-        exact_key = (target_income, target_occupants, target_vehicles)
-        if exact_key in cache and len(cache[exact_key]) >= num_samples:
-            return "exact", np.random.choice(cache[exact_key], size=num_samples, replace=False).tolist()
+        # Tier 1 — exact match on (income, occupants, vehicles). Skipped when the caller
+        # models at most one EV per household and household fleet size is not a match axis.
+        if match_on_vehicles:
+            exact_key = (target_income, target_occupants, target_vehicles)
+            if exact_key in cache and len(cache[exact_key]) >= num_samples:
+                return "exact", np.random.choice(cache[exact_key], size=num_samples, replace=False).tolist()
 
-        # Try matching only income and occupants: (income, occupants)
+        # Tier 2 — match income and occupants: (income, occupants)
         income_occ_key = (target_income, target_occupants)
         if income_occ_key in cache and len(cache[income_occ_key]) >= num_samples:
             return "income_occupants", np.random.choice(cache[income_occ_key], size=num_samples, replace=False).tolist()
@@ -346,6 +363,7 @@ class NHTSProfileSampler:
         nhts_df: pl.DataFrame | None = None,
         *,
         return_catalog: Literal[False] = False,
+        match_on_vehicles: bool | None = None,
     ) -> dict[tuple[str, int], VehicleProfile]: ...
 
     @overload
@@ -355,6 +373,7 @@ class NHTSProfileSampler:
         nhts_df: pl.DataFrame | None = None,
         *,
         return_catalog: Literal[True],
+        match_on_vehicles: bool | None = None,
     ) -> tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]: ...
 
     def sample_vehicle_profiles(
@@ -363,6 +382,7 @@ class NHTSProfileSampler:
         nhts_df: pl.DataFrame | None = None,
         *,
         return_catalog: bool = False,
+        match_on_vehicles: bool | None = None,
     ) -> dict[tuple[str, int], VehicleProfile] | tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]:
         """
         For each household and vehicle, select separate weekday and weekend trip profiles from NHTS.
@@ -418,6 +438,7 @@ class NHTSProfileSampler:
                 target_vehicles=num_vehicles,
                 num_samples=num_vehicles,
                 weekday=True,
+                match_on_vehicles=match_on_vehicles,
             )
             weekend_match_type, weekend_vehicle_ids = self.find_best_matches(
                 target_income=row["income_bucket"],
@@ -425,6 +446,7 @@ class NHTSProfileSampler:
                 target_vehicles=num_vehicles,
                 num_samples=num_vehicles,
                 weekday=False,
+                match_on_vehicles=match_on_vehicles,
             )
 
             if len(weekday_vehicle_ids) < num_vehicles:
