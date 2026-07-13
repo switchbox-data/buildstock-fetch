@@ -25,6 +25,10 @@ from utils.NHTSProfileSampler import (
     summarize_nhts_match_catalog,
 )
 from utils.EVAdoptionSampler import EVAdoptionSampler
+from utils.EVBatteryAssigner import (
+    EVBatteryAssigner,
+    vehicle_slots_from_building_evs,
+)
 from utils.TripScheduleGenerator import (
     MAX_ARRIVAL_HOUR,
     MAX_DEPARTURE_HOUR,
@@ -104,6 +108,14 @@ class EVDemandConfig:
     ev_ownership_path: str = (
         f"{BASEPATH}/ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Ownership.tsv"
     )
+    # ResStock national BEV class × range shares (housing-characteristic TSV).
+    ev_battery_path: str = (
+        f"{BASEPATH}/ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Battery.tsv"
+    )
+    # Autonomie usable capacity (kWh) + efficiency (kWh/mi) keyed by the same option names.
+    ev_autonomie_path: str = (
+        f"{BASEPATH}/ev_data/inputs/resstock_ev_reference/resstock_autonomie_2022_vehicle_params.csv"
+    )
     output_dir: Path | None = None
 
     def __post_init__(self) -> None:
@@ -125,12 +137,13 @@ class EVDemandCalculator:
     """
     Facade over the EV demand pipeline components.
 
-    Constructs ``VehicleOwnershipModel``, ``EVAdoptionSampler``, ``NHTSProfileSampler``,
-    ``TripScheduleGenerator``, and ``ChargingSimulator``, then exposes the original
-    ``EVDemandCalculator`` public API as thin delegations.
+    Constructs ``VehicleOwnershipModel``, ``EVAdoptionSampler``, ``EVBatteryAssigner``,
+    ``NHTSProfileSampler``, ``TripScheduleGenerator``, and ``ChargingSimulator``, then
+    exposes the original ``EVDemandCalculator`` public API as thin delegations.
 
     ``match_and_generate_trip_schedules()`` remains the end-to-end orchestrator:
-    predict EV adoption → sample NHTS profiles → generate daily trip schedules.
+    predict EV adoption → assign ResStock battery attrs → sample NHTS profiles →
+    generate daily trip schedules.
     """
 
     def __init__(
@@ -138,6 +151,8 @@ class EVDemandCalculator:
         metadata_df: pl.DataFrame,
         nhts_df: pl.DataFrame,
         ev_ownership_df: pl.DataFrame,
+        ev_battery_df: pl.DataFrame,
+        ev_autonomie_df: pl.DataFrame,
         start_date: datetime,
         end_date: datetime,
         pums_df: pl.DataFrame | None = None,
@@ -145,6 +160,7 @@ class EVDemandCalculator:
         match_on_vehicles: bool = False,
         random_state: int = 42,
         max_workers: int | None = None,
+        battery_assigner: EVBatteryAssigner | None = None,
     ):
         """
         Initialize the EV demand calculator facade and its pipeline components.
@@ -153,6 +169,8 @@ class EVDemandCalculator:
             metadata_df: ResStock metadata DataFrame
             nhts_df: NHTS trip data DataFrame
             ev_ownership_df: NREL EV ownership lookup (from load_ev_ownership_lookup)
+            ev_battery_df: ResStock EV battery option shares (from load_ev_battery_lookup)
+            ev_autonomie_df: Autonomie capacity / efficiency params (from load_ev_autonomie_params)
             start_date: Start date for trip generation
             end_date: End date for trip generation
             pums_df: PUMS data DataFrame; required only for ``predict_num_vehicles()``
@@ -161,6 +179,8 @@ class EVDemandCalculator:
                 Defaults to False for the max-1-EV model.
             random_state: Random seed for reproducible results
             max_workers: Maximum number of worker threads for parallel execution (None = use all cores)
+            battery_assigner: Optional pre-built assigner; otherwise constructed from
+                ``ev_battery_df`` + ``ev_autonomie_df``
         """
         np.random.seed(random_state)
 
@@ -169,11 +189,15 @@ class EVDemandCalculator:
         self.nhts_df = nhts_df
         self.pums_df = pums_df
         self.ev_ownership_df = ev_ownership_df
+        self.ev_battery_df = ev_battery_df
+        self.ev_autonomie_df = ev_autonomie_df
         self.start_date = start_date
         self.end_date = end_date
         self.max_vehicles = max_vehicles
         self.random_state = random_state
         self.max_workers = max_workers
+        # Filled by match_and_generate_trip_schedules(); consumed by generate_soc_schedules().
+        self.ev_attributes: pl.DataFrame | None = None
 
         # Pipeline components.
         self.vehicle_ownership = VehicleOwnershipModel(
@@ -184,6 +208,15 @@ class EVDemandCalculator:
             ev_ownership_df=ev_ownership_df,
             random_state=random_state,
         )
+        # Same pattern as EVAdoptionSampler(ev_ownership_df=...): build from loaded DataFrames.
+        if battery_assigner is not None:
+            self.battery_assigner = battery_assigner
+        else:
+            self.battery_assigner = EVBatteryAssigner(
+                option_probabilities=ev_battery_df,
+                autonomie_params=ev_autonomie_df,
+                random_state=random_state,
+            )
         self.nhts_sampler = NHTSProfileSampler(
             nhts_df=nhts_df,
             max_vehicles=max_vehicles,
@@ -340,10 +373,11 @@ class EVDemandCalculator:
         """
         Generate trip schedules for all buildings in the metadata.
 
-        Uses the vehicle ownership model to assign vehicles to buildings and then generates trip schedules for each vehicle.
+        Uses EV adoption sampling to assign EVs, ResStock battery attributes for each EV,
+        NHTS profiles for travel behavior, then generates trip schedules.
 
-        Args:
-            None
+        Side effect:
+            Sets ``self.ev_attributes`` to the per-vehicle ResStock battery assignment table.
 
         Returns:
             pl.DataFrame: DataFrame of trip schedules for all buildings
@@ -352,7 +386,18 @@ class EVDemandCalculator:
         # predict_num_vehicles() is kept separately for total-vehicle-count analysis.
         logging.info("Predicting EV ownership for metadata buildings")
         bldg_ev_df = self.sample_num_EVs()
+        # NHTS sampler still expects a ``vehicles`` column (count of EV slots to fill).
         bldg_veh_df = bldg_ev_df.with_columns(pl.col("evs").alias("vehicles"))
+
+        # ResStock national battery-class draw (independent of NHTS trips / miles).
+        logging.info("Assigning ResStock EV battery attributes")
+        vehicle_slots = vehicle_slots_from_building_evs(bldg_veh_df)
+        self.ev_attributes = self.battery_assigner.assign(vehicle_slots)
+        logging.info(
+            "Assigned battery attributes for %s EV vehicle slot(s)",
+            self.ev_attributes.height,
+        )
+
         logging.info("Assigning vehicle profiles")
         vehicle_profiles = cast(
             dict[tuple[str, int], VehicleProfile],
@@ -511,6 +556,7 @@ class EVDemandCalculator:
         presence_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] | None = None,
         battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH,
         kwh_per_mile: float = DEFAULT_KWH_PER_MILE,
+        ev_attributes: pl.DataFrame | None = None,
         charger_power_kw: float = DEFAULT_LEVEL2_CHARGER_KW,
         ev_adoption_rate: float = 1.0,
         initial_soc_kwh: float | None = None,
@@ -521,6 +567,8 @@ class EVDemandCalculator:
         soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
         soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
     ) -> pl.DataFrame:
+        # Prefer explicitly passed attrs; otherwise use whatever match_and_generate stored.
+        attrs = self.ev_attributes if ev_attributes is None else ev_attributes
         return self.charging_simulator.generate_soc(
             trip_schedules,
             vehicle_keys=vehicle_keys,
@@ -528,6 +576,7 @@ class EVDemandCalculator:
             presence_by_vehicle=presence_by_vehicle,
             battery_capacity_kwh=battery_capacity_kwh,
             kwh_per_mile=kwh_per_mile,
+            ev_attributes=attrs,  # per-vehicle capacity + efficiency when available
             charger_power_kw=charger_power_kw,
             ev_adoption_rate=ev_adoption_rate,
             initial_soc_kwh=initial_soc_kwh,
@@ -633,12 +682,21 @@ def main():
     # Step 1: Create configuration
     config = EVDemandConfig(state=args.state, release=args.release)
 
-    # Step 2: Load all data (lookup loaded once and shared across batches)
-    metadata_df, nhts_df, pums_df, ev_ownership_df = ev_utils.load_all_input_data(config)
+    # Step 2: Load all data (lookups loaded once and shared across batches)
+    (
+        metadata_df,
+        nhts_df,
+        pums_df,
+        ev_ownership_df,
+        ev_battery_df,
+        ev_autonomie_df,
+    ) = ev_utils.load_all_input_data(config)
     print(f"Loaded metadata: {len(metadata_df)} rows")
     print(f"Loaded NHTS data: {len(nhts_df)} rows")
     print(f"Loaded PUMS data: {len(pums_df)} rows")
     print(f"Loaded EV ownership lookup: {ev_ownership_df.height:,} rows")
+    print(f"Loaded EV battery options: {ev_battery_df.height:,} rows")
+    print(f"Loaded Autonomie vehicle params: {ev_autonomie_df.height:,} rows")
     state_ev_rate = ev_utils.state_ev_ownership_rate(ev_ownership_df, config.state)
     print(
         f"PUMS-weighted mean P(EV) over occupied lookup segments ({config.state}): {state_ev_rate:.4f}"
@@ -649,8 +707,10 @@ def main():
     total_rows = len(metadata_df)
     all_trip_schedules = []
     all_soc_schedules = []
+    all_ev_attributes = []  # per-batch ResStock battery assignment tables
     trip_file_name = "trip_schedules"
     soc_file_name = "vehicle_soc_schedules"
+    attrs_file_name = "ev_attributes"  # written alongside trips / SOC
 
     for i in range(0, total_rows, batch_size):
         batch_end = min(i + batch_size, total_rows)
@@ -663,16 +723,25 @@ def main():
             metadata_df=batch_metadata,
             nhts_df=nhts_df,
             ev_ownership_df=ev_ownership_df,
+            ev_battery_df=ev_battery_df,
+            ev_autonomie_df=ev_autonomie_df,
             start_date=start_date,
             end_date=end_date,
             # pums_df=pums_df,
             max_workers=8,  # Use worker threads for parallel processing
         )
 
+        # Side effect: calculator.ev_attributes is set during this call.
         batch_trip_schedules = calculator.match_and_generate_trip_schedules()
+        batch_ev_attributes = calculator.ev_attributes
+        # SOC uses the attributes just assigned (per-vehicle capacity + kWh/mi).
         batch_soc_schedules = calculator.generate_soc_schedules(batch_trip_schedules)
 
         print(f"Completed batch {batch_number}: generated {len(batch_trip_schedules)} trip schedules")
+        print(
+            f"Completed batch {batch_number}: assigned "
+            f"{0 if batch_ev_attributes is None else len(batch_ev_attributes)} EV battery attributes"
+        )
         print(f"Completed batch {batch_number}: generated {len(batch_soc_schedules)} hourly SOC rows")
 
         if args.upload_s3:
@@ -680,8 +749,14 @@ def main():
             print(f"Uploading batch {batch_number} to S3...")
             trip_upload_success = upload_batch_to_s3(batch_trip_schedules, config, trip_file_name, batch_number)
             soc_upload_success = upload_batch_to_s3(batch_soc_schedules, config, soc_file_name, batch_number)
+            attrs_upload_success = True
+            # Battery attrs are sparse (one row per EV); skip empty batches.
+            if batch_ev_attributes is not None and batch_ev_attributes.height > 0:
+                attrs_upload_success = upload_batch_to_s3(
+                    batch_ev_attributes, config, attrs_file_name, batch_number
+                )
 
-            if not trip_upload_success or not soc_upload_success:
+            if not trip_upload_success or not soc_upload_success or not attrs_upload_success:
                 print(f"Error: S3 upload failed for batch {batch_number}")
                 return 1
 
@@ -689,15 +764,22 @@ def main():
             # Clear batch data to free memory
             del batch_trip_schedules
             del batch_soc_schedules
+            del batch_ev_attributes
         else:
             # Keep batch for local saving
             all_trip_schedules.append(batch_trip_schedules)
             all_soc_schedules.append(batch_soc_schedules)
+            if batch_ev_attributes is not None and batch_ev_attributes.height > 0:
+                all_ev_attributes.append(batch_ev_attributes)
 
     if args.upload_s3:
-        print(f"All batches uploaded to S3 with partitioning: {trip_file_name}/ and {soc_file_name}/")
+        print(
+            f"All batches uploaded to S3 with partitioning: "
+            f"{trip_file_name}/, {soc_file_name}/, and {attrs_file_name}/"
+        )
         logging.info(
-            f"Uploaded all batches to S3 with partitioning: {trip_file_name}/ and {soc_file_name}/"
+            f"Uploaded all batches to S3 with partitioning: "
+            f"{trip_file_name}/, {soc_file_name}/, and {attrs_file_name}/"
         )
     else:
         # Combine all batches for local saving
@@ -723,6 +805,23 @@ def main():
         else:
             logging.warning("No trip schedules generated")
 
+        # Persist sampled battery class / capacity / efficiency for QA and later type-matching.
+        if all_ev_attributes:
+            combined_ev_attributes = pl.concat(all_ev_attributes)
+            logging.info(f"Combined all batches: {len(combined_ev_attributes)} total EV attribute rows")
+
+            final_ev_attributes = combined_ev_attributes.with_columns([
+                pl.lit(config.release).alias("release"),
+                pl.lit(config.state).alias("state"),
+            ]).sort(["bldg_id", "vehicle_id"])
+
+            local_attrs_path = f"{config.output_dir}/{attrs_file_name}"
+            final_ev_attributes.write_parquet(local_attrs_path, partition_by=["release", "state"])
+
+            print(f"EV attributes written to: {local_attrs_path}")
+            logging.info(f"Written EV attributes to {local_attrs_path}")
+        else:
+            logging.warning("No EV attributes generated")
         if all_soc_schedules:
             combined_soc_schedules = pl.concat(all_soc_schedules)
             logging.info(f"Combined all batches: {len(combined_soc_schedules)} total hourly SOC rows")

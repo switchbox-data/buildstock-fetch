@@ -17,6 +17,8 @@ import polars as pl
 __all__ = [
     "get_census_division_for_state",
     "load_all_input_data",
+    "load_ev_autonomie_params",
+    "load_ev_battery_lookup",
     "load_ev_ownership_lookup",
     "load_metadata",
     "load_metro_puma_map",
@@ -478,22 +480,74 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
     return metro_lookup_df
 
 
-def load_all_input_data(ev_demand_config: Any) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def load_ev_battery_lookup(ev_battery_path: str | Path) -> pl.DataFrame:
+    """
+    Load ResStock national EV battery option shares (Electric_Vehicle_Battery.tsv).
+
+    Args:
+        ev_battery_path: Path to the EV battery housing-characteristic TSV
+
+    Returns:
+        DataFrame with columns ``ev_option_name``, ``probability``
+    """
+    # Import here to avoid circular imports with EVBatteryAssigner helpers.
+    from utils.EVBatteryAssigner import load_ev_battery_option_probabilities
+
+    path = Path(ev_battery_path)
+    if not path.exists():
+        msg = (
+            f"EV battery options file not found: {path}. "
+            "Run `just download-resstock-ev-reference` to download the data."
+        )
+        raise FileNotFoundError(msg)
+    return load_ev_battery_option_probabilities(path)
+
+
+def load_ev_autonomie_params(ev_autonomie_path: str | Path) -> pl.DataFrame:
+    """
+    Load Autonomie usable capacity and efficiency keyed by EV battery option name.
+
+    Args:
+        ev_autonomie_path: Path to ``resstock_autonomie_2022_vehicle_params.csv``
+
+    Returns:
+        DataFrame with ``ev_option_name``, ``battery_capacity_kwh``, ``kwh_per_mile``,
+        ``body_class``, and ``range_miles``
+    """
+    from utils.EVBatteryAssigner import load_autonomie_vehicle_params
+
+    path = Path(ev_autonomie_path)
+    if not path.exists():
+        msg = (
+            f"Autonomie vehicle params not found: {path}. "
+            "Run `just download-resstock-ev-reference` to download the data."
+        )
+        raise FileNotFoundError(msg)
+    return load_autonomie_vehicle_params(path)
+
+
+def load_all_input_data(
+    ev_demand_config: Any,
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """
     Load all input data for the EV demand calculator.
 
     Returns:
-        Tuple of (metadata_df, nhts_df, pums_df, ev_ownership_df)
+        Tuple of (metadata_df, nhts_df, pums_df, ev_ownership_df, ev_battery_df, ev_autonomie_df)
     """
     metadata_df = load_metadata(ev_demand_config.metadata_path, ev_demand_config.state)
     nhts_df = load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state)
     pums_df = load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path)
+    # Conditional P(EV) by FPL / building type / tenure / PUMA (state-filtered).
     ev_ownership_df = load_ev_ownership_lookup(
         ev_demand_config.ev_ownership_path,
         ev_demand_config.state,
     )
+    # National BEV class × range shares + Autonomie physical parameters.
+    ev_battery_df = load_ev_battery_lookup(ev_demand_config.ev_battery_path)
+    ev_autonomie_df = load_ev_autonomie_params(ev_demand_config.ev_autonomie_path)
 
-    return metadata_df, nhts_df, pums_df, ev_ownership_df
+    return metadata_df, nhts_df, pums_df, ev_ownership_df, ev_battery_df, ev_autonomie_df
 
 
 def assign_battery_capacity(battery_capacities, daily_kwh: pl.Series) -> pl.Series:
@@ -572,7 +626,7 @@ def upload_object_to_s3(file_content: bytes, file_name: str) -> bool:
     s3_key = f"ev_demand/{file_name}"
 
     try:
-        s3_client = boto3.client("s3")
+        s3_client: Any = boto3.client("s3")
         print(f"Uploading {file_name} to s3://{bucket_name}/{s3_key}...")
 
         # Upload directly from memory

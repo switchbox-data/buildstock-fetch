@@ -47,11 +47,13 @@ def md_ev_metadata():
 
 
 @pytest.fixture
-def ev_calculator(md_ev_metadata, ev_lookup):
+def ev_calculator(md_ev_metadata, ev_lookup, ev_battery_df, ev_autonomie_df):
     return EVDemandCalculator(
         metadata_df=md_ev_metadata,
         nhts_df=pl.DataFrame(),
         ev_ownership_df=ev_lookup,
+        ev_battery_df=ev_battery_df,
+        ev_autonomie_df=ev_autonomie_df,
         start_date=datetime(2022, 1, 1),
         end_date=datetime(2022, 1, 7),
         random_state=42,

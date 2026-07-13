@@ -7,9 +7,12 @@ import polars as pl
 import pytest
 
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
-from utils.ev_utils import load_ev_ownership_lookup
+from utils.ev_utils import load_ev_autonomie_params, load_ev_battery_lookup, load_ev_ownership_lookup
 
 EV_OWNERSHIP_FIXTURE_PATH = Path(__file__).parent / "fixtures/ev_ownership_lookup_sample.tsv"
+RESSTOCK_EV_REFERENCE_DIR = (
+    Path(__file__).resolve().parent.parent / "utils" / "ev_data" / "inputs" / "resstock_ev_reference"
+)
 
 
 @pytest.fixture(scope="session")
@@ -21,6 +24,18 @@ def vcr_config():
 def ev_ownership_df() -> pl.DataFrame:
     """Small NREL EV ownership lookup for unit tests."""
     return load_ev_ownership_lookup(EV_OWNERSHIP_FIXTURE_PATH, "MD")
+
+
+@pytest.fixture(scope="session")
+def ev_battery_df() -> pl.DataFrame:
+    """ResStock national EV battery option shares (loaded like ownership lookup)."""
+    return load_ev_battery_lookup(RESSTOCK_EV_REFERENCE_DIR / "Electric_Vehicle_Battery.tsv")
+
+
+@pytest.fixture(scope="session")
+def ev_autonomie_df() -> pl.DataFrame:
+    """Autonomie capacity / efficiency params keyed by EV battery option name."""
+    return load_ev_autonomie_params(RESSTOCK_EV_REFERENCE_DIR / "resstock_autonomie_2022_vehicle_params.csv")
 
 
 @pytest.fixture(scope="function")

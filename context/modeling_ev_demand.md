@@ -53,7 +53,7 @@ So, for example, a trip from 9:17am to 9:50am is logged as 9am departure from ho
 
 Notes:
 - NHTS data should probably be matched from 4am one day to 3:59am the next day for consistency (otherwise they are only replaying trips from 12am-3:59am or 4am-11:59pm -- check this!)
-- If we assume that all households have at most one EV, then we should not be matching trip profiles based on the number of vehicles
+- If we assume that all households have at most one EV, then we should not be matching trip profiles based on the number of vehicles (this is fixed, now there is the match_on_vehicles flag)
 - Right now code assumes if multiple vehicles, they are matched in the same 'tier'
 - as a pre-processing step (or should this be done in load_nhts_data?), we recommend taking removing the bottom and top 10% (or 5%?) trip profiles in terms of daily miles traveled
 

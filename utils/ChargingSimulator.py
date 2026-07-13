@@ -126,7 +126,8 @@ class ChargingSimulator:
         trip_schedules: pl.DataFrame,
         hours_base: pl.DataFrame,
         *,
-        kwh_per_mile: float,
+        kwh_per_mile: float = DEFAULT_KWH_PER_MILE,
+        kwh_per_mile_by_vehicle: pl.DataFrame | None = None,
         ev_adoption_rate: float,
     ) -> pl.DataFrame:
         """Map each vehicle's trip schedule to an hourly schedule of discharge kWh for the instance date range.
@@ -138,7 +139,8 @@ class ChargingSimulator:
         Args:
             trip_schedules (pl.DataFrame): DataFrame of trip schedules
             hours_base (pl.DataFrame): hourly calendar for the instance date range
-            kwh_per_mile (float): kWh per mile
+            kwh_per_mile (float): default kWh per mile when per-vehicle values are absent
+            kwh_per_mile_by_vehicle: optional ``bldg_id``, ``vehicle_id``, ``kwh_per_mile`` frame
             ev_adoption_rate (float): EV adoption rate
 
         Returns:
@@ -155,12 +157,29 @@ class ChargingSimulator:
                 }
             )
 
+        trips = trip_schedules
+        # When ResStock battery attributes are present, use each vehicle's Autonomie
+        # kWh/mile instead of the fleet-wide default (e.g. 0.30).
+        if kwh_per_mile_by_vehicle is not None:
+            trips = trips.join(
+                kwh_per_mile_by_vehicle.select("bldg_id", "vehicle_id", "kwh_per_mile"),
+                on=["bldg_id", "vehicle_id"],
+                how="left",
+            ).with_columns(
+                # Vehicles missing from ev_attributes fall back to the scalar default.
+                pl.col("kwh_per_mile").fill_null(kwh_per_mile)
+            )
+            trip_kwh_expr = pl.col("miles_driven") * pl.col("kwh_per_mile") * ev_adoption_rate
+        else:
+            # Legacy path: one efficiency for the whole fleet.
+            trip_kwh_expr = pl.col("miles_driven") * kwh_per_mile * ev_adoption_rate
+
         away_hour_discharge = (
-            trip_schedules.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
+            trips.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
             .with_columns(
                 # away from departure_hour (inclusive) through arrival_hour (exclusive)
                 pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour")).alias("hour"),
-                (pl.col("miles_driven") * kwh_per_mile * ev_adoption_rate).alias("trip_kwh"),
+                trip_kwh_expr.alias("trip_kwh"),
             )
             .with_columns(
                 # divide total trip energy evenly across all away hours for that trip
@@ -178,6 +197,42 @@ class ChargingSimulator:
         )
         return away_hour_discharge
 
+    @staticmethod
+    def _battery_attrs_lookup(
+        ev_attributes: pl.DataFrame | None,
+    ) -> dict[tuple[str | int, int], tuple[float, float]]:
+        """Map ``(bldg_id, vehicle_id)`` -> ``(battery_capacity_kwh, kwh_per_mile)``.
+
+        Built once per ``generate_soc`` call so the per-vehicle loop can O(1) look up
+        ResStock/Autonomie pack size and efficiency.
+        """
+        if ev_attributes is None or ev_attributes.is_empty():
+            return {}
+
+        required = {"bldg_id", "vehicle_id", "battery_capacity_kwh", "kwh_per_mile"}
+        missing = required - set(ev_attributes.columns)
+        if missing:
+            raise ValueError(f"ev_attributes missing columns: {sorted(missing)}")
+
+        lookup: dict[tuple[str | int, int], tuple[float, float]] = {}
+        for row in ev_attributes.select(
+            "bldg_id", "vehicle_id", "battery_capacity_kwh", "kwh_per_mile"
+        ).iter_rows(named=True):
+            capacity = float(row["battery_capacity_kwh"])
+            efficiency = float(row["kwh_per_mile"])
+            if capacity <= 0:
+                raise ValueError(
+                    f"battery_capacity_kwh must be positive for "
+                    f"({row['bldg_id']}, {row['vehicle_id']}), got {capacity}"
+                )
+            if efficiency < 0:
+                raise ValueError(
+                    f"kwh_per_mile must be non-negative for "
+                    f"({row['bldg_id']}, {row['vehicle_id']}), got {efficiency}"
+                )
+            lookup[(row["bldg_id"], int(row["vehicle_id"]))] = (capacity, efficiency)
+        return lookup
+
     def generate_soc(
         self,
         trip_schedules: pl.DataFrame,
@@ -187,6 +242,7 @@ class ChargingSimulator:
         presence_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] | None = None,
         battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH,
         kwh_per_mile: float = DEFAULT_KWH_PER_MILE,
+        ev_attributes: pl.DataFrame | None = None,
         charger_power_kw: float = DEFAULT_LEVEL2_CHARGER_KW,
         ev_adoption_rate: float = 1.0,
         initial_soc_kwh: float | None = None,
@@ -223,11 +279,15 @@ class ChargingSimulator:
             presence_by_vehicle: Pre-built hourly presence schedules per vehicle; when provided,
                 presence is not recomputed and ``vehicle_keys`` is ignored
             hours_base: Hourly calendar for trip-to-hour joins; built from the instance date range if None
-            battery_capacity_kwh: Battery capacity in kWh
-            kwh_per_mile: kWh per mile
+            battery_capacity_kwh: Default battery capacity in kWh when ``ev_attributes`` omits a vehicle
+            kwh_per_mile: Default kWh per mile when ``ev_attributes`` omits a vehicle
+            ev_attributes: Optional per-vehicle attributes with ``battery_capacity_kwh`` and
+                ``kwh_per_mile`` (typically from ``EVBatteryAssigner``)
             charger_power_kw: Charger power in kW
             ev_adoption_rate: EV adoption rate
-            initial_soc_kwh: Initial SOC in kWh at the start of hour 0
+            initial_soc_kwh: Initial SOC in kWh at the start of hour 0; when None, each vehicle
+                starts full at its own battery capacity. A fixed absolute ``initial_soc_kwh`` is
+                only valid when every vehicle uses the same capacity (or the value fits each pack).
             charging_strategy: ``immediate``, ``off_peak``, or ``cost_minimizing``
             hourly_price_usd_per_kwh: Length-``num_hours`` marginal price array for optimized charging
             shed_load_penalty_usd_per_kwh: Penalty on curtailed trip energy for ``cost_minimizing``;
@@ -243,7 +303,7 @@ class ChargingSimulator:
             ValueError: If ``battery_capacity_kwh`` is not positive
             ValueError: If ``charger_power_kw`` is negative
             ValueError: If ``kwh_per_mile`` is negative
-            ValueError: If ``initial_soc_kwh`` is not within [0, ``battery_capacity_kwh``]
+            ValueError: If ``initial_soc_kwh`` is not within [0, battery capacity] for a vehicle
             ValueError: If a pre-built presence schedule does not match the hourly calendar length
             ValueError: If ``charging_strategy`` is ``cost_minimizing`` without hourly prices
         """
@@ -254,9 +314,7 @@ class ChargingSimulator:
         if kwh_per_mile < 0:
             raise ValueError(f"kwh_per_mile must be non-negative, got {kwh_per_mile}")
 
-        start_soc = battery_capacity_kwh if initial_soc_kwh is None else initial_soc_kwh
-        if not 0.0 <= start_soc <= battery_capacity_kwh:
-            raise ValueError(f"initial_soc_kwh must be within [0, {battery_capacity_kwh}], got {start_soc}")
+        attrs_lookup = self._battery_attrs_lookup(ev_attributes)
 
         hours_base = self._resolve_hours_base(hours_base)
         num_hours = hours_base.height
@@ -285,11 +343,21 @@ class ChargingSimulator:
                         f"expected {num_hours} for the instance date range"
                     )
 
-        # Build hourly discharge kWh
+        # Flatten attrs_lookup into a joinable frame for per-vehicle discharge energy.
+        kwh_per_mile_by_vehicle = None
+        if attrs_lookup:
+            kwh_per_mile_by_vehicle = pl.DataFrame({
+                "bldg_id": [key[0] for key in attrs_lookup],
+                "vehicle_id": [key[1] for key in attrs_lookup],
+                "kwh_per_mile": [vals[1] for vals in attrs_lookup.values()],
+            })
+
+        # Build hourly discharge kWh (uses per-vehicle efficiency when available).
         discharge_by_hour = self._build_hourly_discharge_kwh(
             trip_schedules,
             hours_base,
             kwh_per_mile=kwh_per_mile,
+            kwh_per_mile_by_vehicle=kwh_per_mile_by_vehicle,
             ev_adoption_rate=ev_adoption_rate,
         )
 
@@ -311,9 +379,22 @@ class ChargingSimulator:
                 vehicle_key = (trip_frame["bldg_id"][0], int(trip_frame["vehicle_id"][0]))
                 vehicle_trips_by_key[vehicle_key] = trip_frame
 
-        # Generate hourly SOC schedules
+        # Generate hourly SOC schedules — capacity is resolved per vehicle below.
         soc_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] = {}
         for vehicle_key, presence in presence_by_vehicle.items():
+            # Prefer ResStock/Autonomie capacity; fall back to scalar defaults for tests / legacy.
+            vehicle_capacity_kwh, _vehicle_kwh_per_mile = attrs_lookup.get(
+                vehicle_key,
+                (battery_capacity_kwh, kwh_per_mile),
+            )
+            # Default: start full at this vehicle's own pack size (not a fleet-wide 90 kWh).
+            start_soc = vehicle_capacity_kwh if initial_soc_kwh is None else initial_soc_kwh
+            if not 0.0 <= start_soc <= vehicle_capacity_kwh:
+                raise ValueError(
+                    f"initial_soc_kwh must be within [0, {vehicle_capacity_kwh}] for "
+                    f"{vehicle_key}, got {start_soc}"
+                )
+
             discharge_arr = np.zeros(num_hours, dtype=np.float64)  # default: no driving this hour
             # Look up discharge kWh for each hour of the day
             for hour_index, discharge in discharge_lookup.get(vehicle_key, {}).items():
@@ -321,12 +402,12 @@ class ChargingSimulator:
 
             at_home = presence["at_home"].to_numpy()
             shed_load_kwh = np.zeros(num_hours, dtype=np.float64)
-            # Choose hourly charge schedule (strategy-specific).
+            # Choose hourly charge schedule (strategy-specific), using this vehicle's capacity.
             if charging_strategy == "immediate":
                 charge_kwh = schedule_immediate_charging(
                     at_home,
                     discharge_arr,
-                    battery_capacity_kwh=battery_capacity_kwh,
+                    battery_capacity_kwh=vehicle_capacity_kwh,
                     charger_power_kw=charger_power_kw,
                     initial_soc_kwh=start_soc,
                 )
@@ -337,7 +418,7 @@ class ChargingSimulator:
                     discharge_arr,
                     hours_base,
                     vehicle_trips_by_key.get(vehicle_key, pl.DataFrame()),
-                    battery_capacity_kwh=battery_capacity_kwh,
+                    battery_capacity_kwh=vehicle_capacity_kwh,
                     is_off_peak=is_off_peak,
                     soc_min_fraction=soc_min_fraction,
                     soc_safety_buffer_fraction=soc_safety_buffer_fraction,
@@ -348,7 +429,7 @@ class ChargingSimulator:
                     discharge_arr,
                     charge_allowed=charge_allowed,
                     soc_target_kwh=soc_target_kwh,
-                    battery_capacity_kwh=battery_capacity_kwh,
+                    battery_capacity_kwh=vehicle_capacity_kwh,
                     charger_power_kw=charger_power_kw,
                     initial_soc_kwh=start_soc,
                 )
@@ -356,7 +437,7 @@ class ChargingSimulator:
                 charge_kwh, shed_load_kwh = schedule_cost_minimizing_charging(
                     at_home,
                     discharge_arr,
-                    battery_capacity_kwh=battery_capacity_kwh,
+                    battery_capacity_kwh=vehicle_capacity_kwh,
                     charger_power_kw=charger_power_kw,
                     initial_soc_kwh=start_soc,
                     hourly_price_usd_per_kwh=np.asarray(hourly_price_usd_per_kwh, dtype=np.float64),

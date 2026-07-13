@@ -94,11 +94,13 @@ def mock_metadata_with_zero():
 
 
 @pytest.fixture
-def calculator(mock_nhts_data, mock_metadata, ev_ownership_df):
+def calculator(mock_nhts_data, mock_metadata, ev_ownership_df, ev_battery_df, ev_autonomie_df):
     return EVDemandCalculator(
         metadata_df=mock_metadata,
         nhts_df=mock_nhts_data,
         ev_ownership_df=ev_ownership_df,
+        ev_battery_df=ev_battery_df,
+        ev_autonomie_df=ev_autonomie_df,
         start_date=datetime(2022, 1, 1),
         end_date=datetime(2022, 1, 7),
         pums_df=mock_metadata,  # Using same data for simplicity
@@ -185,11 +187,15 @@ def test_find_best_matches_with_vehicle_tier(calculator):
     assert vehicle_ids[0] in ["v1", "v2", "v3", "v4"]
 
 
-def test_sample_vehicle_profiles_uses_calculator_nhts_by_default(mock_nhts_data, mock_metadata, ev_ownership_df):
+def test_sample_vehicle_profiles_uses_calculator_nhts_by_default(
+    mock_nhts_data, mock_metadata, ev_ownership_df, ev_battery_df, ev_autonomie_df
+):
     calculator_kwargs = {
         "metadata_df": mock_metadata,
         "nhts_df": mock_nhts_data,
         "ev_ownership_df": ev_ownership_df,
+        "ev_battery_df": ev_battery_df,
+        "ev_autonomie_df": ev_autonomie_df,
         "start_date": datetime(2022, 1, 1),
         "end_date": datetime(2022, 1, 7),
         "random_state": 42,
@@ -327,13 +333,15 @@ def test_sample_vehicle_profiles_match_catalog(calculator):
 
 
 def test_sample_vehicle_profiles_zero_vehicles(
-    calculator, mock_nhts_data, mock_metadata_with_zero, ev_ownership_df
+    calculator, mock_nhts_data, mock_metadata_with_zero, ev_ownership_df, ev_battery_df, ev_autonomie_df
 ):
     # Create new calculator with metadata that includes a zero-vehicle building
     calculator = EVDemandCalculator(
         metadata_df=mock_metadata_with_zero,
         nhts_df=mock_nhts_data,
         ev_ownership_df=ev_ownership_df,
+        ev_battery_df=ev_battery_df,
+        ev_autonomie_df=ev_autonomie_df,
         start_date=datetime(2022, 1, 1),
         end_date=datetime(2022, 1, 7),
         pums_df=mock_metadata_with_zero,
@@ -921,11 +929,11 @@ def test_vehicle_hourly_schedules_to_dataframe(calculator):
 
 @patch("utils.ev_demand.EVDemandCalculator.generate_daily_trip_schedules")
 @patch("utils.ev_demand.EVDemandCalculator.sample_vehicle_profiles")
-@patch("utils.ev_demand.EVDemandCalculator.predict_num_EVs")
-def test_match_and_generate_trip_schedules(predict_evs, sample_profiles, generate_schedule, calculator):
+@patch("utils.ev_demand.EVDemandCalculator.sample_num_EVs")
+def test_match_and_generate_trip_schedules(sample_evs, sample_profiles, generate_schedule, calculator):
     # Setup expected data
     metadata = calculator.metadata_df
-    predict_evs.return_value = metadata.with_columns(
+    sample_evs.return_value = metadata.with_columns(
         pl.lit(1).alias("evs"),
         pl.lit(0.05).alias("ev_ownership_probability"),
     )
@@ -962,7 +970,55 @@ def test_match_and_generate_trip_schedules(predict_evs, sample_profiles, generat
     assert result["miles_driven"].to_list() == schedule_data["miles_driven"]
     assert [d.strftime("%Y-%m-%d") for d in result["date"]] == [d.strftime("%Y-%m-%d") for d in schedule_data["date"]]
 
+    # Battery attributes assigned for the EV slots present after sample_num_EVs
+    # (mock sets evs=1 on all 3 metadata buildings → 3 attribute rows).
+    assert calculator.ev_attributes is not None
+    assert calculator.ev_attributes.height == 3
+    assert {"battery_capacity_kwh", "kwh_per_mile", "ev_option_name"} <= set(calculator.ev_attributes.columns)
+
     # Verify mock calls
-    predict_evs.assert_called_once()
+    sample_evs.assert_called_once()
     sample_profiles.assert_called_once()
     generate_schedule.assert_called_once()
+
+
+def test_generate_soc_schedules_respects_per_vehicle_battery_attrs(calculator):
+    """Heterogeneous ResStock capacities/efficiencies are applied per vehicle."""
+    # Same 10-mile, 1-hour trip for two vehicles.
+    trips = pl.DataFrame({
+        "bldg_id": ["b1", "b2"],
+        "vehicle_id": [1, 1],
+        "date": [datetime(2022, 1, 1), datetime(2022, 1, 1)],
+        "departure_hour": [9, 9],
+        "arrival_hour": [10, 10],
+        "miles_driven": [10.0, 10.0],
+    })
+    # Compact (efficient, smaller pack) vs pickup (thirstier, larger pack).
+    attrs = pl.DataFrame({
+        "bldg_id": ["b1", "b2"],
+        "vehicle_id": [1, 1],
+        "ev_option_name": [
+            "Compact, Battery Electric Vehicle, 200 mile range",
+            "Pickup, Battery Electric Vehicle, 300 mile range",
+        ],
+        "body_class": ["Compact", "Pickup"],
+        "range_miles": [200, 300],
+        "battery_capacity_kwh": [40.168, 105.946],
+        "kwh_per_mile": [0.209901, 0.373794],
+    })
+
+    soc = calculator.generate_soc_schedules(
+        trips,
+        vehicle_keys=[("b1", 1), ("b2", 1)],
+        ev_attributes=attrs,
+    )
+
+    b1 = soc.filter(pl.col("bldg_id") == "b1")
+    b2 = soc.filter(pl.col("bldg_id") == "b2")
+    # SOC ceiling follows each vehicle's usable capacity (not the 90 kWh default).
+    assert b1["soc_kwh"].max() == pytest.approx(40.168)
+    assert b2["soc_kwh"].max() == pytest.approx(105.946)
+    # Same miles, different efficiency -> different discharge totals
+    assert b1["discharge_kwh"].sum() == pytest.approx(10.0 * 0.209901)
+    assert b2["discharge_kwh"].sum() == pytest.approx(10.0 * 0.373794)
+    assert b1["discharge_kwh"].sum() < b2["discharge_kwh"].sum()
