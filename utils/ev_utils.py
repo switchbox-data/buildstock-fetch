@@ -3,10 +3,11 @@ Utility functions for EV demand calculations.
 
 This module contains:
 - Census division mapping functions
-- Data loading functions for metadata, NHTS, and PUMS data
+- Data loading functions for metadata, NHTS, PUMS, and ResStock EV reference data
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +25,19 @@ __all__ = [
     "load_metro_puma_map",
     "load_nhts_data",
     "load_pums_data",
+    "parse_ev_option_name",
     "resstock_puma_dependency",
     "state_ev_ownership_rate",
 ]
+
+# Housing-characteristic TSV headers look like: Option=Compact, Battery Electric Vehicle, 200 mile range
+_OPTION_HEADER_RE = re.compile(r"^Option=(.+)$")
+# Canonical option names used by both the battery TSV and Autonomie CSV.
+_OPTION_PARSE_RE = re.compile(
+    r"^(?P<body_class>Compact|Midsize|Pickup|SUV), "
+    r"Battery Electric Vehicle, "
+    r"(?P<range_miles>\d+) mile range$"
+)
 
 STATE_TO_CENSUS_DIVISION: dict[str, int] = {
     # New England (1)
@@ -480,9 +491,25 @@ def load_metro_puma_map(metadata_path: str) -> pl.DataFrame:
     return metro_lookup_df
 
 
+def parse_ev_option_name(option_name: str) -> tuple[str, int]:
+    """Extract body class and range miles from a ResStock EV battery option name.
+
+    Examples:
+        >>> parse_ev_option_name("Compact, Battery Electric Vehicle, 200 mile range")
+        ('Compact', 200)
+    """
+    match = _OPTION_PARSE_RE.match(option_name.strip())
+    if match is None:
+        raise ValueError(f"Unrecognized EV battery option name: {option_name!r}")
+    return match.group("body_class"), int(match.group("range_miles"))
+
+
 def load_ev_battery_lookup(ev_battery_path: str | Path) -> pl.DataFrame:
     """
     Load ResStock national EV battery option shares (Electric_Vehicle_Battery.tsv).
+
+    The housing-characteristic file has one data row of option shares and a
+    trailing ``sampling_probability`` column that should equal 1.
 
     Args:
         ev_battery_path: Path to the EV battery housing-characteristic TSV
@@ -490,22 +517,63 @@ def load_ev_battery_lookup(ev_battery_path: str | Path) -> pl.DataFrame:
     Returns:
         DataFrame with columns ``ev_option_name``, ``probability``
     """
-    # Import here to avoid circular imports with EVBatteryAssigner helpers.
-    from utils.EVBatteryAssigner import load_ev_battery_option_probabilities
-
     path = Path(ev_battery_path)
     if not path.exists():
-        msg = (
+        raise FileNotFoundError(
             f"EV battery options file not found: {path}. "
             "Run `just download-resstock-ev-reference` to download the data."
         )
-        raise FileNotFoundError(msg)
-    return load_ev_battery_option_probabilities(path)
+
+    # Skip blank lines and ResStock comment lines that start with '#'.
+    data_rows: list[str] = []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            data_rows.append(stripped)
+
+    # Expect exactly: header row with Option=... columns, then one probability row.
+    if len(data_rows) < 2:
+        raise ValueError(f"EV battery TSV must have a header and data row: {path}")
+
+    header_cells = data_rows[0].split("\t")
+    value_cells = data_rows[1].split("\t")
+    if len(header_cells) != len(value_cells):
+        raise ValueError(
+            f"EV battery TSV header/value length mismatch in {path}: "
+            f"{len(header_cells)} vs {len(value_cells)}"
+        )
+
+    # Build (option_name, probability) pairs; ignore the trailing sampling_probability=1 column.
+    option_names: list[str] = []
+    probabilities: list[float] = []
+    for header, value in zip(header_cells, value_cells, strict=True):
+        option_match = _OPTION_HEADER_RE.match(header)
+        if option_match is None:
+            if header == "sampling_probability":
+                continue  # ResStock QA column; not an EV option
+            raise ValueError(f"Unexpected EV battery TSV column: {header!r}")
+        option_names.append(option_match.group(1))
+        probabilities.append(float(value))
+
+    probs = pl.DataFrame({
+        "ev_option_name": option_names,
+        "probability": probabilities,
+    })
+    # Soft check before multinomial sampling (numpy also requires sum≈1).
+    total = float(probs["probability"].sum())
+    if not np.isclose(total, 1.0, atol=1e-5):
+        raise ValueError(f"EV battery option probabilities sum to {total}, expected 1.0")
+    return probs
 
 
 def load_ev_autonomie_params(ev_autonomie_path: str | Path) -> pl.DataFrame:
     """
     Load Autonomie usable capacity and efficiency keyed by EV battery option name.
+
+    These are the physical model inputs that ResStock maps into HPXML / EnergyPlus
+    (usable kWh pack size and combined kWh per mile).
 
     Args:
         ev_autonomie_path: Path to ``resstock_autonomie_2022_vehicle_params.csv``
@@ -514,16 +582,37 @@ def load_ev_autonomie_params(ev_autonomie_path: str | Path) -> pl.DataFrame:
         DataFrame with ``ev_option_name``, ``battery_capacity_kwh``, ``kwh_per_mile``,
         ``body_class``, and ``range_miles``
     """
-    from utils.EVBatteryAssigner import load_autonomie_vehicle_params
-
     path = Path(ev_autonomie_path)
     if not path.exists():
-        msg = (
+        raise FileNotFoundError(
             f"Autonomie vehicle params not found: {path}. "
             "Run `just download-resstock-ev-reference` to download the data."
         )
-        raise FileNotFoundError(msg)
-    return load_autonomie_vehicle_params(path)
+
+    params = (
+        pl.read_csv(path)
+        .select(
+            pl.col("option_name").alias("ev_option_name"),
+            # Usable capacity is what SOC / charging constraints should use (not nominal).
+            pl.col("vehicle_battery_usable_capacity_kwh").cast(pl.Float64).alias("battery_capacity_kwh"),
+            # Base vehicle efficiency before any temperature adjustment.
+            pl.col("vehicle_fuel_economy_combined_kwh_per_mile")
+            .cast(pl.Float64)
+            .alias("kwh_per_mile"),
+        )
+        # Derive body_class / range_miles from the option string for matching / diagnostics.
+        .with_columns(
+            pl.col("ev_option_name")
+            .map_elements(lambda name: parse_ev_option_name(name)[0], return_dtype=pl.Utf8)
+            .alias("body_class"),
+            pl.col("ev_option_name")
+            .map_elements(lambda name: parse_ev_option_name(name)[1], return_dtype=pl.Int64)
+            .alias("range_miles"),
+        )
+    )
+    if params.is_empty():
+        raise ValueError(f"Autonomie vehicle params file is empty: {path}")
+    return params
 
 
 def load_all_input_data(

@@ -1,16 +1,15 @@
-"""Tests for NREL ResStock EV adoption lookup and predict_num_EVs().
+"""Tests for NREL ResStock EV adoption lookup and EVAdoptionSampler.
 
 Uses a tiny fixture TSV (tests/fixtures/ev_ownership_lookup_sample.tsv) so tests
 do not require downloading the full ~19 MB national lookup.
 """
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 import pytest
 
-from utils.ev_demand import EVDemandCalculator, MetadataDataFrameError
+from utils.EVAdoptionSampler import EVAdoptionSampler
 from utils.ev_utils import (
     load_ev_ownership_lookup,
     resstock_puma_dependency,
@@ -47,22 +46,8 @@ def md_ev_metadata():
 
 
 @pytest.fixture
-def ev_calculator(md_ev_metadata, ev_lookup, ev_battery_df, ev_autonomie_df):
-    return EVDemandCalculator(
-        metadata_df=md_ev_metadata,
-        nhts_df=pl.DataFrame(),
-        ev_ownership_df=ev_lookup,
-        ev_battery_df=ev_battery_df,
-        ev_autonomie_df=ev_autonomie_df,
-        start_date=datetime(2022, 1, 1),
-        end_date=datetime(2022, 1, 7),
-        random_state=42,
-    )
-
-
-def test_predict_num_vehicles_requires_pums_df(ev_calculator):
-    with pytest.raises(ValueError, match="pums_df is required"):
-        ev_calculator.predict_num_vehicles()
+def ev_sampler(ev_lookup):
+    return EVAdoptionSampler(ev_ownership_df=ev_lookup, random_state=42)
 
 
 def test_resstock_puma_dependency():
@@ -87,8 +72,8 @@ def test_state_ev_ownership_rate(ev_lookup):
     assert 0 < rate < 0.05
 
 
-def test_predict_num_evs_assigns_probabilities(ev_calculator, md_ev_metadata):
-    result = ev_calculator.predict_num_EVs()
+def test_predict_num_evs_assigns_probabilities(ev_sampler, md_ev_metadata):
+    result = ev_sampler.sample(md_ev_metadata)
 
     owner_row = result.filter(pl.col("bldg_id") == 1).row(0, named=True)
     renter_row = result.filter(pl.col("bldg_id") == 2).row(0, named=True)
@@ -100,31 +85,25 @@ def test_predict_num_evs_assigns_probabilities(ev_calculator, md_ev_metadata):
     assert vacant_row["evs"] == 0
 
 
-def test_predict_num_evs_reproducible(ev_calculator):
-    result1 = ev_calculator.predict_num_EVs()
-    result2 = ev_calculator.predict_num_EVs()
+def test_predict_num_evs_reproducible(ev_sampler, md_ev_metadata):
+    result1 = ev_sampler.sample(md_ev_metadata)
+    result2 = ev_sampler.sample(md_ev_metadata)
     assert result1["evs"].to_list() == result2["evs"].to_list()
 
 
-def test_predict_num_evs_max_one_per_household(ev_calculator):
-    result = ev_calculator.predict_num_EVs()
+def test_predict_num_evs_max_one_per_household(ev_sampler, md_ev_metadata):
+    result = ev_sampler.sample(md_ev_metadata)
     assert result["evs"].max() <= 1
     assert set(result.filter(~pl.col("is_vacant"))["evs"].unique().to_list()).issubset({0, 1})
 
 
-def test_predict_num_evs_missing_columns(ev_calculator):
+def test_predict_num_evs_missing_columns(ev_sampler):
     incomplete = pl.DataFrame({"bldg_id": [1], "occupants": [2]})
     with pytest.raises(ValueError, match="Missing EV adoption metadata columns"):
-        ev_calculator.predict_num_EVs(incomplete)
+        ev_sampler.sample(incomplete)
 
 
-def test_predict_num_evs_without_metadata(ev_calculator):
-    ev_calculator.metadata_df = None
-    with pytest.raises(MetadataDataFrameError):
-        ev_calculator.predict_num_EVs(None)
-
-
-def test_predict_num_evs_bernoulli_sampling(ev_calculator):
+def test_predict_num_evs_bernoulli_sampling(ev_sampler):
     """High P(EV) row should be sampled as EV with fixed seed."""
     high_prob_metadata = pl.DataFrame({
         "bldg_id": [99],
@@ -143,11 +122,11 @@ def test_predict_num_evs_bernoulli_sampling(ev_calculator):
     draws = rng.random(1)
     expected_evs = int(draws[0] < 0.0241447)
 
-    result = ev_calculator.predict_num_EVs(high_prob_metadata)
+    result = ev_sampler.sample(high_prob_metadata)
     assert result["evs"][0] == expected_evs
 
 
-def test_predict_num_evs_join_miss_raises(ev_calculator):
+def test_predict_num_evs_join_miss_raises(ev_sampler):
     """Occupied buildings with no lookup segment should raise."""
     unmatched_metadata = pl.DataFrame({
         "bldg_id": [99],
@@ -163,10 +142,10 @@ def test_predict_num_evs_join_miss_raises(ev_calculator):
     })
 
     with pytest.raises(ValueError, match="lookup join missed"):
-        ev_calculator.predict_num_EVs(unmatched_metadata)
+        ev_sampler.sample(unmatched_metadata)
 
 
-def test_predict_num_evs_requires_matching_puma(ev_calculator):
+def test_predict_num_evs_requires_matching_puma(ev_sampler):
     """Join keys include puma_dependency, matching ev_adoption.ipynb."""
     metadata = pl.DataFrame({
         "bldg_id": [1],
@@ -182,4 +161,4 @@ def test_predict_num_evs_requires_matching_puma(ev_calculator):
     })
 
     with pytest.raises(ValueError, match="lookup join missed"):
-        ev_calculator.predict_num_EVs(metadata)
+        ev_sampler.sample(metadata)

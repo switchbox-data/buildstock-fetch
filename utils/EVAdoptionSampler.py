@@ -27,7 +27,6 @@ class EVAdoptionSampler:
             DataFrame with added columns: ev_ownership_probability, evs
 
         Raises:
-            MetadataDataFrameError: If the metadata DataFrame is None
             ValueError: If the metadata DataFrame is missing required columns or an occupied
                 building has no matching EV ownership lookup row
         """

@@ -72,7 +72,7 @@ def nhts_arrival_hour(end_time: int) -> int:
 
 
 def summarize_nhts_match_catalog(catalog: pl.DataFrame) -> pl.DataFrame:
-    """Summarize NHTS household/vehicle matching gaps from sample_vehicle_profiles catalog.
+    """Summarize NHTS household/vehicle matching gaps from a ``sample(..., return_catalog=True)`` catalog.
 
     A number of NHTS vehicle profiles are missing a weekday or weekend trip profile.
     This function summarizes the number of missing profiles and vehicle slots with any gap.
@@ -197,7 +197,7 @@ class NHTSProfileSampler:
         )
 
         # Keep only trips taken on the requested day type (weekday=2 Mon–Fri, weekend=1 Sat/Sun).
-        # This ensures find_best_matches only returns hh_vehicle_ids that actually drove
+        # This ensures match only returns hh_vehicle_ids that actually drove
         # on that day type, so sampled profiles have real trip data to copy.
         day_flag = 2 if weekday else 1
         day_df = nhts_df.filter(pl.col("weekday") == day_flag)
@@ -209,7 +209,7 @@ class NHTSProfileSampler:
 
     def _build_matching_cache(self, df: pl.DataFrame) -> dict:
         """
-        Build a lookup dict for find_best_matches().
+        Build a lookup dict for match().
 
         Keys are tuples of (income_bucket, ...) with increasing specificity; values are
         sorted hh_vehicle_id lists for deterministic random sampling.
@@ -243,7 +243,7 @@ class NHTSProfileSampler:
                 cache[key] = sorted(row["hh_vehicle_id"])
 
         # Tier 3 — relax occupants too: (income_bucket,).
-        # Last structured fallback before find_best_matches picks the closest income bucket.
+        # Last structured fallback before match picks the closest income bucket.
         income_groups = df.group_by(["income_bucket"]).agg(pl.col("hh_vehicle_id").unique())
 
         for row in income_groups.iter_rows(named=True):
@@ -253,7 +253,7 @@ class NHTSProfileSampler:
 
         return cache
 
-    def find_best_matches(
+    def match(
         self,
         target_income: int,
         target_occupants: int,
@@ -357,7 +357,7 @@ class NHTSProfileSampler:
         )
 
     @overload
-    def sample_vehicle_profiles(
+    def sample(
         self,
         bldg_veh_df: pl.DataFrame,
         nhts_df: pl.DataFrame | None = None,
@@ -367,7 +367,7 @@ class NHTSProfileSampler:
     ) -> dict[tuple[str, int], VehicleProfile]: ...
 
     @overload
-    def sample_vehicle_profiles(
+    def sample(
         self,
         bldg_veh_df: pl.DataFrame,
         nhts_df: pl.DataFrame | None = None,
@@ -376,7 +376,7 @@ class NHTSProfileSampler:
         match_on_vehicles: bool | None = None,
     ) -> tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]: ...
 
-    def sample_vehicle_profiles(
+    def sample(
         self,
         bldg_veh_df: pl.DataFrame,
         nhts_df: pl.DataFrame | None = None,
@@ -422,7 +422,7 @@ class NHTSProfileSampler:
 
             if num_vehicles is None:
                 raise ValueError(
-                    f"bldg_id={bldg_id} has null vehicles; ensure predict_num_EVs() completed "
+                    f"bldg_id={bldg_id} has null vehicles; ensure EVAdoptionSampler.sample() completed "
                     "without lookup join misses before sampling profiles."
                 )
             if num_vehicles == 0:
@@ -432,7 +432,7 @@ class NHTSProfileSampler:
 
             # Match weekday and weekend profiles independently from NHTS vehicles
             # that have at least one logged trip on each day type.
-            weekday_match_type, weekday_vehicle_ids = self.find_best_matches(
+            weekday_match_type, weekday_vehicle_ids = self.match(
                 target_income=row["income_bucket"],
                 target_occupants=row["occupants"],
                 target_vehicles=num_vehicles,
@@ -440,7 +440,7 @@ class NHTSProfileSampler:
                 weekday=True,
                 match_on_vehicles=match_on_vehicles,
             )
-            weekend_match_type, weekend_vehicle_ids = self.find_best_matches(
+            weekend_match_type, weekend_vehicle_ids = self.match(
                 target_income=row["income_bucket"],
                 target_occupants=row["occupants"],
                 target_vehicles=num_vehicles,

@@ -310,3 +310,33 @@ class TripScheduleGenerator:
             return pl.concat(all_schedules)
         else:
             return pl.DataFrame()
+
+    @staticmethod
+    def max_daily_miles_from_trip_schedules(trip_schedules: pl.DataFrame) -> pl.DataFrame:
+        """
+        Per-vehicle peak daily miles over the simulated trip schedule.
+
+        Sums ``miles_driven`` within each (bldg_id, vehicle_id, date), then takes the
+        max across days. Vehicles absent from ``trip_schedules`` are omitted (callers
+        should left-join onto vehicle slots and fill nulls with 0).
+        """
+        required = {"bldg_id", "vehicle_id", "date", "miles_driven"}
+        missing = required - set(trip_schedules.columns)
+        if missing:
+            raise ValueError(f"trip_schedules missing columns: {sorted(missing)}")
+
+        if trip_schedules.is_empty():
+            return pl.DataFrame(
+                schema={
+                    "bldg_id": trip_schedules.schema.get("bldg_id", pl.Int64),
+                    "vehicle_id": pl.Int64,
+                    "max_daily_miles": pl.Float64,
+                }
+            )
+
+        return (
+            trip_schedules.group_by(["bldg_id", "vehicle_id", "date"])
+            .agg(pl.col("miles_driven").sum().alias("daily_miles"))
+            .group_by(["bldg_id", "vehicle_id"])
+            .agg(pl.col("daily_miles").max().alias("max_daily_miles"))
+        )

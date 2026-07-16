@@ -4,9 +4,9 @@ import os
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Final, Literal, cast, overload
+from typing import Final, cast
 
 import numpy as np
 import polars as pl
@@ -14,42 +14,17 @@ import polars as pl
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils import ev_utils
-from utils.ChargingSimulator import ChargingSimulator
-from utils.NHTSProfileSampler import (
-    NHTSDataError,
-    NHTSProfileSampler,
-    TripProfile,
-    VehicleProfile,
-    nhts_arrival_hour,
-    nhts_departure_hour,
-    summarize_nhts_match_catalog,
-)
+from utils.ChargingSimulator import DEFAULT_LEVEL2_CHARGER_KW, ChargingSimulator
 from utils.EVAdoptionSampler import EVAdoptionSampler
-from utils.EVBatteryAssigner import (
-    EVBatteryAssigner,
-    vehicle_slots_from_building_evs,
-)
-from utils.TripScheduleGenerator import (
-    MAX_ARRIVAL_HOUR,
-    MAX_DEPARTURE_HOUR,
-    MIN_TRIP_AWAY_HOURS,
-    TripScheduleGenerator,
-)
+from utils.EVBatteryAssigner import EVBatteryAssigner
+from utils.NHTSProfileSampler import NHTSProfileSampler, VehicleProfile
+from utils.TripScheduleGenerator import TripScheduleGenerator
 from utils.VehicleOwnershipModel import VehicleOwnershipModel
 from utils.charging import (
     ChargingStrategy,
     DEFAULT_PEAK_CLOCK_HOURS,
-    DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH,
     DEFAULT_SOC_MIN_FRACTION,
     DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
-    build_hours_base,
-    build_hourly_timestamps,
-    build_is_off_peak,
-    build_off_peak_charging_params,
-    compute_hourly_soc,
-    schedule_cost_minimizing_charging,
-    schedule_immediate_charging,
-    schedule_off_peak_charging,
 )
 
 BASEPATH: Final[Path] = Path(__file__).resolve().parent  # just one level up
@@ -57,38 +32,6 @@ BASEPATH: Final[Path] = Path(__file__).resolve().parent  # just one level up
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-
-class MetadataPathError(Exception):
-    """Raised when no metadata path is provided."""
-
-    pass
-
-
-class MetadataDataFrameError(Exception):
-    """Raised when no metadata DataFrame is available."""
-
-    pass
-
-
-class VehicleOwnershipModelError(Exception):
-    """Raised when vehicle ownership model is not fitted."""
-
-    pass
-
-
-class InsufficientVehiclesError(Exception):
-    """Raised when there are not enough matching vehicles in NHTS data."""
-
-    def __init__(self, bldg_id: int, vehicle_id: int, count: int):
-        self.message = f"Building {bldg_id}, vehicle {vehicle_id}: {count} matching vehicles"
-        super().__init__(self.message)
-
-
-class NoDateRangeError(Exception):
-    """Raised when no start_date or end_date is provided."""
-
-    pass
 
 
 class InvalidDateFormatError(ValueError):
@@ -127,23 +70,17 @@ class EVDemandConfig:
             self.output_dir = Path(f"{BASEPATH}/ev_data/outputs/{self.state}_{self.release}")
 
 
-HOURS_PER_YEAR = 8760  # standard hourly load-curve length (365 days x 24 hours)
-DEFAULT_BATTERY_CAPACITY_KWH = 90.0  # uniform fleet battery assumption for SOC modeling
-DEFAULT_KWH_PER_MILE = 0.30  # simple-model assumption
-DEFAULT_LEVEL2_CHARGER_KW = 7.2  # typical 32 A @ 240 V residential Level 2 charger
-
-
 class EVDemandCalculator:
     """
-    Facade over the EV demand pipeline components.
+    Orchestrator for the EV demand pipeline.
 
     Constructs ``VehicleOwnershipModel``, ``EVAdoptionSampler``, ``EVBatteryAssigner``,
-    ``NHTSProfileSampler``, ``TripScheduleGenerator``, and ``ChargingSimulator``, then
-    exposes the original ``EVDemandCalculator`` public API as thin delegations.
+    ``NHTSProfileSampler``, ``TripScheduleGenerator``, and ``ChargingSimulator``.
 
-    ``match_and_generate_trip_schedules()`` remains the end-to-end orchestrator:
-    predict EV adoption → assign ResStock battery attrs → sample NHTS profiles →
-    generate daily trip schedules.
+    Public API:
+    - ``match_and_generate_trip_schedules()`` — EV adoption → NHTS profiles →
+      daily trip schedules → ResStock battery attrs
+    - ``generate_soc_schedules()`` — hourly SOC / charge / discharge from trips
     """
 
     def __init__(
@@ -160,10 +97,9 @@ class EVDemandCalculator:
         match_on_vehicles: bool = False,
         random_state: int = 42,
         max_workers: int | None = None,
-        battery_assigner: EVBatteryAssigner | None = None,
     ):
         """
-        Initialize the EV demand calculator facade and its pipeline components.
+        Initialize the EV demand calculator and its pipeline components.
 
         Args:
             metadata_df: ResStock metadata DataFrame
@@ -173,18 +109,15 @@ class EVDemandCalculator:
             ev_autonomie_df: Autonomie capacity / efficiency params (from load_ev_autonomie_params)
             start_date: Start date for trip generation
             end_date: End date for trip generation
-            pums_df: PUMS data DataFrame; required only for ``predict_num_vehicles()``
+            pums_df: PUMS data DataFrame (optional; used with ``vehicle_ownership``)
             max_vehicles: Maximum number of vehicles per household when fitting the PUMS model
             match_on_vehicles: If True, include household vehicle count in NHTS profile matching.
                 Defaults to False for the max-1-EV model.
             random_state: Random seed for reproducible results
             max_workers: Maximum number of worker threads for parallel execution (None = use all cores)
-            battery_assigner: Optional pre-built assigner; otherwise constructed from
-                ``ev_battery_df`` + ``ev_autonomie_df``
         """
         np.random.seed(random_state)
 
-        # Shared inputs retained for orchestration and backward-compatible attribute access.
         self.metadata_df = metadata_df
         self.nhts_df = nhts_df
         self.pums_df = pums_df
@@ -208,15 +141,11 @@ class EVDemandCalculator:
             ev_ownership_df=ev_ownership_df,
             random_state=random_state,
         )
-        # Same pattern as EVAdoptionSampler(ev_ownership_df=...): build from loaded DataFrames.
-        if battery_assigner is not None:
-            self.battery_assigner = battery_assigner
-        else:
-            self.battery_assigner = EVBatteryAssigner(
-                option_probabilities=ev_battery_df,
-                autonomie_params=ev_autonomie_df,
-                random_state=random_state,
-            )
+        self.battery_assigner = EVBatteryAssigner(
+            option_probabilities=ev_battery_df,
+            autonomie_params=ev_autonomie_df,
+            random_state=random_state,
+        )
         self.nhts_sampler = NHTSProfileSampler(
             nhts_df=nhts_df,
             max_vehicles=max_vehicles,
@@ -234,147 +163,47 @@ class EVDemandCalculator:
             end_date=end_date,
         )
 
-    # --- Vehicle ownership (delegates to VehicleOwnershipModel) ---
-
-    @property
-    def veh_assign_features(self) -> list[str]:
-        return self.vehicle_ownership.feature_columns
-
-    @property
-    def vehicle_ownership_model(self) -> Any | None:
-        return self.vehicle_ownership.vehicle_ownership_model
-
-    @vehicle_ownership_model.setter
-    def vehicle_ownership_model(self, value: Any | None) -> None:
-        self.vehicle_ownership.vehicle_ownership_model = value
-
-    @property
-    def label_encoders(self) -> dict[str, Any]:
-        return self.vehicle_ownership.label_encoders
-
-    @property
-    def target_encoder(self) -> Any | None:
-        return self.vehicle_ownership.target_encoder
-
-    @property
-    def scaler(self) -> Any | None:
-        return self.vehicle_ownership.scaler
-
-    def fit_vehicle_ownership_model(self, pums_df: pl.DataFrame) -> Any:
-        return self.vehicle_ownership.fit(pums_df)
-
-    def predict_num_vehicles(self, metadata_df: pl.DataFrame | None = None) -> pl.DataFrame:
-        df = self.metadata_df if metadata_df is None else metadata_df
-        if df is None:
-            raise MetadataDataFrameError()
-
-        if self.vehicle_ownership.vehicle_ownership_model is None:
-            if self.pums_df is None:
-                raise ValueError(
-                    "pums_df is required to fit the vehicle ownership model. "
-                    "Pass pums_df to EVDemandCalculator or call fit_vehicle_ownership_model() first."
-                )
-            logging.info("Vehicle ownership model not fitted yet. Fitting model...")
-            self.vehicle_ownership.fit(self.pums_df)
-
-        return self.vehicle_ownership.predict(df)
-
-    # --- EV adoption (delegates to EVAdoptionSampler) ---
-
-    def sample_num_EVs(self, metadata_df: pl.DataFrame | None = None) -> pl.DataFrame:
-        df = self.metadata_df if metadata_df is None else metadata_df
-        if df is None:
-            raise MetadataDataFrameError()
-        return self.ev_adoption_sampler.sample(df)
-
-    # --- NHTS profile sampling (delegates to NHTSProfileSampler) ---
-
-    def find_best_matches(
-        self,
-        target_income: int,
-        target_occupants: int,
-        target_vehicles: int,
-        num_samples: int,
-        *,
-        weekday: bool = True,
-        match_on_vehicles: bool | None = None,
-    ) -> tuple[str, list[str]]:
-        return self.nhts_sampler.find_best_matches(
-            target_income=target_income,
-            target_occupants=target_occupants,
-            target_vehicles=target_vehicles,
-            num_samples=num_samples,
-            weekday=weekday,
-            match_on_vehicles=match_on_vehicles,
-        )
-
-    @overload
-    def sample_vehicle_profiles(
-        self,
-        bldg_veh_df: pl.DataFrame,
-        nhts_df: pl.DataFrame | None = None,
-        *,
-        return_catalog: Literal[False] = False,
-        match_on_vehicles: bool | None = None,
-    ) -> dict[tuple[str, int], VehicleProfile]: ...
-
-    @overload
-    def sample_vehicle_profiles(
-        self,
-        bldg_veh_df: pl.DataFrame,
-        nhts_df: pl.DataFrame | None = None,
-        *,
-        return_catalog: Literal[True],
-        match_on_vehicles: bool | None = None,
-    ) -> tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]: ...
-
-    def sample_vehicle_profiles(
-        self,
-        bldg_veh_df: pl.DataFrame,
-        nhts_df: pl.DataFrame | None = None,
-        *,
-        return_catalog: bool = False,
-        match_on_vehicles: bool | None = None,
-    ) -> dict[tuple[str, int], VehicleProfile] | tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]:
-        if bldg_veh_df is None:
-            raise MetadataDataFrameError()
-
-        if nhts_df is None:
-            nhts_df = self.nhts_df
-
-        return self.nhts_sampler.sample_vehicle_profiles(
-            bldg_veh_df,
-            nhts_df,
-            return_catalog=return_catalog,
-            match_on_vehicles=match_on_vehicles,
-        )
-
-    # --- Trip schedule generation (delegates to TripScheduleGenerator) ---
-
     @staticmethod
-    def _normalize_day_trip_times(
-        departures: np.ndarray,
-        arrival_hours: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        return TripScheduleGenerator._normalize_day_trip_times(departures, arrival_hours)
+    def _vehicle_slots_from_building_evs(bldg_veh_df: pl.DataFrame) -> pl.DataFrame:
+        """Expand buildings with ``vehicles`` > 0 into one row per ``(bldg_id, vehicle_id)``.
 
-    def generate_daily_trip_schedule(
-        self, profile: VehicleProfile, rng: np.random.RandomState | None = None
-    ) -> pl.DataFrame:
-        return self.trip_schedule_generator.generate_daily_trip_schedule(profile, rng=rng)
+        ``vehicle_id`` is 1-based within each building, matching NHTS / trip schedule slots.
+        In the current max-1-EV adoption model, ``vehicles`` is usually 0 or 1.
 
-    def generate_daily_trip_schedules(
-        self,
-        profile_params: dict[tuple[str, int], VehicleProfile],
-    ) -> pl.DataFrame:
-        return self.trip_schedule_generator.generate(profile_params)
+        Args:
+            bldg_veh_df (pl.DataFrame): The building vehicle DataFrame
+
+        Returns:
+            pl.DataFrame: The vehicle slots DataFrame expanded from the building vehicle DataFrame
+        """
+        if "bldg_id" not in bldg_veh_df.columns or "vehicles" not in bldg_veh_df.columns:
+            raise ValueError("bldg_veh_df must include bldg_id and vehicles columns")
+
+        occupied = bldg_veh_df.filter(pl.col("vehicles") > 0)
+        if occupied.is_empty():
+            return pl.DataFrame(
+                schema={
+                    "bldg_id": bldg_veh_df.schema.get("bldg_id", pl.Int64),
+                    "vehicle_id": pl.Int64,
+                }
+            )
+
+        return (
+            occupied.select("bldg_id", "vehicles")
+            .with_columns(
+                pl.int_ranges(1, pl.col("vehicles") + 1).alias("vehicle_id"),
+            )
+            .explode("vehicle_id")
+            .select("bldg_id", pl.col("vehicle_id").cast(pl.Int64))
+        )
 
     def match_and_generate_trip_schedules(self) -> pl.DataFrame:
         """
         Generate trip schedules for all buildings in the metadata.
 
-        Uses EV adoption sampling to assign EVs, ResStock battery attributes for each EV,
-        NHTS profiles for travel behavior, then generates trip schedules.
+        Uses EV adoption sampling to assign EVs, NHTS profiles for travel behavior,
+        generates trip schedules, then assigns ResStock battery attributes
+        conditioned on each vehicle's peak daily miles.
 
         Side effect:
             Sets ``self.ev_attributes`` to the per-vehicle ResStock battery assignment table.
@@ -382,170 +211,34 @@ class EVDemandCalculator:
         Returns:
             pl.DataFrame: DataFrame of trip schedules for all buildings
         """
-        # EV adoption (0/1 per household) drives which buildings get trip profiles.
-        # predict_num_vehicles() is kept separately for total-vehicle-count analysis.
         logging.info("Predicting EV ownership for metadata buildings")
-        bldg_ev_df = self.sample_num_EVs()
+        bldg_ev_df = self.ev_adoption_sampler.sample(self.metadata_df)
         # NHTS sampler still expects a ``vehicles`` column (count of EV slots to fill).
         bldg_veh_df = bldg_ev_df.with_columns(pl.col("evs").alias("vehicles"))
 
-        # ResStock national battery-class draw (independent of NHTS trips / miles).
-        logging.info("Assigning ResStock EV battery attributes")
-        vehicle_slots = vehicle_slots_from_building_evs(bldg_veh_df)
-        self.ev_attributes = self.battery_assigner.assign(vehicle_slots)
+        logging.info("Assigning vehicle profiles")
+        vehicle_profiles = cast(
+            dict[tuple[str, int], VehicleProfile],
+            self.nhts_sampler.sample(bldg_veh_df),
+        )
+
+        logging.info("Generating trip schedules")
+        trip_schedules = self.trip_schedule_generator.generate(vehicle_profiles)
+
+        logging.info("Assigning ResStock EV battery attributes (stock-conditional)")
+        vehicle_slots = self._vehicle_slots_from_building_evs(bldg_veh_df)
+        max_miles = TripScheduleGenerator.max_daily_miles_from_trip_schedules(trip_schedules)
+        vehicle_duty = (
+            vehicle_slots.join(max_miles, on=["bldg_id", "vehicle_id"], how="left")
+            .with_columns(pl.col("max_daily_miles").fill_null(0.0))
+        )
+        self.ev_attributes = self.battery_assigner.assign(vehicle_duty)
         logging.info(
             "Assigned battery attributes for %s EV vehicle slot(s)",
             self.ev_attributes.height,
         )
 
-        logging.info("Assigning vehicle profiles")
-        vehicle_profiles = cast(
-            dict[tuple[str, int], VehicleProfile],
-            self.sample_vehicle_profiles(bldg_veh_df),
-        )
-
-        # Generate trip schedules for each vehicle
-        logging.info("Generating trip schedules")
-        trip_schedules = self.generate_daily_trip_schedules(vehicle_profiles)
-
         return trip_schedules
-
-    # --- Charging / SOC (delegates to ChargingSimulator and charging.py) ---
-
-    def _build_hourly_timestamps(self) -> pl.DataFrame:
-        return build_hourly_timestamps(self.start_date, self.end_date)
-
-    def _build_hours_base(self) -> pl.DataFrame:
-        if self.start_date is None or self.end_date is None:
-            raise NoDateRangeError()
-        return build_hours_base(self.start_date, self.end_date)
-
-    def generate_presence_schedules(
-        self,
-        trip_schedules: pl.DataFrame,
-        *,
-        hours_base: pl.DataFrame | None = None,
-        vehicle_keys: Iterable[tuple[str | int, int]] | None = None,
-    ) -> dict[tuple[str | int, int], pl.DataFrame]:
-        return self.charging_simulator.generate_presence(
-            trip_schedules,
-            hours_base=hours_base,
-            vehicle_keys=vehicle_keys,
-        )
-
-    @staticmethod
-    def _build_hourly_discharge_kwh(
-        trip_schedules: pl.DataFrame,
-        hours_base: pl.DataFrame,
-        *,
-        kwh_per_mile: float,
-        ev_adoption_rate: float,
-    ) -> pl.DataFrame:
-        return ChargingSimulator._build_hourly_discharge_kwh(
-            trip_schedules,
-            hours_base,
-            kwh_per_mile=kwh_per_mile,
-            ev_adoption_rate=ev_adoption_rate,
-        )
-
-    @staticmethod
-    def _schedule_immediate_charging(
-        at_home: np.ndarray,
-        discharge_kwh: np.ndarray,
-        *,
-        battery_capacity_kwh: float,
-        charger_power_kw: float,
-        initial_soc_kwh: float,
-    ) -> np.ndarray:
-        return schedule_immediate_charging(
-            at_home,
-            discharge_kwh,
-            battery_capacity_kwh=battery_capacity_kwh,
-            charger_power_kw=charger_power_kw,
-            initial_soc_kwh=initial_soc_kwh,
-        )
-
-    @staticmethod
-    def _schedule_cost_minimizing_charging(
-        at_home: np.ndarray,
-        discharge_kwh: np.ndarray,
-        *,
-        battery_capacity_kwh: float,
-        charger_power_kw: float,
-        initial_soc_kwh: float,
-        hourly_price_usd_per_kwh: np.ndarray,
-        shed_load_penalty_usd_per_kwh: float | np.ndarray | None = None,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        return schedule_cost_minimizing_charging(
-            at_home,
-            discharge_kwh,
-            battery_capacity_kwh=battery_capacity_kwh,
-            charger_power_kw=charger_power_kw,
-            initial_soc_kwh=initial_soc_kwh,
-            hourly_price_usd_per_kwh=hourly_price_usd_per_kwh,
-            shed_load_penalty_usd_per_kwh=shed_load_penalty_usd_per_kwh,
-        )
-
-    @staticmethod
-    def _build_is_off_peak(
-        hours_base: pl.DataFrame,
-        *,
-        peak_clock_hours: Iterable[int] = DEFAULT_PEAK_CLOCK_HOURS,
-    ) -> np.ndarray:
-        return build_is_off_peak(hours_base, peak_clock_hours=peak_clock_hours)
-
-    @staticmethod
-    def _build_off_peak_charging_params(
-        at_home: np.ndarray,
-        discharge_kwh: np.ndarray,
-        hours_base: pl.DataFrame,
-        vehicle_trips: pl.DataFrame,
-        *,
-        battery_capacity_kwh: float,
-        is_off_peak: np.ndarray,
-        soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
-        soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        return build_off_peak_charging_params(
-            at_home,
-            discharge_kwh,
-            hours_base,
-            vehicle_trips,
-            battery_capacity_kwh=battery_capacity_kwh,
-            is_off_peak=is_off_peak,
-            soc_min_fraction=soc_min_fraction,
-            soc_safety_buffer_fraction=soc_safety_buffer_fraction,
-        )
-
-    @staticmethod
-    def _schedule_off_peak_charging(
-        at_home: np.ndarray,
-        discharge_kwh: np.ndarray,
-        *,
-        charge_allowed: np.ndarray,
-        soc_target_kwh: np.ndarray,
-        battery_capacity_kwh: float,
-        charger_power_kw: float,
-        initial_soc_kwh: float,
-    ) -> np.ndarray:
-        return schedule_off_peak_charging(
-            at_home,
-            discharge_kwh,
-            charge_allowed=charge_allowed,
-            soc_target_kwh=soc_target_kwh,
-            battery_capacity_kwh=battery_capacity_kwh,
-            charger_power_kw=charger_power_kw,
-            initial_soc_kwh=initial_soc_kwh,
-        )
-
-    @staticmethod
-    def _compute_hourly_soc(
-        discharge_kwh: np.ndarray,
-        charge_kwh: np.ndarray,
-        *,
-        initial_soc_kwh: float,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        return compute_hourly_soc(discharge_kwh, charge_kwh, initial_soc_kwh=initial_soc_kwh)
 
     def generate_soc_schedules(
         self,
@@ -554,11 +247,8 @@ class EVDemandCalculator:
         vehicle_keys: Iterable[tuple[str | int, int]] | None = None,
         hours_base: pl.DataFrame | None = None,
         presence_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] | None = None,
-        battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH,
-        kwh_per_mile: float = DEFAULT_KWH_PER_MILE,
         ev_attributes: pl.DataFrame | None = None,
         charger_power_kw: float = DEFAULT_LEVEL2_CHARGER_KW,
-        ev_adoption_rate: float = 1.0,
         initial_soc_kwh: float | None = None,
         charging_strategy: ChargingStrategy = "immediate",
         hourly_price_usd_per_kwh: np.ndarray | None = None,
@@ -567,18 +257,24 @@ class EVDemandCalculator:
         soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
         soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
     ) -> pl.DataFrame:
-        # Prefer explicitly passed attrs; otherwise use whatever match_and_generate stored.
+        """Generate hourly SOC / charge / discharge schedules from trip schedules.
+
+        Prefers explicitly passed ``ev_attributes``; otherwise uses attributes stored by
+        ``match_and_generate_trip_schedules()``.
+        """
         attrs = self.ev_attributes if ev_attributes is None else ev_attributes
+        if attrs is None or attrs.is_empty():
+            raise ValueError(
+                "ev_attributes is required for SOC schedules. "
+                "Call match_and_generate_trip_schedules() first or pass ev_attributes=..."
+            )
         return self.charging_simulator.generate_soc(
             trip_schedules,
             vehicle_keys=vehicle_keys,
             hours_base=hours_base,
             presence_by_vehicle=presence_by_vehicle,
-            battery_capacity_kwh=battery_capacity_kwh,
-            kwh_per_mile=kwh_per_mile,
-            ev_attributes=attrs,  # per-vehicle capacity + efficiency when available
+            ev_attributes=attrs,
             charger_power_kw=charger_power_kw,
-            ev_adoption_rate=ev_adoption_rate,
             initial_soc_kwh=initial_soc_kwh,
             charging_strategy=charging_strategy,
             hourly_price_usd_per_kwh=hourly_price_usd_per_kwh,
@@ -587,12 +283,6 @@ class EVDemandCalculator:
             soc_min_fraction=soc_min_fraction,
             soc_safety_buffer_fraction=soc_safety_buffer_fraction,
         )
-
-    @staticmethod
-    def vehicle_hourly_schedules_to_dataframe(
-        schedules_by_vehicle: dict[tuple[str | int, int], pl.DataFrame],
-    ) -> pl.DataFrame:
-        return ChargingSimulator.to_dataframe(schedules_by_vehicle)
 
 
 def parse_arguments():
@@ -842,7 +532,5 @@ def main():
     return 0
 
 
-# # Example usage
-# Example usage
 if __name__ == "__main__":
     exit(main())
