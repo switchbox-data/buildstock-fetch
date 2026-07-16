@@ -1,7 +1,7 @@
 import pytest
 
-from utils.ev_demand import EVDemandConfig
-from utils.ev_utils import (
+from utils.EVs.ev_demand import EVDemandConfig
+from utils.EVs.ev_utils import (
     assign_income_midpoints,
     assign_nhts_income_bucket,
     get_census_division_for_state,

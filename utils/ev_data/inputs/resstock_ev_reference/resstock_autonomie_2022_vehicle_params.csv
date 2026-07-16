@@ -1,9 +1,0 @@
-option_name,vehicle_battery_usable_capacity_kwh,vehicle_fuel_economy_combined_kwh_per_mile,ev_average_mph,hours_driven_per_week_at_11000_mi,notes
-"Compact, Battery Electric Vehicle, 200 mile range",40.168,0.209901,22,9.6,"Autonomie 2022 via TEMPO; ev_average_mph=22 from 2017 NHTS summary (ResStock TRG §8.9.2). hours_driven_per_week example uses 11,000 mi/yr."
-"Compact, Battery Electric Vehicle, 300 mile range",63.433,0.22002,22,9.6,"Autonomie 2022 via TEMPO; ev_average_mph=22 from 2017 NHTS summary (ResStock TRG §8.9.2). hours_driven_per_week example uses 11,000 mi/yr."
-"Midsize, Battery Electric Vehicle, 200 mile range",41.978,0.219174,22,9.6,"Autonomie 2022 via TEMPO; ev_average_mph=22 from 2017 NHTS summary (ResStock TRG §8.9.2). hours_driven_per_week example uses 11,000 mi/yr."
-"Midsize, Battery Electric Vehicle, 300 mile range",65.441,0.229449,22,9.6,"Autonomie 2022 via TEMPO; ev_average_mph=22 from 2017 NHTS summary (ResStock TRG §8.9.2). hours_driven_per_week example uses 11,000 mi/yr."
-"Pickup, Battery Electric Vehicle, 200 mile range",67.738,0.357648,22,9.6,"Autonomie 2022 via TEMPO; ev_average_mph=22 from 2017 NHTS summary (ResStock TRG §8.9.2). hours_driven_per_week example uses 11,000 mi/yr."
-"Pickup, Battery Electric Vehicle, 300 mile range",105.946,0.373794,22,9.6,"Autonomie 2022 via TEMPO; ev_average_mph=22 from 2017 NHTS summary (ResStock TRG §8.9.2). hours_driven_per_week example uses 11,000 mi/yr."
-"SUV, Battery Electric Vehicle, 200 mile range",53.503,0.267513,22,9.6,"Autonomie 2022 via TEMPO; ev_average_mph=22 from 2017 NHTS summary (ResStock TRG §8.9.2). hours_driven_per_week example uses 11,000 mi/yr."
-"SUV, Battery Electric Vehicle, 300 mile range",83.68,0.278934,22,9.6,"Autonomie 2022 via TEMPO; ev_average_mph=22 from 2017 NHTS summary (ResStock TRG §8.9.2). hours_driven_per_week example uses 11,000 mi/yr."

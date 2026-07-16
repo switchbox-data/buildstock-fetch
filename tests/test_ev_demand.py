@@ -6,15 +6,16 @@ import numpy as np
 import polars as pl
 import pytest
 
-from utils.NHTSProfileSampler import (
+from utils.EVs.NHTSProfileSampler import (
     TripProfile,
     VehicleProfile,
     nhts_arrival_hour,
     nhts_departure_hour,
     summarize_nhts_match_catalog,
+    NHTSProfileSampler,
 )
-from utils.TripScheduleGenerator import TripScheduleGenerator
-from utils.charging import (
+from utils.EVs.TripScheduleGenerator import TripScheduleGenerator
+from utils.EVs.charging import (
     build_hours_base,
     build_is_off_peak,
     build_off_peak_charging_params,
@@ -22,8 +23,9 @@ from utils.charging import (
     schedule_cost_minimizing_charging,
     schedule_immediate_charging,
     schedule_off_peak_charging,
+    schedule_off_peak_immediate_charging,
 )
-from utils.ev_demand import EVDemandCalculator
+from utils.EVs.ev_demand import EVDemandCalculator
 
 HOURS_PER_YEAR = 8760
 
@@ -432,7 +434,11 @@ def test_normalize_day_trip_times_enforces_order_and_non_overlap():
     departures = np.array([12, 8])
     arrival_hours = np.array([11, 17])  # first trip inverted; second overlaps first chronologically
 
-    dep, arrival, keep = TripScheduleGenerator._normalize_day_trip_times(departures, arrival_hours)
+    gen = TripScheduleGenerator(
+        start_date=datetime(2022, 1, 1),
+        end_date=datetime(2022, 1, 1),
+    )
+    dep, arrival, keep = gen._normalize_day_trip_times(departures, arrival_hours)
 
     assert keep.tolist() == [True, True]
     assert dep.tolist() == [17, 8]
@@ -490,15 +496,12 @@ def test_generate_presence_schedules_marks_trip_hours_away(calculator):
     )[("b1", 1)]
 
     assert presence.height == num_hours_for_range(calculator.start_date, calculator.end_date)
-    assert presence.filter(pl.col("can_charge") != pl.col("at_home")).is_empty()
     assert presence.filter(pl.col("at_home") & pl.col("away_from_home")).is_empty()
-    assert presence.filter(pl.col("at_home") & pl.col("can_charge").is_null()).is_empty()
     assert presence.filter(pl.col("at_home") & pl.col("away_from_home").is_null()).is_empty()
 
     weekday_away = presence.filter(pl.col("away_from_home"))
     assert weekday_away.height > 0
     assert weekday_away["at_home"].not_().all()
-    assert not weekday_away["can_charge"].any()
 
 
 def test_generate_presence_schedules_all_home_without_trips(calculator):
@@ -516,8 +519,8 @@ def test_generate_presence_schedules_all_home_without_trips(calculator):
 
     assert presence.height == num_hours_for_range(calculator.start_date, calculator.end_date)
     assert presence["at_home"].all()
-    assert presence["can_charge"].all()
     assert not presence["away_from_home"].any()
+    assert "can_charge" not in presence.columns
 
 
 def test_generate_soc_schedules_energy_balance(calculator):
@@ -926,6 +929,86 @@ def test_off_peak_charging_no_emergency_override_after_low_soc_return():
     assert soc_kwh[17] < soc_target_kwh[17]
 
 
+def test_off_peak_immediate_never_charges_during_peak_by_default():
+    """Pure TOU Immediate: max power off-peak only; no on-peak even with low SOC."""
+    hours_base = build_hours_base(datetime(2022, 1, 1), datetime(2022, 1, 1))
+    is_off_peak = build_is_off_peak(hours_base, peak_clock_hours=(17, 18, 19, 20, 21))
+    # Home overnight; away 8–17; return into peak at 17 with nearly empty pack.
+    at_home = np.array([hour < 8 or hour >= 17 for hour in range(24)])
+    discharge = np.zeros(24, dtype=np.float64)
+    discharge[8:17] = 80.0 / 9.0  # large day trip
+
+    charge_kwh = schedule_off_peak_immediate_charging(
+        at_home,
+        discharge,
+        is_off_peak=is_off_peak,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=90.0,
+        allow_emergency_peak_charging=False,
+    )
+
+    for peak_hour in range(17, 22):
+        assert charge_kwh[peak_hour] == pytest.approx(0.0)
+    # Rebound: charges at max power once off-peak resumes (hour 22).
+    assert charge_kwh[22] == pytest.approx(7.2)
+    assert charge_kwh[23] == pytest.approx(7.2)
+
+
+def test_off_peak_immediate_fills_to_full_not_soc_req():
+    """Unlike off_peak, off_peak_immediate keeps charging toward full capacity."""
+    hours_base = build_hours_base(datetime(2022, 1, 1), datetime(2022, 1, 1))
+    is_off_peak = build_is_off_peak(hours_base, peak_clock_hours=(17, 18, 19, 20, 21))
+    at_home = np.ones(24, dtype=bool)
+    discharge = np.zeros(24, dtype=np.float64)
+
+    charge_kwh = schedule_off_peak_immediate_charging(
+        at_home,
+        discharge,
+        is_off_peak=is_off_peak,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=50.0,
+        allow_emergency_peak_charging=False,
+    )
+    # Off-peak hours before peak: 0..16 → enough to fill 40 kWh headroom.
+    assert charge_kwh[0:17].sum() == pytest.approx(40.0)
+    assert charge_kwh[17:22].sum() == pytest.approx(0.0)
+
+
+def test_off_peak_immediate_emergency_allows_peak_when_shortfall():
+    """With emergency on, charge on-peak if remaining off-peak supply cannot cover next trip."""
+    hours_base = build_hours_base(datetime(2022, 1, 1), datetime(2022, 1, 1))
+    # Peak 12–21; only home after 17 (return into peak). Next trip at 22 needs 20 kWh;
+    # no off-peak home hours remain before that departure.
+    is_off_peak = build_is_off_peak(hours_base, peak_clock_hours=tuple(range(12, 22)))
+    at_home = np.array([hour >= 17 for hour in range(24)])
+    discharge = np.zeros(24, dtype=np.float64)
+    discharge[22:24] = 10.0
+
+    no_emergency = schedule_off_peak_immediate_charging(
+        at_home,
+        discharge,
+        is_off_peak=is_off_peak,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=5.0,
+        allow_emergency_peak_charging=False,
+    )
+    with_emergency = schedule_off_peak_immediate_charging(
+        at_home,
+        discharge,
+        is_off_peak=is_off_peak,
+        battery_capacity_kwh=90.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=5.0,
+        allow_emergency_peak_charging=True,
+    )
+
+    assert no_emergency[17:22].sum() == pytest.approx(0.0)
+    assert with_emergency[17:22].sum() > 0.0
+
+
 def test_generate_soc_schedules_off_peak(calculator):
     profile = make_vehicle_profile(
         weekday=make_trip_profile([8], [17], [20.0]),
@@ -1018,9 +1101,9 @@ def test_max_daily_miles_from_trip_schedules():
     ]
 
 
-@patch("utils.TripScheduleGenerator.TripScheduleGenerator.generate")
-@patch("utils.NHTSProfileSampler.NHTSProfileSampler.sample")
-@patch("utils.EVAdoptionSampler.EVAdoptionSampler.sample")
+@patch("utils.EVs.ev_demand.TripScheduleGenerator.generate")
+@patch("utils.EVs.ev_demand.NHTSProfileSampler.sample")
+@patch("utils.EVs.ev_demand.EVAdoptionSampler.sample")
 def test_match_and_generate_trip_schedules(sample_evs, sample_profiles, generate_schedule, calculator):
     # Setup expected data
     metadata = calculator.metadata_df
@@ -1047,7 +1130,7 @@ def test_match_and_generate_trip_schedules(sample_evs, sample_profiles, generate
     generate_schedule.return_value = pl.DataFrame(schedule_data)
 
     # Run the function
-    result = calculator.match_and_generate_trip_schedules()
+    result, ev_attributes = calculator.match_and_generate_trip_schedules()
 
     # Verify exact expected output
     assert isinstance(result, pl.DataFrame)
@@ -1063,9 +1146,8 @@ def test_match_and_generate_trip_schedules(sample_evs, sample_profiles, generate
 
     # Battery attributes assigned for the EV slots present after sample
     # (mock sets evs=1 on all 3 metadata buildings → 3 attribute rows).
-    assert calculator.ev_attributes is not None
-    assert calculator.ev_attributes.height == 3
-    assert {"battery_capacity_kwh", "kwh_per_mile", "ev_option_name"} <= set(calculator.ev_attributes.columns)
+    assert ev_attributes.height == 3
+    assert {"battery_capacity_kwh", "kwh_per_mile", "ev_option_name"} <= set(ev_attributes.columns)
 
     # Verify mock calls
     sample_evs.assert_called_once()
@@ -1113,3 +1195,325 @@ def test_generate_soc_schedules_respects_per_vehicle_battery_attrs(calculator):
     assert b1["discharge_kwh"].sum() == pytest.approx(10.0 * 0.209901)
     assert b2["discharge_kwh"].sum() == pytest.approx(10.0 * 0.373794)
     assert b1["discharge_kwh"].sum() < b2["discharge_kwh"].sum()
+
+
+def test_nhts_daily_miles_percentile_filter_noop_by_default(mock_nhts_data):
+    """0–100 percentile band leaves the NHTS pool unchanged."""
+    filtered = NHTSProfileSampler.filter_by_daily_miles_percentile(
+        mock_nhts_data, low=0.0, high=100.0
+    )
+    assert filtered.height == mock_nhts_data.height
+
+
+def test_nhts_daily_miles_percentile_filter_drops_extremes():
+    """Middle percentile band drops low- and high-mile vehicles."""
+    # Four vehicles with distinct max daily miles: 10, 20, 30, 1000.
+    nhts = pl.DataFrame({
+        "hh_vehicle_id": ["v_lo", "v_mid1", "v_mid2", "v_hi", "v_hi"],
+        "weekday": [2, 2, 2, 2, 1],
+        "miles_driven": [10.0, 20.0, 30.0, 500.0, 500.0],
+        "income_bucket": [1, 1, 1, 1, 1],
+        "occupants": [2, 2, 2, 2, 2],
+        "vehicles": [1, 1, 1, 1, 1],
+        "start_time": [800, 800, 800, 800, 800],
+        "end_time": [1700, 1700, 1700, 1700, 1700],
+        "trip_weight": [1.0, 1.0, 1.0, 1.0, 1.0],
+    })
+    sampler = NHTSProfileSampler(
+        nhts_df=nhts,
+        nhts_daily_miles_percentile_low=25.0,
+        nhts_daily_miles_percentile_high=75.0,
+    )
+    kept = set(sampler.nhts_df["hh_vehicle_id"].unique().to_list())
+    assert "v_lo" not in kept
+    assert "v_hi" not in kept
+    assert kept <= {"v_mid1", "v_mid2"}
+
+
+def test_load_ev_demand_config_from_yaml(tmp_path):
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "scenario.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01
+end_date: 2024-01-31
+sampling:
+  nhts_daily_miles_percentile_low: 10
+  nhts_daily_miles_percentile_high: 90
+  random_state: 7
+trips:
+  min_trip_away_hours: 1
+  miles_noise_std_fraction: 0.1
+battery:
+  capacity_buffer_fraction: 0.2
+pipeline:
+  batch_size: 1000
+charging:
+  charging_strategy: immediate
+  charger_power_kw: 7.2
+"""
+    )
+    config = load_ev_demand_config(path)
+    assert config.state == "MD"
+    assert config.release == "res_2024_tmy3_2"
+    assert config.start_date == datetime(2024, 1, 1)
+    assert config.end_date == datetime(2024, 1, 31)
+    assert config.ev_assignment == "resstock_adoption"
+    assert config.match_on_vehicles is False
+    assert config.max_vehicles is None
+    assert config.nhts_daily_miles_percentile_low == 10
+    assert config.nhts_daily_miles_percentile_high == 90
+    assert config.random_state == 7
+    assert config.batch_size == 1000
+    assert config.charger_power_kw == 7.2
+    assert config.min_trip_away_hours == 1
+    assert config.miles_noise_std_fraction == 0.1
+    assert config.capacity_buffer_fraction == 0.2
+    assert config.soc_min_fraction is None
+    assert config.peak_clock_hours is None
+    assert config.flat_price_usd_per_kwh is None
+    assert config.num_simulation_hours() == 31 * 24
+    assert "ev_data/inputs" in config.nhts_path.replace("\\", "/")
+
+
+def test_resolve_hourly_prices_flat_and_daily():
+    from utils.EVs.ev_demand import EVDemandConfig, resolve_hourly_prices
+
+    flat_cfg = EVDemandConfig(
+        state="MD",
+        release="res_2024_tmy3_2",
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 1, 2),
+        charging_strategy="cost_minimizing",
+        flat_price_usd_per_kwh=0.12,
+        shed_load_penalty_usd_per_kwh=1000.0,
+    )
+    flat = resolve_hourly_prices(flat_cfg)
+    assert flat is not None
+    assert len(flat) == 48
+    assert np.allclose(flat, 0.12)
+
+    daily = tuple([0.10] * 12 + [0.20] * 12)
+    daily_cfg = EVDemandConfig(
+        state="MD",
+        release="res_2024_tmy3_2",
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 1, 2),
+        charging_strategy="cost_minimizing",
+        daily_price_usd_per_kwh=daily,
+        shed_load_penalty_usd_per_kwh=1000.0,
+    )
+    tiled = resolve_hourly_prices(daily_cfg)
+    assert tiled is not None
+    assert len(tiled) == 48
+    assert tiled[0] == 0.10
+    assert tiled[12] == 0.20
+    assert tiled[24] == 0.10
+
+
+def test_cost_minimizing_requires_prices_and_shed_penalty():
+    from utils.EVs.ev_demand import EVDemandConfig
+
+    with pytest.raises(ValueError, match="cost_minimizing requires one of"):
+        EVDemandConfig(
+            state="MD",
+            release="res_2024_tmy3_2",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 2),
+            charging_strategy="cost_minimizing",
+            shed_load_penalty_usd_per_kwh=1000.0,
+        )
+
+    with pytest.raises(ValueError, match="shed_load_penalty_usd_per_kwh"):
+        EVDemandConfig(
+            state="MD",
+            release="res_2024_tmy3_2",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 2),
+            charging_strategy="cost_minimizing",
+            flat_price_usd_per_kwh=0.12,
+        )
+
+
+def test_off_peak_requires_peak_window_and_soc_targets():
+    from utils.EVs.ev_demand import EVDemandConfig
+
+    with pytest.raises(ValueError, match="off_peak requires"):
+        EVDemandConfig(
+            state="MD",
+            release="res_2024_tmy3_2",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 2),
+            charging_strategy="off_peak",
+        )
+
+    cfg = EVDemandConfig(
+        state="MD",
+        release="res_2024_tmy3_2",
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 1, 2),
+        charging_strategy="off_peak",
+        peak_clock_hours=(17, 18, 19, 20, 21),
+        soc_min_fraction=0.2,
+        soc_safety_buffer_fraction=0.2,
+    )
+    assert cfg.peak_clock_hours == (17, 18, 19, 20, 21)
+
+
+def test_load_md_2024_config_off_peak():
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    config = load_ev_demand_config("utils/EVs/configs/md_2024.yaml")
+    assert config.charging_strategy == "off_peak"
+    assert config.peak_clock_hours == (17, 18, 19, 20, 21)
+    assert config.soc_min_fraction == 0.2
+    assert config.soc_safety_buffer_fraction == 0.2
+    assert config.shed_load_penalty_usd_per_kwh is None
+    assert config.flat_price_usd_per_kwh is None
+    assert config.allow_emergency_peak_charging is False
+
+
+def test_off_peak_immediate_config_requires_peak_only():
+    from utils.EVs.ev_demand import EVDemandConfig
+
+    with pytest.raises(ValueError, match="peak_clock_hours"):
+        EVDemandConfig(
+            state="MD",
+            release="res_2024_tmy3_2",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 2),
+            charging_strategy="off_peak_immediate",
+        )
+
+    cfg = EVDemandConfig(
+        state="MD",
+        release="res_2024_tmy3_2",
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 1, 2),
+        charging_strategy="off_peak_immediate",
+        peak_clock_hours=(17, 18, 19, 20, 21),
+        allow_emergency_peak_charging=True,
+    )
+    assert cfg.soc_min_fraction is None
+    assert cfg.allow_emergency_peak_charging is True
+
+
+def test_load_ev_demand_config_pums_vehicles_requires_max_vehicles(tmp_path):
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "pums_missing_max.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01
+end_date: 2024-01-31
+sampling:
+  ev_assignment: pums_vehicles
+"""
+    )
+    with pytest.raises(ValueError, match="max_vehicles is required"):
+        load_ev_demand_config(path)
+
+
+def test_load_ev_demand_config_pums_vehicles_ok(tmp_path):
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "pums_ok.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01
+end_date: 2024-01-31
+sampling:
+  ev_assignment: pums_vehicles
+  max_vehicles: 2
+"""
+    )
+    config = load_ev_demand_config(path)
+    assert config.ev_assignment == "pums_vehicles"
+    assert config.max_vehicles == 2
+    assert config.match_on_vehicles is True
+
+
+def test_load_ev_demand_config_rejects_match_on_vehicles(tmp_path):
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "legacy.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01
+end_date: 2024-01-31
+sampling:
+  match_on_vehicles: false
+"""
+    )
+    with pytest.raises(ValueError, match="match_on_vehicles"):
+        load_ev_demand_config(path)
+
+
+def test_assign_ev_slots_resstock_adoption(calculator):
+    """Default mode samples 0/1 EVs and aliases to vehicles."""
+    # Expand metadata with columns required by EVAdoptionSampler.
+    meta = calculator.metadata_df.with_columns(
+        pl.lit("0-100%").alias("fpl"),
+        pl.lit("Single-Family Detached").alias("building_type"),
+        pl.lit("Owner").alias("tenure"),
+        pl.lit("G24008500").alias("puma_dependency"),
+        pl.lit(False).alias("is_vacant"),
+    )
+    # Use a lookup that covers the synthetic keys.
+    ownership = pl.DataFrame({
+        "fpl": ["0-100%"],
+        "building_type": ["Single-Family Detached"],
+        "tenure": ["Owner"],
+        "puma_dependency": ["G24008500"],
+        "ev_ownership_probability": [1.0],
+    })
+    calc = EVDemandCalculator(
+        metadata_df=meta,
+        nhts_df=calculator.nhts_df,
+        ev_ownership_df=ownership,
+        ev_battery_df=calculator.ev_battery_df,
+        ev_autonomie_df=calculator.ev_autonomie_df,
+        start_date=calculator.start_date,
+        end_date=calculator.end_date,
+        ev_assignment="resstock_adoption",
+        random_state=42,
+    )
+    assert calc.match_on_vehicles is False
+    assert calc.nhts_sampler.match_on_vehicles is False
+    assigned = calc._assign_ev_slots()
+    assert "vehicles" in assigned.columns
+    assert set(assigned["vehicles"].unique().to_list()) <= {0, 1}
+    assert assigned["vehicles"].sum() == len(meta)  # P(EV)=1 for all
+
+
+def test_assign_ev_slots_pums_vehicles(calculator, mock_metadata):
+    """PUMS mode predicts vehicle counts and enables NHTS vehicle matching."""
+    meta = mock_metadata.with_columns(pl.col("income_bucket").alias("income"))
+    pums = meta.with_columns(pl.lit(1.0).alias("hh_weight"))
+    calc = EVDemandCalculator(
+        metadata_df=meta,
+        nhts_df=calculator.nhts_df,
+        ev_ownership_df=calculator.ev_ownership_df,
+        ev_battery_df=calculator.ev_battery_df,
+        ev_autonomie_df=calculator.ev_autonomie_df,
+        start_date=calculator.start_date,
+        end_date=calculator.end_date,
+        pums_df=pums,
+        ev_assignment="pums_vehicles",
+        max_vehicles=2,
+        random_state=42,
+    )
+    assert calc.match_on_vehicles is True
+    assert calc.nhts_sampler.match_on_vehicles is True
+    assigned = calc._assign_ev_slots()
+    assert "vehicles" in assigned.columns
+    assert assigned["vehicles"].max() <= 2

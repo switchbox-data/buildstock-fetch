@@ -3,7 +3,7 @@ import polars as pl
 import pytest
 from pytest import approx
 
-from utils.VehicleOwnershipModel import VehicleOwnershipModel
+from utils.EVs.VehicleOwnershipModel import VehicleOwnershipModel
 
 
 @pytest.fixture

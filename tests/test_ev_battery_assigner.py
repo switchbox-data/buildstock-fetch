@@ -4,8 +4,8 @@ import polars as pl
 import pytest
 
 from tests.conftest import RESSTOCK_EV_REFERENCE_DIR
-from utils.EVBatteryAssigner import EVBatteryAssigner
-from utils.ev_utils import load_ev_autonomie_params, load_ev_battery_lookup, parse_ev_option_name
+from utils.EVs.EVBatteryAssigner import EVBatteryAssigner
+from utils.EVs.ev_utils import load_ev_autonomie_params, load_ev_battery_lookup, parse_ev_option_name
 
 
 REF_DIR = RESSTOCK_EV_REFERENCE_DIR

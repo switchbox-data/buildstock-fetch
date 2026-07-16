@@ -9,8 +9,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from utils.EVAdoptionSampler import EVAdoptionSampler
-from utils.ev_utils import (
+from utils.EVs.EVAdoptionSampler import EVAdoptionSampler
+from utils.EVs.ev_utils import (
     load_ev_ownership_lookup,
     resstock_puma_dependency,
     state_ev_ownership_rate,

@@ -7,11 +7,16 @@ import polars as pl
 import pytest
 
 from buildstock_fetch.main import fetch_bldg_data, fetch_bldg_ids
-from utils.ev_utils import load_ev_autonomie_params, load_ev_battery_lookup, load_ev_ownership_lookup
+from utils.EVs.ev_utils import load_ev_autonomie_params, load_ev_battery_lookup, load_ev_ownership_lookup
 
 EV_OWNERSHIP_FIXTURE_PATH = Path(__file__).parent / "fixtures/ev_ownership_lookup_sample.tsv"
 RESSTOCK_EV_REFERENCE_DIR = (
-    Path(__file__).resolve().parent.parent / "utils" / "ev_data" / "inputs" / "resstock_ev_reference"
+    Path(__file__).resolve().parent.parent
+    / "utils"
+    / "EVs"
+    / "ev_data"
+    / "inputs"
+    / "resstock_ev_reference"
 )
 
 
