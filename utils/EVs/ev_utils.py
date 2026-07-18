@@ -16,6 +16,7 @@ import numpy as np
 import polars as pl
 
 __all__ = [
+    "assign_urban_from_metro",
     "get_census_division_for_state",
     "load_all_input_data",
     "load_ev_autonomie_params",
@@ -29,6 +30,13 @@ __all__ = [
     "resstock_puma_dependency",
     "state_ev_ownership_rate",
 ]
+
+# ResStock ``in.puma_metro_status`` → NHTS-like urban (1) / rural (2), matching URBRUR.
+_METRO_TO_URBAN: dict[str, int] = {
+    "In metro area, principal city": 1,
+    "In metro area, not/partially in principal city": 1,
+    "Not/partially in metro area": 2,
+}
 
 # Housing-characteristic TSV headers look like: Option=Compact, Battery Electric Vehicle, 200 mile range
 _OPTION_HEADER_RE = re.compile(r"^Option=(.+)$")
@@ -145,6 +153,30 @@ def assign_income_midpoints(income_str: str | None) -> int | None:
 
     # If it's not a range (<10,000, 200,000+), return the value as-is
     return int(income_str)
+
+
+def assign_urban_from_metro(metro: str) -> int:
+    """Map ResStock ``in.puma_metro_status`` to NHTS-like urban (1) / rural (2).
+
+    Principal-city and non-principal metro both map to urban; non-metro maps to rural.
+    Aligns with NHTS ``URBRUR`` (1=Urban, 2=Rural).
+
+    Args:
+        metro: ResStock PUMA metro status string
+
+    Returns:
+        1 for urban, 2 for rural
+
+    Raises:
+        ValueError: If ``metro`` is not a known ResStock metro status
+    """
+    try:
+        return _METRO_TO_URBAN[metro]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown ResStock metro status {metro!r}; "
+            f"expected one of {sorted(_METRO_TO_URBAN)}"
+        ) from exc
 
 
 def assign_nhts_income_bucket(income: int) -> int:
@@ -285,7 +317,8 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
         metadata_path: Path to the metadata parquet file
 
     Returns:
-        DataFrame with columns including 'bldg_id', 'occupants', 'income', 'metro', 'puma'.
+        DataFrame with columns including 'bldg_id', 'occupants', 'income', 'metro',
+        'urban', 'puma'.
 
     Raises:
         FileNotFoundError: If the metadata file doesn't exist
@@ -338,6 +371,10 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
         .with_columns([
             pl.col("income").map_elements(assign_nhts_income_bucket, return_dtype=pl.Int64).alias("income_bucket")
         ])
+        # Binary urban/rural for NHTS profile matching (aligned with NHTS URBRUR)
+        .with_columns([
+            pl.col("metro").map_elements(assign_urban_from_metro, return_dtype=pl.Int64).alias("urban")
+        ])
         # Extract last 5 characters from PUMA (used for puma_dependency keys)
         .with_columns([pl.col("puma").str.slice(-5).alias("puma")])
         # Build NREL lookup key: "MD, 00805" (same format as Dependency=PUMA in the TSV)
@@ -347,6 +384,7 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
         .with_columns([
             pl.col("occupants").cast(pl.UInt8),  # Instead of Int64
             pl.col("income_bucket").cast(pl.UInt8),  # 1-11 fits in UInt8
+            pl.col("urban").cast(pl.UInt8),  # 1=urban, 2=rural
             pl.col("puma").cast(pl.Utf8),
         ])
         .collect()
@@ -375,6 +413,7 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         "CENSUS_D",  # census division (needed for filtering)
         "VEHCASEID",  # unique hh/vehicle id
         "VEHID",  # vehicle id
+        "VEHTYPE",  # household vehicle type (needed for light-duty filter)
         "STRTTIME",  # start time
         "ENDTIME",  # end time
         "TRPMILES",  # miles driven
@@ -392,16 +431,22 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
     # Get the census division for this state
     state_division = get_census_division_for_state(state)
 
+    # Light-duty passenger vehicles only (NHTS VEHTYPE):
+    # 1=car, 2=van, 3=SUV, 4=pickup. Excludes other truck (5), RV (6), motorcycle/moped (7).
+    light_duty_veh_types = [1, 2, 3, 4]
+
     # Filter to only keep census division for this state
     nhts_df = nhts_df.filter(
         pl.col("CENSUS_D") == state_division,
         pl.col("HHVEHCNT") > 0,
+        # Household-vehicle trips only (excludes transit, walk, bike, non-HH vehicles, etc.)
         pl.col("VEHCASEID") != "-1",
-        pl.col("HHFAMINC") > 0,
-    )  # -7, -8 are not valid income bucket values
+        pl.col("HHFAMINC") > 0,  # -7, -8 are not valid income bucket values
+        pl.col("VEHTYPE").cast(pl.Int64).is_in(light_duty_veh_types),
+    )
 
-    # Remove the CENSUS_D column since we don't need it anymore
-    nhts_df = nhts_df.drop("CENSUS_D")
+    # Drop filter-only columns
+    nhts_df = nhts_df.drop("CENSUS_D", "VEHTYPE")
 
     # Derive the weekday/weekend flag from TRAVDAY (day the trip was taken) rather than
     # NHTS's TDWKND, which reclassifies Friday trips starting at/after 18:00 as weekend.
@@ -426,6 +471,9 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         "TRPMILES": "miles_driven",
         "WTTRDFIN": "trip_weight",
     })
+
+    # NHTS URBRUR is 1=Urban, 2=Rural (may arrive as 01/02 strings from CSV).
+    nhts_df = nhts_df.with_columns(pl.col("urban").cast(pl.Int64))
 
     return nhts_df
 

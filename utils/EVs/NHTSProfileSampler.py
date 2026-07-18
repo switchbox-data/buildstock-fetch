@@ -297,51 +297,48 @@ class NHTSProfileSampler:
         """
         Build a lookup dict for match().
 
-        Keys are tuples of (income_bucket, ...) with increasing specificity; values are
-        sorted hh_vehicle_id lists for deterministic random sampling.
+        Each key is a tagged tuple ``(tier_name, *column_values)`` mapping to a sorted
+        list of ``hh_vehicle_id``s. The tier name is required because several tiers share
+        the same arity of ints; without a tag, e.g. ``(1, 6, 2)`` could mean either
+        ``(urban, income, occupants)`` or ``(income, occupants, vehicles)``.
 
         Args:
-            df (pl.DataFrame): DataFrame with NHTS data including income_bucket, occupants, vehicles, and hh_vehicle_id
+            df (pl.DataFrame): NHTS rows with ``urban``, ``income_bucket``, ``occupants``,
+                ``vehicles``, and ``hh_vehicle_id``
 
         Returns:
-            Dictionary mapping key tuples to sorted hh_vehicle_id lists for deterministic random sampling
+            Dictionary mapping key tuples to sorted hh_vehicle_id lists
         """
-        cache = {}
+        if "urban" not in df.columns:
+            raise ValueError(
+                "nhts_df missing 'urban' column (NHTS URBRUR). "
+                "Reload with load_nhts_data() or add urban=1/2 to the frame."
+            )
 
-        # Tier 1 — exact match on household demographics: (income_bucket, occupants, vehicles).
-        # Each NHTS vehicle id appears once per tier it qualifies for.
-        exact_groups = df.group_by(["income_bucket", "occupants", "vehicles"]).agg(pl.col("hh_vehicle_id").unique())
+        cache: dict[tuple, list[str]] = {}
 
-        for row in exact_groups.iter_rows(named=True):
-            key = (row["income_bucket"], row["occupants"], row["vehicles"])
-            # Sort to ensure consistent ordering for deterministic results
-            cache[key] = sorted(row["hh_vehicle_id"])
-
-        # Tier 2 — relax vehicle count: (income_bucket, occupants).
-        # Used when no exact match has enough vehicles; keys are 2-tuples so they
-        # never collide with tier-1's 3-tuple keys.
-        income_occ_groups = df.group_by(["income_bucket", "occupants"]).agg(pl.col("hh_vehicle_id").unique())
-
-        for row in income_occ_groups.iter_rows(named=True):
-            key = (row["income_bucket"], row["occupants"])
-            if key not in cache:  # Don't overwrite exact matches
-                # Sort to ensure consistent ordering for deterministic results
+        def _store(tier: str, group_cols: list[str]) -> None:
+            """Index unique vehicle ids under ``(tier, *group_col values)``."""
+            groups = df.group_by(group_cols).agg(pl.col("hh_vehicle_id").unique())
+            for row in groups.iter_rows(named=True):
+                key = (tier, *(row[c] for c in group_cols))
                 cache[key] = sorted(row["hh_vehicle_id"])
 
-        # Tier 3 — relax occupants too: (income_bucket,).
-        # Last structured fallback before match picks the closest income bucket.
-        income_groups = df.group_by(["income_bucket"]).agg(pl.col("hh_vehicle_id").unique())
-
-        for row in income_groups.iter_rows(named=True):
-            key = (row["income_bucket"],)
-            # Sort to ensure consistent ordering for deterministic results
-            cache[key] = sorted(row["hh_vehicle_id"])
+        # --- Urban-aware and unconditional indexes (match() chooses cascade order) ---
+        # urban=1/2 from NHTS URBRUR; ResStock maps metro status onto the same codes.
+        _store("urban_income_occupants_vehicles", ["urban", "income_bucket", "occupants", "vehicles"])
+        _store("urban_income_occupants", ["urban", "income_bucket", "occupants"])
+        _store("urban_income", ["urban", "income_bucket"])
+        _store("income_occupants_vehicles", ["income_bucket", "occupants", "vehicles"])
+        _store("income_occupants", ["income_bucket", "occupants"])
+        _store("income", ["income_bucket"])
 
         return cache
 
     def match(
         self,
         target_income: int,
+        target_urban: int,
         target_occupants: int,
         target_vehicles: int,
         num_samples: int,
@@ -356,16 +353,28 @@ class NHTSProfileSampler:
         Uses pre-built cache to eliminate expensive filtering operations.
         Only considers NHTS vehicles that have at least one trip on the requested day type.
 
+        Match order prefers urban/rural agreement when household structure still matches,
+        then drops urban before occupants. Match-type names are the dimensions held
+        (``exact`` = all four including urban):
+
+        1. ``exact`` — (urban, income, occupants, vehicles) when ``match_on_vehicles``
+        2. ``urban_income_occupants``
+        3. ``income_occupants_vehicles`` — drop urban; when ``match_on_vehicles``
+        4. ``income_occupants``
+        5. ``urban_income`` — keep urban only after occupants is dropped
+        6. ``income``
+        7. ``closest_income``
+
         Args:
             target_income: Target income bucket to match
+            target_urban: Target urbanicity (1=urban, 2=rural), from ResStock metro mapping
             target_occupants: Target number of occupants to match
             target_vehicles: Target number of vehicles to match (used only when
                 ``match_on_vehicles`` is True)
             num_samples: Number of different vehicles to sample
             weekday: If True, match against weekday trip profiles; otherwise weekend
-            match_on_vehicles: If True, try an exact (income, occupants, vehicles) match
-                before looser tiers. Defaults to ``self.match_on_vehicles`` (False for
-                the max-1-EV model).
+            match_on_vehicles: If True, try exact vehicle-count tiers before looser ones.
+                Defaults to ``self.match_on_vehicles`` (False for the max-1-EV model).
 
         Returns:
             Tuple of (match_type, list of matched_vehicle_ids)
@@ -375,35 +384,57 @@ class NHTSProfileSampler:
 
         cache = self._prepare_cache(weekday=weekday)
 
-        # Tier 1 — exact match on (income, occupants, vehicles). Skipped when the caller
-        # models at most one EV per household and household fleet size is not a match axis.
+        # Build the fallback cascade. Each attempt is:
+        #   (match_type returned to caller, cache tier tag, column values for the key)
+        # Vehicle-count tiers are omitted when match_on_vehicles is False (max-1-EV mode).
+        attempts: list[tuple[str, str, tuple[int, ...]]] = []
+
+        # 1–2: keep urban/rural + household structure; optionally require vehicle count.
         if match_on_vehicles:
-            exact_key = (target_income, target_occupants, target_vehicles)
-            if exact_key in cache and len(cache[exact_key]) >= num_samples:
-                return "exact", np.random.choice(cache[exact_key], size=num_samples, replace=False).tolist()
+            attempts.append((
+                "exact",
+                "urban_income_occupants_vehicles",
+                (target_urban, target_income, target_occupants, target_vehicles),
+            ))
+        attempts.append((
+            "urban_income_occupants",
+            "urban_income_occupants",
+            (target_urban, target_income, target_occupants),
+        ))
 
-        # Tier 2 — match income and occupants: (income, occupants)
-        income_occ_key = (target_income, target_occupants)
-        if income_occ_key in cache and len(cache[income_occ_key]) >= num_samples:
-            return "income_occupants", np.random.choice(cache[income_occ_key], size=num_samples, replace=False).tolist()
+        # 3–4: drop urbanicity before occupants (HH structure > place-type alone).
+        if match_on_vehicles:
+            attempts.append((
+                "income_occupants_vehicles",
+                "income_occupants_vehicles",
+                (target_income, target_occupants, target_vehicles),
+            ))
+        attempts.append((
+            "income_occupants",
+            "income_occupants",
+            (target_income, target_occupants),
+        ))
 
-        # Try matching only income: (income,)
-        income_key = (target_income,)
-        if income_key in cache and len(cache[income_key]) >= num_samples:
-            return "income_only", np.random.choice(cache[income_key], size=num_samples, replace=False).tolist()
+        # 5–6: occupants gone; prefer same urban/rural at this income, else income only.
+        attempts.append(("urban_income", "urban_income", (target_urban, target_income)))
+        attempts.append(("income", "income", (target_income,)))
 
-        # If still no match, find closest income bucket
-        available_incomes = [key[0] for key in cache if len(key) == 1]  # Get all single-income keys
+        for match_type, tier, parts in attempts:
+            key = (tier, *parts)
+            ids = cache.get(key)
+            if ids is not None and len(ids) >= num_samples:
+                return match_type, np.random.choice(ids, size=num_samples, replace=False).tolist()
+
+        # 7: no exact income bucket; pick the closest income among unconditional pools.
+        available_incomes = [key[1] for key in cache if key[0] == "income"]
         if available_incomes:
             closest_income = min(available_incomes, key=lambda x: abs(x - target_income))
-            closest_key = (closest_income,)
-            if closest_key in cache and len(cache[closest_key]) >= num_samples:
-                return "closest_income", np.random.choice(cache[closest_key], size=num_samples, replace=False).tolist()
-            else:
-                # If not enough samples, take all available
-                return "closest_income", cache[closest_key]
+            closest_key = ("income", closest_income)
+            ids = cache[closest_key]
+            if len(ids) >= num_samples:
+                return "closest_income", np.random.choice(ids, size=num_samples, replace=False).tolist()
+            return "closest_income", ids
 
-        # Fallback: return empty list if no matches found
         return "no_match", []
 
     @staticmethod
@@ -516,10 +547,17 @@ class NHTSProfileSampler:
                 self._log_progress(processed_buildings, total_buildings, "Building progress")
                 continue
 
+            if "urban" not in row or row["urban"] is None:
+                raise ValueError(
+                    f"bldg_id={bldg_id} missing urban (1=urban, 2=rural); "
+                    "derive from ResStock metro via load_metadata() / assign_urban_from_metro()."
+                )
+
             # Match weekday and weekend profiles independently from NHTS vehicles
             # that have at least one logged trip on each day type.
             weekday_match_type, weekday_vehicle_ids = self.match(
                 target_income=row["income_bucket"],
+                target_urban=int(row["urban"]),
                 target_occupants=row["occupants"],
                 target_vehicles=num_vehicles,
                 num_samples=num_vehicles,
@@ -528,6 +566,7 @@ class NHTSProfileSampler:
             )
             weekend_match_type, weekend_vehicle_ids = self.match(
                 target_income=row["income_bucket"],
+                target_urban=int(row["urban"]),
                 target_occupants=row["occupants"],
                 target_vehicles=num_vehicles,
                 num_samples=num_vehicles,

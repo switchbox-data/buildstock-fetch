@@ -4,6 +4,7 @@ from utils.EVs.ev_demand import EVDemandConfig
 from utils.EVs.ev_utils import (
     assign_income_midpoints,
     assign_nhts_income_bucket,
+    assign_urban_from_metro,
     get_census_division_for_state,
 )
 
@@ -20,6 +21,14 @@ def test_get_census_division_for_state():
     assert get_census_division_for_state("FL") == 5
     assert get_census_division_for_state("IL") == 3
     assert get_census_division_for_state("OH") == 3
+
+
+def test_assign_urban_from_metro():
+    assert assign_urban_from_metro("In metro area, principal city") == 1
+    assert assign_urban_from_metro("In metro area, not/partially in principal city") == 1
+    assert assign_urban_from_metro("Not/partially in metro area") == 2
+    with pytest.raises(ValueError, match="Unknown ResStock metro status"):
+        assign_urban_from_metro("urban")
 
 
 def test_assign_nhts_income_bucket():

@@ -83,11 +83,13 @@ def make_vehicle_profile(
 # Test data fixtures
 @pytest.fixture
 def mock_nhts_data():
+    # urban: 1=urban, 2=rural (NHTS URBRUR). v1–v3 urban; v4 rural.
     data = {
         "hh_vehicle_id": ["v1", "v2", "v3", "v4", "v4", "v1", "v2", "v3"],
         "income_bucket": [1, 2, 2, 3, 3, 1, 2, 2],
         "occupants": [2, 3, 3, 4, 4, 2, 3, 3],
         "vehicles": [1, 2, 2, 1, 1, 1, 2, 2],
+        "urban": [1, 1, 1, 2, 2, 1, 1, 1],
         "weekday": [2, 2, 2, 2, 2, 1, 1, 1],
         "start_time": [800, 900, 1000, 800, 1300, 1100, 1200, 1400],
         "end_time": [1700, 1800, 1900, 1200, 1700, 1500, 1600, 1800],
@@ -104,7 +106,12 @@ def mock_metadata():
         "income_bucket": [1, 2, 3],
         "occupants": [2, 3, 4],
         "vehicles": [1, 2, 1],  # b1 has 1 vehicle, b2 has 2, b3 has 1
-        "metro": ["urban", "suburban", "rural"],
+        "metro": [
+            "In metro area, principal city",
+            "In metro area, not/partially in principal city",
+            "Not/partially in metro area",
+        ],
+        "urban": [1, 1, 2],
     }
     return pl.DataFrame(data)
 
@@ -116,7 +123,13 @@ def mock_metadata_with_zero():
         "income_bucket": [1, 2, 3, 2],
         "occupants": [2, 3, 4, 1],
         "vehicles": [1, 2, 1, 0],  # b4 has 0 vehicles
-        "metro": ["urban", "suburban", "rural", "urban"],
+        "metro": [
+            "In metro area, principal city",
+            "In metro area, not/partially in principal city",
+            "Not/partially in metro area",
+            "In metro area, principal city",
+        ],
+        "urban": [1, 1, 2, 1],
     }
     return pl.DataFrame(data)
 
@@ -146,16 +159,22 @@ def test_nhts_hour_conversion():
 
 def test_match_skips_vehicle_tier_by_default(calculator):
     match_type, vehicle_ids = calculator.nhts_sampler.match(
-        target_income=1, target_occupants=2, target_vehicles=1, num_samples=1, weekday=True
+        target_income=1,
+        target_urban=1,
+        target_occupants=2,
+        target_vehicles=1,
+        num_samples=1,
+        weekday=True,
     )
-    assert match_type == "income_occupants"
+    assert match_type == "urban_income_occupants"
     assert vehicle_ids == ["v1"]
 
 
 def test_match_with_vehicle_tier(calculator):
-    # Test exact match for single vehicle
+    # Test urban + exact vehicle match for single vehicle
     match_type, vehicle_ids = calculator.nhts_sampler.match(
         target_income=1,
+        target_urban=1,
         target_occupants=2,
         target_vehicles=1,
         num_samples=1,
@@ -165,9 +184,10 @@ def test_match_with_vehicle_tier(calculator):
     assert match_type == "exact"
     assert vehicle_ids == ["v1"]
 
-    # Test exact match for multiple vehicles
+    # Test urban + exact match for multiple vehicles
     match_type, vehicle_ids = calculator.nhts_sampler.match(
         target_income=2,
+        target_urban=1,
         target_occupants=3,
         target_vehicles=2,
         num_samples=2,
@@ -178,33 +198,36 @@ def test_match_with_vehicle_tier(calculator):
     assert len(vehicle_ids) == 2
     assert set(vehicle_ids) == {"v2", "v3"}  # Should get both vehicles with matching characteristics
 
-    # Test partial match (income and occupants only)
+    # Test partial match (urban + income and occupants only)
     match_type, vehicle_ids = calculator.nhts_sampler.match(
         target_income=2,
+        target_urban=1,
         target_occupants=3,
         target_vehicles=1,  # Different from data
         num_samples=1,
         weekday=True,
         match_on_vehicles=True,
     )
-    assert match_type == "income_occupants"
+    assert match_type == "urban_income_occupants"
     assert vehicle_ids[0] in ["v2", "v3"]
 
-    # Test income-only match
+    # Test income-only match after urban tiers miss (income=3 is rural-only in fixture)
     match_type, vehicle_ids = calculator.nhts_sampler.match(
         target_income=3,
+        target_urban=1,  # urban request; v4 is rural → drop urban
         target_occupants=2,  # Different from data
         target_vehicles=1,  # Different from data
         num_samples=1,
         weekday=True,
         match_on_vehicles=True,
     )
-    assert match_type == "income_only"
+    assert match_type == "income"
     assert vehicle_ids[0] == "v4"  # v4 has income=3
 
     # Test closest income match
     match_type, vehicle_ids = calculator.nhts_sampler.match(
         target_income=4,  # Not in data
+        target_urban=1,
         target_occupants=2,
         target_vehicles=1,
         num_samples=1,
@@ -214,6 +237,38 @@ def test_match_with_vehicle_tier(calculator):
     assert match_type == "closest_income"
     assert vehicle_ids[0] in ["v1", "v2", "v3", "v4"]
 
+
+def test_match_prefers_urban_over_income_only_cross_urban(calculator):
+    """Rural building with income=3 matches rural v4 via exact (urban held)."""
+    match_type, vehicle_ids = calculator.nhts_sampler.match(
+        target_income=3,
+        target_urban=2,
+        target_occupants=4,
+        target_vehicles=1,
+        num_samples=1,
+        weekday=True,
+        match_on_vehicles=True,
+    )
+    assert match_type == "exact"
+    assert vehicle_ids == ["v4"]
+
+
+def test_match_drops_urban_before_occupants(calculator):
+    """Cross urban/rural to keep income+occupants rather than urban_income alone.
+
+    Fixture has urban v2/v3 at income=2, occupants=3; no rural profiles with that HH size.
+    A rural target should hit income_occupants (cross urban) before urban_income.
+    """
+    match_type, vehicle_ids = calculator.nhts_sampler.match(
+        target_income=2,
+        target_urban=2,  # rural; only urban NHTS rows have income=2, occupants=3
+        target_occupants=3,
+        target_vehicles=1,
+        num_samples=1,
+        weekday=True,
+    )
+    assert match_type == "income_occupants"
+    assert vehicle_ids[0] in ["v2", "v3"]
 
 def test_sample_uses_sampler_nhts_by_default(
     mock_nhts_data, mock_metadata, ev_ownership_df, ev_battery_df, ev_autonomie_df

@@ -54,7 +54,7 @@ charging:
   #   off_peak              — + peak_clock_hours, soc_min_fraction, soc_safety_buffer_fraction
   #   off_peak_immediate    — + peak_clock_hours (+ optional allow_emergency_peak_charging)
   #   cost_minimizing       — + prices (one source below) and shed_load_penalty_usd_per_kwh
-  charging_strategy: off_peak
+  charging_strategy: off_peak_immediate
   charger_power_kw: 7.2
   # null = each vehicle starts at full battery capacity
   initial_soc_kwh: null
@@ -63,8 +63,8 @@ charging:
   peak_clock_hours: [17, 18, 19, 20, 21]
 
   # --- required for off_peak only (SOC_req targets) ---
-  soc_min_fraction: 0.2
-  soc_safety_buffer_fraction: 0.2
+  # soc_min_fraction: 0.2
+  # soc_safety_buffer_fraction: 0.2
 
   # --- optional for off_peak_immediate (default false = never charge on peak) ---
   # allow_emergency_peak_charging: false
