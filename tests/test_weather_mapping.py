@@ -46,7 +46,36 @@ def cleanup_downloads():
 
 
 def test_weather_station_map_quality(weather_station_map):
-    assert weather_station_map.select("bldg_id").n_unique() == weather_station_map.height
+    identity_cols = [
+        "product",
+        "release_year",
+        "weather_file",
+        "release_version",
+        "state",
+        "upgrade_id",
+        "bldg_id",
+    ]
+    assert weather_station_map.select(identity_cols).n_unique() == weather_station_map.height
+
+
+def test_remove_duplicates_keeps_same_bldg_id_across_states():
+    from utils.resolve_weather_station_id import _remove_duplicates
+
+    df = pl.DataFrame(
+        {
+            "bldg_id": [1067, 1067, 1067],
+            "product": ["resstock", "resstock", "resstock"],
+            "release_year": ["2022", "2024", "2024"],
+            "weather_file": ["amy2012", "tmy3", "tmy3"],
+            "release_version": ["1", "2", "2"],
+            "state": ["NY", "MD", "MD"],
+            "upgrade_id": ["0", "0", "0"],
+            "weather_station_name": ["G3601030", "G2400310", "G2400310"],
+        }
+    )
+    cleaned = _remove_duplicates(df)
+    assert cleaned.height == 2
+    assert set(cleaned["state"].to_list()) == {"NY", "MD"}
 
 
 # Test the dataframe that was already built
@@ -65,10 +94,16 @@ def test_resolve_weather_station_id(weather_station_map):
     for bldg_id in bldg_ids:
         weather_station_id = download_and_extract_weather_station(bldg_id)
         assert weather_station_id is not None
-        assert (
-            weather_station_id
-            == weather_station_map.filter(pl.col("bldg_id") == bldg_id.bldg_id)[0].select("weather_station_name").item()
+        mapped = weather_station_map.filter(
+            pl.col("bldg_id") == bldg_id.bldg_id,
+            pl.col("product") == product,
+            pl.col("release_year") == release_year,
+            pl.col("weather_file") == weather_file,
+            pl.col("release_version") == release_version,
+            pl.col("state") == state,
         )
+        assert mapped.height == 1
+        assert weather_station_id == mapped["weather_station_name"].item()
 
 
 def test_weather_station_mapping():
@@ -100,6 +135,7 @@ def test_weather_station_mapping():
         assert weather_station_id is not None
         assert (
             weather_station_id
-            == weather_station_map.filter(pl.col("bldg_id") == bldg_id.bldg_id)[0].select("weather_station_name").item()
+            == weather_station_map.filter(pl.col("bldg_id") == bldg_id.bldg_id)[0]
+            .select("weather_station_name")
+            .item()
         )
-    pass

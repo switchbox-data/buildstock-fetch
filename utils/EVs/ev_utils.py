@@ -8,6 +8,8 @@ This module contains:
 
 import logging
 import re
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -16,19 +18,29 @@ import numpy as np
 import polars as pl
 
 __all__ = [
+    "EVDemandInputs",
     "assign_urban_from_metro",
+    "build_bldg_hourly_temp_f",
     "get_census_division_for_state",
     "load_all_input_data",
     "load_ev_autonomie_params",
     "load_ev_battery_lookup",
     "load_ev_ownership_lookup",
+    "load_hourly_temp_f_for_buildings",
     "load_metadata",
     "load_metro_puma_map",
     "load_nhts_data",
     "load_pums_data",
+    "load_resstock_weather_station_temps",
+    "load_station_temps_for_buildings",
+    "load_weather_station_map",
     "parse_ev_option_name",
+    "parse_release_for_weather_map",
     "resstock_puma_dependency",
+    "resstock_temp_power_mult",
+    "resolve_bldg_weather_stations",
     "state_ev_ownership_rate",
+    "yuksel_michalek_miles_to_kwh",
 ]
 
 # ResStock ``in.puma_metro_status`` → NHTS-like urban (1) / rural (2), matching URBRUR.
@@ -663,28 +675,87 @@ def load_ev_autonomie_params(ev_autonomie_path: str | Path) -> pl.DataFrame:
     return params
 
 
-def load_all_input_data(
-    ev_demand_config: Any,
-) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
-    """
-    Load all input data for the EV demand calculator.
+@dataclass
+class EVDemandInputs:
+    """Tables loaded for an EV demand run (mode-dependent fields may be ``None``)."""
 
-    Returns:
-        Tuple of (metadata_df, nhts_df, pums_df, ev_ownership_df, ev_battery_df, ev_autonomie_df)
+    metadata_df: pl.DataFrame
+    nhts_df: pl.DataFrame
+    ev_battery_df: pl.DataFrame
+    ev_autonomie_df: pl.DataFrame
+    # Present when ev_assignment=pums_vehicles.
+    pums_df: pl.DataFrame | None = None
+    # Present when ev_assignment=resstock_adoption.
+    ev_ownership_df: pl.DataFrame | None = None
+    # Present when temperature_adjustment=resstock.
+    weather_map: pl.DataFrame | None = None
+    # Station name → month/day/hour temps; shared across batches when preloaded.
+    station_temps: dict[str, pl.DataFrame] | None = field(default=None)
+
+
+def load_all_input_data(ev_demand_config: Any) -> EVDemandInputs:
+    """
+    Load input tables for the EV demand calculator.
+
+    Mode-gated loads:
+    - ``pums_df`` only when ``ev_assignment=pums_vehicles``
+    - ``ev_ownership_df`` only when ``ev_assignment=resstock_adoption``
+    - ``weather_map`` / ``station_temps`` only when ``temperature_adjustment=resstock``
+      (station CSVs are preloaded for all metadata buildings so batches share the cache)
     """
     metadata_df = load_metadata(ev_demand_config.metadata_path, ev_demand_config.state)
     nhts_df = load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state)
-    pums_df = load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path)
-    # Conditional P(EV) by FPL / building type / tenure / PUMA (state-filtered).
-    ev_ownership_df = load_ev_ownership_lookup(
-        ev_demand_config.ev_ownership_path,
-        ev_demand_config.state,
-    )
-    # National BEV class × range shares + Autonomie physical parameters.
     ev_battery_df = load_ev_battery_lookup(ev_demand_config.ev_battery_path)
     ev_autonomie_df = load_ev_autonomie_params(ev_demand_config.ev_autonomie_path)
 
-    return metadata_df, nhts_df, pums_df, ev_ownership_df, ev_battery_df, ev_autonomie_df
+    pums_df: pl.DataFrame | None = None
+    if ev_demand_config.ev_assignment == "pums_vehicles":
+        if not ev_demand_config.pums_path:
+            raise ValueError("pums_path is required when ev_assignment=pums_vehicles")
+        pums_df = load_pums_data(ev_demand_config.pums_path, ev_demand_config.metadata_path)
+
+    ev_ownership_df: pl.DataFrame | None = None
+    if ev_demand_config.ev_assignment == "resstock_adoption":
+        if not ev_demand_config.ev_ownership_path:
+            raise ValueError(
+                "ev_ownership_path is required when ev_assignment=resstock_adoption"
+            )
+        ev_ownership_df = load_ev_ownership_lookup(
+            ev_demand_config.ev_ownership_path,
+            ev_demand_config.state,
+        )
+
+    weather_map: pl.DataFrame | None = None
+    station_temps: dict[str, pl.DataFrame] | None = None
+    if ev_demand_config.temperature_adjustment == "resstock":
+        if not ev_demand_config.weather_dir:
+            raise ValueError(
+                "weather_dir is required when temperature_adjustment=resstock"
+            )
+        weather_map = load_weather_station_map()
+        station_temps = load_station_temps_for_buildings(
+            metadata_df["bldg_id"],
+            state=ev_demand_config.state,
+            release=ev_demand_config.release,
+            weather_dir=ev_demand_config.weather_dir,
+            weather_map=weather_map,
+        )
+        logging.info(
+            "Preloaded %s weather station CSV(s) from %s",
+            len(station_temps),
+            ev_demand_config.weather_dir,
+        )
+
+    return EVDemandInputs(
+        metadata_df=metadata_df,
+        nhts_df=nhts_df,
+        ev_battery_df=ev_battery_df,
+        ev_autonomie_df=ev_autonomie_df,
+        pums_df=pums_df,
+        ev_ownership_df=ev_ownership_df,
+        weather_map=weather_map,
+        station_temps=station_temps,
+    )
 
 
 def assign_battery_capacity(battery_capacities, daily_kwh: pl.Series) -> pl.Series:
@@ -716,10 +787,55 @@ def assign_battery_capacity(battery_capacities, daily_kwh: pl.Series) -> pl.Seri
     return pl.Series(assigned_capacities)
 
 
-def miles_to_kwh(self, daily_miles: float, avg_temp: float) -> float:
+# OpenStudio-HPXML / ResStock 2025 EV discharge temperature curve (°C powers).
+# Source: HPXMLtoOpenStudio/resources/vehicle.rb (Geotab + Recurrent update of Yip et al. 2023 Fig. 9).
+_RESSTOCK_TEMP_POWER_COEFS_C: tuple[float, ...] = (
+    1.412768,
+    -3.910397e-02,
+    9.408235e-04,
+    8.971560e-06,
+    -7.699244e-07,
+    1.265614e-08,
+)
+
+# ResStock weather CSVs use EnergyPlus-style hour-ending timestamps.
+_WEATHER_DRYBULB_COL = "Dry Bulb Temperature [°C]"
+_WEATHER_DATETIME_COL = "date_time"
+
+
+def resstock_temp_power_mult(temp_f: float | np.ndarray) -> float | np.ndarray:
+    """ResStock / OpenStudio-HPXML EV discharge power multiplier vs outdoor dry-bulb °F.
+
+    Clips temperature to 0–100°F (OpenStudio-HPXML), converts to °C, then evaluates the
+    5th-order polynomial used by the EnergyPlus EMS EV discharge program. Apply only to
+    driving discharge energy (not charger kW).
+
+    Args:
+        temp_f: Outdoor dry-bulb temperature in °F (scalar or array)
+
+    Returns:
+        Unitless power multiplier (same shape as input)
     """
-    Calculate daily electricity consumption for electric vehicles based on
-    temperature and daily miles driven using the Yuksel and Michalek (2015) regression. @yuksel_EffectsRegionalTemperature_2015
+    temp = np.asarray(temp_f, dtype=np.float64)
+    scalar_input = temp.ndim == 0
+    temp = np.atleast_1d(temp)
+    temp_clipped = np.clip(temp, 0.0, 100.0) # clip temperature to 0-100°F
+    temp_c = (temp_clipped - 32.0) * (5.0 / 9.0) # convert to °C
+    power_mult = np.zeros_like(temp_c)
+    for i, coef in enumerate(_RESSTOCK_TEMP_POWER_COEFS_C):
+        power_mult = power_mult + coef * np.power(temp_c, i) # get power multiplier for each coefficient
+    if scalar_input:
+        return float(power_mult[0])
+    return power_mult
+
+
+# originally miles_to_kwh
+def yuksel_michalek_miles_to_kwh(daily_miles: float, avg_temp: float) -> float:
+    """
+    Absolute kWh from miles and temp via Yuksel and Michalek (2015) Nissan Leaf regression.
+
+    Legacy helper (formerly ``miles_to_kwh``). Prefer ``resstock_temp_power_mult`` scaled onto
+    Autonomie ``kwh_per_mile`` for ResStock-aligned modeling.
 
     Args:
         daily_miles: Number of miles driven in a day
@@ -755,6 +871,337 @@ def miles_to_kwh(self, daily_miles: float, avg_temp: float) -> float:
     if np.isscalar(daily_miles) and np.isscalar(avg_temp):
         return float(daily_consumption_kwh)
     return float(daily_consumption_kwh)
+
+
+def parse_release_for_weather_map(release: str) -> tuple[str, str, str, str]:
+    """Parse an EV-demand release key into weather-station-map lookup fields.
+
+    Args:
+        release: Release key string (e.g. "res_2024_tmy3_2")
+
+    Returns:
+        Tuple of (product, year, weather, version)
+    
+    Examples:
+        >>> parse_release_for_weather_map("res_2024_tmy3_2")
+        ('resstock', '2024', 'tmy3', '2')
+    """
+    match = re.fullmatch(
+        r"res(?:stock)?_(?P<year>\d{4})_(?P<weather>tmy3|amy2018|amy2012)_(?P<version>\d+)",
+        release,
+    )
+    if match is None:
+        match = re.fullmatch(
+            r"resstock_(?P<weather>tmy3|amy2018|amy2012)_release_(?P<version>\d+)",
+            release,
+        )
+        if match is None:
+            raise ValueError(
+                f"Unrecognized release key for weather map lookup: {release!r}. "
+                "Expected e.g. 'res_2024_tmy3_2'."
+            )
+        # Legacy test-style keys omit year; weather map rows are year-scoped.
+        raise ValueError(
+            f"Release key {release!r} is missing a release year; "
+            "use e.g. 'res_2024_tmy3_2' for weather station lookup."
+        )
+    return "resstock", match.group("year"), match.group("weather"), match.group("version")
+
+
+def load_weather_station_map(weather_map_path: str | Path | None = None) -> pl.DataFrame:
+    """Load the buildstock-fetch building → weather-station parquet map.
+    
+    Args:
+        weather_map_path: Path to the weather station map parquet file
+
+    Returns:
+        DataFrame with ``product``, ``release_year``, ``weather_file``, ``release_version``, ``state``, ``bldg_id``, and ``weather_station_name``
+    """
+    if weather_map_path is None:
+        from buildstock_fetch.constants import WEATHER_FILE_DIR
+
+        path = Path(WEATHER_FILE_DIR) / "weather_station_map.parquet"
+    else:
+        path = Path(weather_map_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Weather station map not found: {path}")
+    return pl.read_parquet(path)
+
+
+def resolve_bldg_weather_stations(
+    bldg_ids: pl.Series | list[Any],
+    *,
+    state: str,
+    release: str,
+    weather_map: pl.DataFrame | None = None,
+) -> pl.DataFrame:
+    """Map building IDs to ResStock weather station names for a release/state.
+
+    Args:
+        bldg_ids: Series or list of building IDs
+        state: State code
+        release: Release key string (e.g. "res_2024_tmy3_2")
+        weather_map: DataFrame with ``product``, ``release_year``, ``weather_file``, ``release_version``, ``state``, ``bldg_id``, and ``weather_station_name``
+
+    Returns:
+        DataFrame with ``bldg_id`` (same dtype as input where possible) and
+        ``weather_station_name``.
+    """
+    product, year, weather_file, version = parse_release_for_weather_map(release)
+    weather_map = load_weather_station_map() if weather_map is None else weather_map
+
+    bldg_id_series = pl.Series("bldg_id", bldg_ids).unique()
+    # Weather map stores numeric bldg_id; metadata may be zero-padded strings.
+    bldg_keys = (
+        pl.DataFrame({"bldg_id_raw": bldg_id_series})
+        .with_columns(
+            pl.col("bldg_id_raw").cast(pl.Utf8).str.replace(r"^0+", "").alias("bldg_id_str")
+        )
+        .with_columns(
+            pl.when(pl.col("bldg_id_str") == "")
+            .then(pl.lit("0"))
+            .otherwise(pl.col("bldg_id_str"))
+            .cast(pl.Int64)
+            .alias("bldg_id_int")
+        )
+    )
+
+    # weather stations
+    stations = weather_map.filter(
+        pl.col("product") == product,
+        pl.col("release_year") == year,
+        pl.col("weather_file") == weather_file,
+        pl.col("release_version") == version,
+        pl.col("state") == state,
+    ).select(
+        pl.col("bldg_id").alias("bldg_id_int"),
+        "weather_station_name",
+    )
+
+    # map building ids to weather stations
+    joined = bldg_keys.join(stations, on="bldg_id_int", how="left")
+    missing = joined.filter(pl.col("weather_station_name").is_null())
+    if missing.height > 0:
+        sample = missing["bldg_id_raw"].head(5).to_list()
+        raise ValueError(
+            f"No weather station mapping for {missing.height} building(s) in "
+            f"release={release!r} state={state!r}; examples: {sample}"
+        )
+    return joined.select(
+        pl.col("bldg_id_raw").alias("bldg_id"),
+        "weather_station_name",
+    )
+
+
+def load_resstock_weather_station_temps(weather_csv_path: str | Path) -> pl.DataFrame:
+    """Load a ResStock OEDI weather CSV into month/day/hour dry-bulb °F.
+
+    ResStock weather timestamps are hour-ending (01:00 is the first hour of the day).
+    Returned ``hour`` is start-of-hour clock hour 0–23 for joining to ``hours_base``.
+
+    Args:
+        weather_csv_path: Path to the weather CSV file
+
+    Returns:
+        DataFrame with ``ts``, ``temp_c``, ``temp_f``, ``month``, ``day``, and ``hour``
+    """
+    path = Path(weather_csv_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Weather file not found: {path}")
+
+    raw = pl.read_csv(path)
+    if _WEATHER_DATETIME_COL not in raw.columns or _WEATHER_DRYBULB_COL not in raw.columns:
+        raise ValueError(
+            f"Weather file {path} missing required columns "
+            f"{_WEATHER_DATETIME_COL!r} / {_WEATHER_DRYBULB_COL!r}; got {raw.columns}"
+        )
+
+    parsed = raw.select(
+        pl.col(_WEATHER_DATETIME_COL).str.to_datetime("%Y-%m-%d %H:%M:%S").alias("ts"),
+        pl.col(_WEATHER_DRYBULB_COL).cast(pl.Float64).alias("temp_c"),
+    ).with_columns(
+        # Hour-ending → start-of-hour: 01:00 → hour 0 same day; 00:00 → hour 23 prior day.
+        (pl.col("ts") - pl.duration(hours=1)).alias("hour_start"),
+    ).with_columns(
+        (pl.col("temp_c") * 9.0 / 5.0 + 32.0).alias("temp_f"),
+        pl.col("hour_start").dt.month().alias("month"),
+        pl.col("hour_start").dt.day().alias("day"),
+        pl.col("hour_start").dt.hour().alias("hour"),
+    )
+
+    # TMY composites mix years; keep one row per (month, day, hour). Prefer first occurrence.
+    return (
+        parsed.select("month", "day", "hour", "temp_f")
+        .unique(subset=["month", "day", "hour"], keep="first")
+        .sort(["month", "day", "hour"])
+    )
+
+
+def build_bldg_hourly_temp_f(
+    *,
+    hours_base: pl.DataFrame,
+    bldg_stations: pl.DataFrame,
+    station_temps: dict[str, pl.DataFrame],
+) -> pl.DataFrame:
+    """Align per-station typical-year temps onto a simulation ``hours_base`` calendar.
+
+    Joins on (month, day, hour). Leap-day Feb 29 uses Feb 28 temperatures when the weather
+    file is a non-leap typical year.
+
+    Args:
+        hours_base: From ``build_hours_base`` (needs ``hour_index``, ``date``, ``hour``)
+        bldg_stations: ``bldg_id``, ``weather_station_name``
+        station_temps: Map station name → frame from ``load_resstock_weather_station_temps``
+
+    Returns:
+        ``bldg_id``, ``hour_index``, ``temp_f``
+    """
+    required_hours = {"hour_index", "date", "hour"}
+    missing_hours = required_hours - set(hours_base.columns)
+    if missing_hours:
+        raise ValueError(f"hours_base missing columns: {sorted(missing_hours)}")
+    required_stations = {"bldg_id", "weather_station_name"}
+    missing_stations = required_stations - set(bldg_stations.columns)
+    if missing_stations:
+        raise ValueError(f"bldg_stations missing columns: {sorted(missing_stations)}")
+
+    calendar = hours_base.select(
+        "hour_index",
+        "date",
+        "hour",
+        pl.col("date").dt.month().alias("month"),
+        pl.col("date").dt.day().alias("day"),
+    ).with_columns(
+        # Non-leap TMY: map Feb 29 → Feb 28.
+        pl.when((pl.col("month") == 2) & (pl.col("day") == 29))
+        .then(pl.lit(28))
+        .otherwise(pl.col("day"))
+        .alias("day"),
+    )
+
+    frames: list[pl.DataFrame] = []
+    for row in (
+        bldg_stations.group_by("weather_station_name")
+        .agg(pl.col("bldg_id"))
+        .iter_rows(named=True)
+    ):
+        station_name = row["weather_station_name"]
+        bldg_ids = row["bldg_id"]
+        if station_name not in station_temps:
+            raise KeyError(f"Missing weather temps for station {station_name!r}")
+        temps = station_temps[station_name]
+        aligned = calendar.join(temps, on=["month", "day", "hour"], how="left")
+        if aligned["temp_f"].null_count() > 0:
+            raise ValueError(
+                f"Weather station {station_name!r} missing temps for "
+                f"{aligned.filter(pl.col('temp_f').is_null()).height} hour(s) in the date range"
+            )
+        station_bldgs = pl.DataFrame({"bldg_id": bldg_ids})
+        frames.append(
+            station_bldgs.join(aligned.select("hour_index", "temp_f"), how="cross")
+        )
+
+    if not frames:
+        return pl.DataFrame(
+            schema={"bldg_id": pl.Utf8, "hour_index": pl.UInt32, "temp_f": pl.Float64}
+        )
+    return pl.concat(frames)
+
+
+def _fill_station_temps_cache(
+    station_names: Iterable[str],
+    *,
+    weather_dir: str | Path,
+    station_temps: dict[str, pl.DataFrame],
+) -> None:
+    """Read missing station CSVs into ``station_temps`` (mutates in place)."""
+    weather_dir_path = Path(weather_dir)
+    for station_name in station_names:
+        if station_name in station_temps:
+            continue
+        csv_path = weather_dir_path / f"{station_name}.csv"
+        if not csv_path.exists():
+            raise FileNotFoundError(
+                f"Weather file not found for station {station_name}: {csv_path}. "
+                "Download ResStock weather CSVs into weather_dir "
+                "(OEDI .../weather/state=XX/{station}_TMY3.csv)."
+            )
+        station_temps[station_name] = load_resstock_weather_station_temps(csv_path)
+
+
+def load_station_temps_for_buildings(
+    bldg_ids: pl.Series | list[Any],
+    *,
+    state: str,
+    release: str,
+    weather_dir: str | Path,
+    weather_map: pl.DataFrame | None = None,
+    station_temps: dict[str, pl.DataFrame] | None = None,
+) -> dict[str, pl.DataFrame]:
+    """Load ResStock weather CSVs for stations used by ``bldg_ids``.
+
+    Existing entries in ``station_temps`` are reused; missing stations are read from
+    ``weather_dir`` and inserted into the returned (and mutated) cache dict.
+    """
+    cache = station_temps if station_temps is not None else {}
+    bldg_stations = resolve_bldg_weather_stations(
+        bldg_ids, state=state, release=release, weather_map=weather_map
+    )
+    _fill_station_temps_cache(
+        bldg_stations["weather_station_name"].unique().to_list(),
+        weather_dir=weather_dir,
+        station_temps=cache,
+    )
+    return cache
+
+
+def load_hourly_temp_f_for_buildings(
+    bldg_ids: pl.Series | list[Any],
+    *,
+    hours_base: pl.DataFrame,
+    state: str,
+    release: str,
+    weather_dir: str | Path,
+    weather_map: pl.DataFrame | None = None,
+    station_temps: dict[str, pl.DataFrame] | None = None,
+) -> pl.DataFrame:
+    """Resolve stations, load ResStock weather CSVs, and return per-building hourly °F.
+
+    Expects files named ``{weather_station_name}.csv`` under ``weather_dir`` (ResStock OEDI
+    weather CSV schema with ``date_time`` and ``Dry Bulb Temperature [°C]``).
+
+    When ``station_temps`` is provided it is used as a mutable cache (stations already
+    present are not re-read). Pass the preloaded cache from ``load_all_input_data`` so
+    batches share station CSVs.
+
+    Args:
+        bldg_ids: Series or list of building IDs
+        hours_base: From ``build_hours_base`` (needs ``hour_index``, ``date``, ``hour``)
+        state: State code
+        release: Release key string (e.g. "res_2024_tmy3_2")
+        weather_dir: Path to the weather directory
+        weather_map: DataFrame with ``product``, ``release_year``, ``weather_file``, ``release_version``, ``state``, ``bldg_id``, and ``weather_station_name``
+        station_temps: Optional mutable cache of station name → month/day/hour temps
+
+    Returns:
+        DataFrame with ``bldg_id``, ``hour_index``, and ``temp_f``
+    """
+    cache = station_temps if station_temps is not None else {}
+    bldg_stations = resolve_bldg_weather_stations(
+        bldg_ids, state=state, release=release, weather_map=weather_map
+    )
+    station_names = bldg_stations["weather_station_name"].unique().to_list()
+    _fill_station_temps_cache(
+        station_names,
+        weather_dir=weather_dir,
+        station_temps=cache,
+    )
+    needed = {name: cache[name] for name in station_names}
+    return build_bldg_hourly_temp_f(
+        hours_base=hours_base,
+        bldg_stations=bldg_stations,
+        station_temps=needed,
+    )
 
 
 def upload_object_to_s3(file_content: bytes, file_name: str) -> bool:

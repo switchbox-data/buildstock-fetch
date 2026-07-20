@@ -38,6 +38,7 @@ from utils.EVs.charging import (
     DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH,
     DEFAULT_SOC_MIN_FRACTION,
     DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
+    build_hours_base,
 )
 
 # How EVs (or vehicle slots treated as EVs) are assigned to ResStock buildings.
@@ -45,6 +46,10 @@ from utils.EVs.charging import (
 # - resstock_adoption: ResStock P(EV) Bernoulli sampler; at most one EV; do not match NHTS on vehicles
 EvAssignmentMode = Literal["pums_vehicles", "resstock_adoption"]
 EV_ASSIGNMENT_MODES: Final[frozenset[str]] = frozenset({"pums_vehicles", "resstock_adoption"})
+
+# Outdoor-temp adjustment applied to discharge kWh (ResStock / OpenStudio-HPXML curve).
+TemperatureAdjustmentMode = Literal["none", "resstock"]
+TEMPERATURE_ADJUSTMENT_MODES: Final[frozenset[str]] = frozenset({"none", "resstock"})
 
 # Package directory (utils/EVs); data lives under ev_data/
 EVS_DIR: Final[Path] = Path(__file__).resolve().parent
@@ -73,11 +78,11 @@ class EVDemandConfig:
     end_date: datetime | None = None
 
     metadata_path: str | None = None
+    # Required when ev_assignment=pums_vehicles; ignored for resstock_adoption.
     pums_path: str | None = None
     nhts_path: str = str(EV_DATA_DIR / "inputs" / "NHTS_v2_1_trip_surveys.csv")
-    ev_ownership_path: str = str(
-        EV_DATA_DIR / "inputs" / "resstock_ev_reference" / "Electric_Vehicle_Ownership.tsv"
-    )
+    # Required when ev_assignment=resstock_adoption; ignored for pums_vehicles.
+    ev_ownership_path: str | None = None
     # ResStock national BEV class × range shares (housing-characteristic TSV).
     ev_battery_path: str = str(
         EV_DATA_DIR / "inputs" / "resstock_ev_reference" / "Electric_Vehicle_Battery.tsv"
@@ -90,6 +95,9 @@ class EVDemandConfig:
         / "resstock_autonomie_2022_vehicle_params.csv"
     )
     output_dir: Path | None = None
+    # ResStock OEDI weather CSVs named ``{station}.csv`` (required when
+    # temperature_adjustment=resstock; ignored otherwise).
+    weather_dir: str | None = None
 
     # Sampling / matching
     # Default: ResStock max-1-EV adoption (no NHTS vehicle-count matching).
@@ -111,6 +119,10 @@ class EVDemandConfig:
 
     # Battery assignment
     capacity_buffer_fraction: float = DEFAULT_CAPACITY_BUFFER_FRACTION
+
+    # Discharge temperature dependence (ResStock curve on Autonomie kWh/mi).
+    # none: miles * kwh_per_mile; resstock: × power_mult(T_outdoor) using weather_dir CSVs.
+    temperature_adjustment: TemperatureAdjustmentMode = "none"
 
     # Pipeline
     max_workers: int | None = 8
@@ -149,6 +161,11 @@ class EVDemandConfig:
                 f"ev_assignment must be one of {sorted(EV_ASSIGNMENT_MODES)}; "
                 f"got {self.ev_assignment!r}"
             )
+        if self.temperature_adjustment not in TEMPERATURE_ADJUSTMENT_MODES:
+            raise ValueError(
+                f"temperature_adjustment must be one of {sorted(TEMPERATURE_ADJUSTMENT_MODES)}; "
+                f"got {self.temperature_adjustment!r}"
+            )
 
         if self.ev_assignment == "pums_vehicles":
             if self.max_vehicles is None:
@@ -168,14 +185,49 @@ class EVDemandConfig:
             self.metadata_path = str(
                 EV_DATA_DIR / "inputs" / self.release / "metadata" / self.state / "metadata.parquet"
             )
-        if self.pums_path is None:
-            self.pums_path = str(
-                EV_DATA_DIR / "inputs" / f"{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
-            )
         if self.output_dir is None:
             self.output_dir = EV_DATA_DIR / "outputs" / f"{self.state}_{self.release}"
         elif not isinstance(self.output_dir, Path):
             self.output_dir = Path(self.output_dir)
+
+        # Mode-specific path defaults: only require files the active mode uses.
+        if self.ev_assignment == "pums_vehicles":
+            if self.pums_path is None:
+                self.pums_path = str(
+                    EV_DATA_DIR / "inputs" / f"{self.state}_2021_pums_PUMA_HINCP_VEH_NP.csv"
+                )
+            if self.ev_ownership_path is not None:
+                logging.warning(
+                    "paths.ev_ownership_path is ignored when ev_assignment=pums_vehicles"
+                )
+        else:
+            if self.ev_ownership_path is None:
+                self.ev_ownership_path = str(
+                    EV_DATA_DIR
+                    / "inputs"
+                    / "resstock_ev_reference"
+                    / "Electric_Vehicle_Ownership.tsv"
+                )
+            if self.pums_path is not None:
+                logging.warning(
+                    "paths.pums_path is ignored when ev_assignment=resstock_adoption"
+                )
+
+        if self.temperature_adjustment == "resstock":
+            if self.weather_dir is None:
+                self.weather_dir = str(
+                    EV_DATA_DIR / "inputs" / self.release / "weather" / self.state
+                )
+            if not self.weather_dir:
+                raise ValueError(
+                    "temperature_adjustment=resstock requires paths.weather_dir "
+                    "(or the default under ev_data/inputs/<release>/weather/<state>)"
+                )
+        elif self.weather_dir is not None:
+            logging.warning(
+                "paths.weather_dir is ignored when temperature_adjustment=%s",
+                self.temperature_adjustment,
+            )
 
         if not (0.0 <= self.nhts_daily_miles_percentile_low <= self.nhts_daily_miles_percentile_high <= 100.0):
             raise ValueError(
@@ -428,8 +480,8 @@ def resolve_hourly_prices(config: EVDemandConfig) -> np.ndarray | None:
 def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
     """Load an ``EVDemandConfig`` from a YAML scenario file.
 
-    Nested sections ``paths``, ``sampling``, ``trips``, ``battery``, ``pipeline``,
-    and ``charging`` are flattened into dataclass fields. Dates may be ISO strings.
+    Nested sections ``paths``, ``sampling``, ``trips``, ``battery``, ``temperature``,
+    ``pipeline``, and ``charging`` are flattened into dataclass fields. Dates may be ISO strings.
     """
     config_path = Path(path)
     with config_path.open() as f:
@@ -440,7 +492,7 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
         if key in raw:
             flat[key] = raw[key]
 
-    for section in ("paths", "sampling", "trips", "battery", "pipeline", "charging"):
+    for section in ("paths", "sampling", "trips", "battery", "temperature", "pipeline", "charging"):
         section_data = raw.get(section) or {}
         if not isinstance(section_data, dict):
             raise ValueError(f"YAML section '{section}' must be a mapping, got {type(section_data)}")
@@ -525,11 +577,11 @@ class EVDemandCalculator:
         self,
         metadata_df: pl.DataFrame,
         nhts_df: pl.DataFrame,
-        ev_ownership_df: pl.DataFrame,
         ev_battery_df: pl.DataFrame,
         ev_autonomie_df: pl.DataFrame,
         start_date: datetime,
         end_date: datetime,
+        ev_ownership_df: pl.DataFrame | None = None,
         pums_df: pl.DataFrame | None = None,
         *,
         ev_assignment: EvAssignmentMode = "resstock_adoption",
@@ -553,11 +605,11 @@ class EVDemandCalculator:
         Args:
             metadata_df: ResStock metadata DataFrame
             nhts_df: NHTS trip data DataFrame
-            ev_ownership_df: NREL EV ownership lookup (from load_ev_ownership_lookup)
             ev_battery_df: ResStock EV battery option shares (from load_ev_battery_lookup)
             ev_autonomie_df: Autonomie capacity / efficiency params (from load_ev_autonomie_params)
             start_date: Start date for trip generation
             end_date: End date for trip generation
+            ev_ownership_df: NREL EV ownership lookup (required for ``resstock_adoption``)
             pums_df: PUMS data DataFrame (required when ``ev_assignment=pums_vehicles``
                 unless a fitted ``vehicle_ownership`` is passed)
             ev_assignment: How to assign EV slots — ``pums_vehicles`` or ``resstock_adoption``
@@ -580,6 +632,10 @@ class EVDemandCalculator:
                     "pums_df or a fitted vehicle_ownership model is required when "
                     "ev_assignment=pums_vehicles"
                 )
+        elif ev_ownership_df is None:
+            raise ValueError(
+                "ev_ownership_df is required when ev_assignment=resstock_adoption"
+            )
         match_on_vehicles = ev_assignment == "pums_vehicles"
         # Cap used only for NHTS household-fleet bucketing (tier-1 keys). Adoption mode
         # does not match on vehicles, so the default of 2 is unused for matching but
@@ -618,10 +674,13 @@ class EVDemandCalculator:
                 )
                 self.vehicle_ownership.fit(pums_df)
 
-        self.ev_adoption_sampler = EVAdoptionSampler(
-            ev_ownership_df=ev_ownership_df,
-            random_state=random_state,
-        )
+        self.ev_adoption_sampler: EVAdoptionSampler | None = None
+        if ev_assignment == "resstock_adoption":
+            assert ev_ownership_df is not None  # validated above
+            self.ev_adoption_sampler = EVAdoptionSampler(
+                ev_ownership_df=ev_ownership_df,
+                random_state=random_state,
+            )
         self.battery_assigner = EVBatteryAssigner(
             option_probabilities=ev_battery_df,
             autonomie_params=ev_autonomie_df,
@@ -660,9 +719,9 @@ class EVDemandCalculator:
         *,
         metadata_df: pl.DataFrame,
         nhts_df: pl.DataFrame,
-        ev_ownership_df: pl.DataFrame,
         ev_battery_df: pl.DataFrame,
         ev_autonomie_df: pl.DataFrame,
+        ev_ownership_df: pl.DataFrame | None = None,
         pums_df: pl.DataFrame | None = None,
         vehicle_ownership: VehicleOwnershipModel | None = None,
     ) -> "EVDemandCalculator":
@@ -672,11 +731,11 @@ class EVDemandCalculator:
         return cls(
             metadata_df=metadata_df,
             nhts_df=nhts_df,
-            ev_ownership_df=ev_ownership_df,
             ev_battery_df=ev_battery_df,
             ev_autonomie_df=ev_autonomie_df,
             start_date=config.start_date,
             end_date=config.end_date,
+            ev_ownership_df=ev_ownership_df,
             pums_df=pums_df,
             ev_assignment=config.ev_assignment,
             max_vehicles=config.max_vehicles,
@@ -783,6 +842,7 @@ class EVDemandCalculator:
             "Sampling EV ownership from ResStock adoption rates "
             "(max 1 EV per household; match_on_vehicles=False)"
         )
+        assert self.ev_adoption_sampler is not None  # validated in __init__
         bldg_ev_df = self.ev_adoption_sampler.sample(self.metadata_df)
         # NHTS sampler expects a ``vehicles`` column (count of EV slots to fill).
         return bldg_ev_df.with_columns(pl.col("evs").alias("vehicles"))
@@ -804,6 +864,7 @@ class EVDemandCalculator:
         soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
         soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
         allow_emergency_peak_charging: bool = False,
+        hourly_temp_f_by_bldg: pl.DataFrame | None = None,
     ) -> pl.DataFrame:
         """Generate hourly SOC / charge / discharge schedules from trip schedules."""
         if ev_attributes.is_empty():
@@ -823,6 +884,7 @@ class EVDemandCalculator:
             soc_min_fraction=soc_min_fraction,
             soc_safety_buffer_fraction=soc_safety_buffer_fraction,
             allow_emergency_peak_charging=allow_emergency_peak_charging,
+            hourly_temp_f_by_bldg=hourly_temp_f_by_bldg,
         )
 
 
@@ -902,18 +964,22 @@ def main():
         print("Error: Start date must be before end date")
         return 1
 
-    (
-        metadata_df,
-        nhts_df,
-        pums_df,
-        ev_ownership_df,
-        ev_battery_df,
-        ev_autonomie_df,
-    ) = ev_utils.load_all_input_data(config)
+    inputs = ev_utils.load_all_input_data(config)
+    metadata_df = inputs.metadata_df
+    nhts_df = inputs.nhts_df
+    pums_df = inputs.pums_df
+    ev_ownership_df = inputs.ev_ownership_df
+    ev_battery_df = inputs.ev_battery_df
+    ev_autonomie_df = inputs.ev_autonomie_df
+    weather_map = inputs.weather_map
+    station_temps = inputs.station_temps
+
     print(f"Loaded metadata: {len(metadata_df)} rows")
     print(f"Loaded NHTS data: {len(nhts_df)} rows")
-    print(f"Loaded PUMS data: {len(pums_df)} rows")
-    print(f"Loaded EV ownership lookup: {ev_ownership_df.height:,} rows")
+    if pums_df is not None:
+        print(f"Loaded PUMS data: {len(pums_df)} rows")
+    if ev_ownership_df is not None:
+        print(f"Loaded EV ownership lookup: {ev_ownership_df.height:,} rows")
     print(f"Loaded EV battery options: {ev_battery_df.height:,} rows")
     print(f"Loaded Autonomie vehicle params: {ev_autonomie_df.height:,} rows")
     print(f"EV assignment mode: {config.ev_assignment}")
@@ -921,10 +987,16 @@ def main():
         print(f"PUMS max_vehicles: {config.max_vehicles} (NHTS match_on_vehicles=True)")
     else:
         print("ResStock adoption: max 1 EV/household (NHTS match_on_vehicles=False)")
+        assert ev_ownership_df is not None
         state_ev_rate = ev_utils.state_ev_ownership_rate(ev_ownership_df, config.state)
         print(
             f"PUMS-weighted mean P(EV) over occupied lookup segments ({config.state}): {state_ev_rate:.4f}"
         )
+    print(f"Temperature adjustment: {config.temperature_adjustment}")
+    if config.temperature_adjustment == "resstock":
+        print(f"Weather dir: {config.weather_dir}")
+        if station_temps is not None:
+            print(f"Preloaded weather stations: {len(station_temps)}")
     print(
         f"NHTS daily-miles percentile band: "
         f"[{config.nhts_daily_miles_percentile_low}, {config.nhts_daily_miles_percentile_high}]"
@@ -933,6 +1005,7 @@ def main():
     fitted_vehicle_ownership: VehicleOwnershipModel | None = None
     if config.ev_assignment == "pums_vehicles":
         assert config.max_vehicles is not None  # validated in EVDemandConfig
+        assert pums_df is not None
         fitted_vehicle_ownership = VehicleOwnershipModel(
             max_vehicles=config.max_vehicles,
             random_state=config.random_state,
@@ -954,6 +1027,8 @@ def main():
             f"Note: prices loaded ({len(hourly_prices):,} hours) but ignored for "
             f"charging_strategy={config.charging_strategy}"
         )
+
+    hours_base = build_hours_base(config.start_date, config.end_date)
 
     batch_size = config.batch_size
     total_rows = len(metadata_df)
@@ -986,7 +1061,21 @@ def main():
             "charger_power_kw": config.charger_power_kw,
             "charging_strategy": config.charging_strategy,
             "initial_soc_kwh": config.initial_soc_kwh,
+            "hours_base": hours_base,
         }
+        if config.temperature_adjustment == "resstock":
+            if config.weather_dir is None:
+                raise ValueError("weather_dir is required when temperature_adjustment=resstock")
+            if batch_ev_attributes.height > 0:
+                soc_kwargs["hourly_temp_f_by_bldg"] = ev_utils.load_hourly_temp_f_for_buildings(
+                    batch_ev_attributes["bldg_id"],
+                    hours_base=hours_base,
+                    state=config.state,
+                    release=config.release,
+                    weather_dir=config.weather_dir,
+                    weather_map=weather_map,
+                    station_temps=station_temps,
+                )
         if config.charging_strategy == "off_peak":
             soc_kwargs["peak_clock_hours"] = config.peak_clock_hours
             soc_kwargs["soc_min_fraction"] = config.soc_min_fraction

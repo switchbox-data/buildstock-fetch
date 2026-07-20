@@ -283,7 +283,11 @@ class TripScheduleGenerator:
             "miles_driven": miles_driven,
         }
 
-        return pl.DataFrame(schedule_data)
+        # Within each day, emit trips in chronological departure order (sampling /
+        # packing may leave them in NHTS or shuffled index order).
+        return pl.DataFrame(schedule_data).sort(
+            ["date", "departure_hour", "arrival_hour"]
+        )
 
     def generate(
         self,
@@ -345,10 +349,12 @@ class TripScheduleGenerator:
         total_schedules = sum(len(schedule_df) for schedule_df in all_schedules)
         logging.info(f"Generated {total_schedules} trip schedules from {total_profiles} vehicle profiles")
 
-        if all_schedules:
-            return pl.concat(all_schedules)
-        else:
+        if not all_schedules:
             return pl.DataFrame()
+        # Parallel concat order is nondeterministic; sort for stable, chrono-readable output.
+        return pl.concat(all_schedules).sort(
+            ["bldg_id", "vehicle_id", "date", "departure_hour", "arrival_hour"]
+        )
 
     @staticmethod
     def max_daily_miles_from_trip_schedules(trip_schedules: pl.DataFrame) -> pl.DataFrame:

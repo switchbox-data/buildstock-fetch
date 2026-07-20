@@ -14,15 +14,21 @@ paths:
   # Omit to use defaults under utils/EVs/ev_data/
   # metadata_path: utils/EVs/ev_data/inputs/res_2024_tmy3_2/metadata/MD/metadata.parquet
   # nhts_path: utils/EVs/ev_data/inputs/NHTS_v2_1_trip_surveys.csv
-  # pums_path: utils/EVs/ev_data/inputs/MD_2021_pums_PUMA_HINCP_VEH_NP.csv
   # output_dir: utils/EVs/ev_data/outputs/MD_res_2024_tmy3_2
+  # Only needed for sampling.ev_assignment=pums_vehicles:
+  # pums_path: utils/EVs/ev_data/inputs/MD_2021_pums_PUMA_HINCP_VEH_NP.csv
+  # Only needed for sampling.ev_assignment=resstock_adoption (default path if omitted):
+  # ev_ownership_path: utils/EVs/ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Ownership.tsv
+  # Only needed for temperature.temperature_adjustment=resstock:
+  # weather_dir: utils/EVs/ev_data/inputs/res_2024_tmy3_2/weather/MD
 
 sampling:
   random_state: 42
   # How to assign EV slots to households:
   #   resstock_adoption — ResStock P(EV) Bernoulli sample (max 1 EV); do not match NHTS on vehicles
+  #                       (loads Electric_Vehicle_Ownership.tsv; does not load PUMS)
   #   pums_vehicles     — PUMS vehicle-count model; treat all as EVs; match NHTS on vehicles
-  #                       (requires max_vehicles below)
+  #                       (requires max_vehicles; loads PUMS; does not load ownership TSV)
   ev_assignment: resstock_adoption
   # max_vehicles: 2  # required only when ev_assignment=pums_vehicles
   # Keep middle of NHTS vehicles by max survey-day miles (0–100 = full pool)
@@ -42,6 +48,15 @@ trips:
 battery:
   # Feasible pack must cover max_daily_miles * kwh_per_mile * (1 + buffer)
   capacity_buffer_fraction: 0.2
+
+temperature:
+  # none — Autonomie kWh/mi only (no weather files loaded)
+  # resstock — scale discharge by OpenStudio-HPXML / Geotab–Recurrent power_mult(T)
+  #            preloads weather_map + station CSVs for all metadata buildings
+  #            (paths.weather_dir; default under
+  #            utils/EVs/ev_data/inputs/<release>/weather/<state>/{station}.csv)
+  temperature_adjustment: resstock
+  # weather_dir: utils/EVs/ev_data/inputs/res_2024_tmy3_2/weather/MD
 
 pipeline:
   max_workers: 8

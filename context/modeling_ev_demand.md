@@ -8,7 +8,7 @@ Our procedure is outlined below.
 
 ## 1. Assigning EVs to ResStock buildings
 
-First, given a sample of ResStock buildings generated from the 2024 release, we need to assign EVs to households. To do so, we use the EV_Ownership.tsv file (https://github.com/NatLabRockies/resstock/tree/develop/project_national/housing_characteristics), which was published as part of the 2025 ResStock release. This file assumes each household has at most one EV and provides EV ownership rates by federal poverty level (FPL), building type, tenure, and PUMA.
+First, given a sample of ResStock buildings generated from the 2024 release, we need to assign EVs to households. To do so, we use the EV_Ownership.tsv file (https://github.com/NatLabRockies/resstock/tree/develop/project_national/housing_characteristics), which was published as part of the 2025 ResStock release and provides EV ownership rates by federal poverty level (FPL), building type, tenure, and PUMA. As is done in the 2025 ResStock release, we also assume each household has at most one EV.
 
 We directly apply these rates to ResStock buildings sampled from the 2024 release, but the sake of understanding assumptions used and how we might replicate this at higher EV adoption rates, we outline the procedure for how EV_Ownership.tsv was generated. These steps are explained in more detail in the NLR's EV Integration Report (https://www.osti.gov/biblio/2584243) and Technical Reference Guide (https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/2025/resstock_amy2018_release_1/ResStockTechnicalReferenceGuide_2025_1.pdf). 
 
@@ -55,7 +55,7 @@ Notes:
 - NHTS data should probably be matched from 4am one day to 3:59am the next day for consistency (otherwise they are only replaying trips from 12am-3:59am or 4am-11:59pm -- check this!)
 - If we assume that all households have at most one EV, then we should not be matching trip profiles based on the number of vehicles (this is fixed, now there is the match_on_vehicles flag)
 - Right now code assumes if multiple vehicles, they are matched in the same 'tier'
-- as a pre-processing step (or should this be done in load_nhts_data?), we recommend taking removing the bottom and top 10% (or 5%?) trip profiles in terms of daily miles traveled
+- as a pre-processing step (or should this be done in load_nhts_data?), we recommend removing the bottom and top 10% (or 5%?) trip profiles in terms of daily miles traveled
 
 ## 4. Simulating hourly travel for a given period of time
 

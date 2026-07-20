@@ -516,7 +516,8 @@ def test_generate_daily_schedules_no_invalid_or_overlapping_trips(calculator):
     )
 
     for day_trips in schedules.partition_by("date", as_dict=False):
-        day_trips = day_trips.sort("departure_hour")
+        deps = day_trips["departure_hour"].to_list()
+        assert deps == sorted(deps)
         for row in day_trips.iter_rows(named=True):
             assert row["arrival_hour"] > row["departure_hour"]
 
@@ -1252,6 +1253,68 @@ def test_generate_soc_schedules_respects_per_vehicle_battery_attrs(calculator):
     assert b1["discharge_kwh"].sum() < b2["discharge_kwh"].sum()
 
 
+def test_generate_soc_schedules_applies_resstock_temp_scale(calculator):
+    """Cold outdoor temp increases discharge kWh via ResStock power_mult; charge kW unchanged."""
+    from utils.EVs.ev_utils import resstock_temp_power_mult
+
+    trips = pl.DataFrame({
+        "bldg_id": ["b1"],
+        "vehicle_id": [1],
+        "date": [calculator.start_date],
+        "departure_hour": [9],
+        "arrival_hour": [10],
+        "miles_driven": [10.0],
+    })
+    attrs = make_ev_attributes([("b1", 1)], battery_capacity_kwh=90.0, kwh_per_mile=0.30)
+    hours_base = build_hours_base(calculator.start_date, calculator.end_date)
+    cold_f = 0.0
+    hourly_temp = hours_base.select(
+        pl.lit("b1").alias("bldg_id"),
+        "hour_index",
+        pl.lit(cold_f).alias("temp_f"),
+    )
+
+    soc = calculator.generate_soc_schedules(
+        trips,
+        vehicle_keys=[("b1", 1)],
+        ev_attributes=attrs,
+        hours_base=hours_base,
+        hourly_temp_f_by_bldg=hourly_temp,
+        charger_power_kw=7.2,
+    )
+    expected = 10.0 * 0.30 * float(resstock_temp_power_mult(cold_f))
+    assert soc["discharge_kwh"].sum() == pytest.approx(expected, rel=1e-6)
+    # Immediate charging still refills the (larger) discharge at fixed charger power.
+    assert soc["charge_kwh"].sum() == pytest.approx(expected, rel=1e-6)
+    assert soc.filter(pl.col("charge_kwh") > 0)["charge_kwh"].max() <= 7.2 + 1e-9
+
+
+def test_load_ev_demand_config_temperature_section(tmp_path):
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    cfg_path = tmp_path / "ev.yaml"
+    cfg_path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01
+end_date: 2024-01-02
+sampling:
+  ev_assignment: resstock_adoption
+temperature:
+  temperature_adjustment: resstock
+paths:
+  weather_dir: /tmp/weather_md
+charging:
+  charging_strategy: immediate
+  charger_power_kw: 7.2
+"""
+    )
+    config = load_ev_demand_config(cfg_path)
+    assert config.temperature_adjustment == "resstock"
+    assert config.weather_dir == "/tmp/weather_md"
+
+
 def test_nhts_daily_miles_percentile_filter_noop_by_default(mock_nhts_data):
     """0–100 percentile band leaves the NHTS pool unchanged."""
     filtered = NHTSProfileSampler.filter_by_daily_miles_percentile(
@@ -1332,6 +1395,10 @@ charging:
     assert config.flat_price_usd_per_kwh is None
     assert config.num_simulation_hours() == 31 * 24
     assert "ev_data/inputs" in config.nhts_path.replace("\\", "/")
+    assert config.ev_ownership_path is not None
+    assert config.pums_path is None
+    assert config.weather_dir is None
+    assert config.temperature_adjustment == "none"
 
 
 def test_resolve_hourly_prices_flat_and_daily():
@@ -1422,13 +1489,14 @@ def test_load_md_2024_config_off_peak():
     from utils.EVs.ev_demand import load_ev_demand_config
 
     config = load_ev_demand_config("utils/EVs/configs/md_2024.yaml")
-    assert config.charging_strategy == "off_peak"
+    assert config.charging_strategy == "off_peak_immediate"
     assert config.peak_clock_hours == (17, 18, 19, 20, 21)
-    assert config.soc_min_fraction == 0.2
-    assert config.soc_safety_buffer_fraction == 0.2
+    assert config.soc_min_fraction is None
+    assert config.soc_safety_buffer_fraction is None
     assert config.shed_load_penalty_usd_per_kwh is None
     assert config.flat_price_usd_per_kwh is None
     assert config.allow_emergency_peak_charging is False
+    assert config.temperature_adjustment == "none"
 
 
 def test_off_peak_immediate_config_requires_peak_only():
@@ -1493,6 +1561,59 @@ sampling:
     assert config.ev_assignment == "pums_vehicles"
     assert config.max_vehicles == 2
     assert config.match_on_vehicles is True
+    assert config.pums_path is not None
+    assert config.ev_ownership_path is None
+    assert config.weather_dir is None
+
+
+def test_config_path_defaults_by_mode():
+    from utils.EVs.ev_demand import EVDemandConfig
+
+    adoption = EVDemandConfig(
+        state="MD",
+        release="res_2024_tmy3_2",
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 1, 2),
+        ev_assignment="resstock_adoption",
+    )
+    assert adoption.ev_ownership_path is not None
+    assert adoption.pums_path is None
+    assert adoption.weather_dir is None
+
+    pums = EVDemandConfig(
+        state="MD",
+        release="res_2024_tmy3_2",
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 1, 2),
+        ev_assignment="pums_vehicles",
+        max_vehicles=2,
+    )
+    assert pums.pums_path is not None
+    assert pums.ev_ownership_path is None
+
+    with_temp = EVDemandConfig(
+        state="MD",
+        release="res_2024_tmy3_2",
+        start_date=datetime(2024, 1, 1),
+        end_date=datetime(2024, 1, 2),
+        temperature_adjustment="resstock",
+    )
+    assert with_temp.weather_dir is not None
+
+
+def test_calculator_requires_ownership_for_adoption(
+    mock_nhts_data, mock_metadata, ev_battery_df, ev_autonomie_df
+):
+    with pytest.raises(ValueError, match="ev_ownership_df is required"):
+        EVDemandCalculator(
+            metadata_df=mock_metadata,
+            nhts_df=mock_nhts_data,
+            ev_battery_df=ev_battery_df,
+            ev_autonomie_df=ev_autonomie_df,
+            start_date=datetime(2022, 1, 1),
+            end_date=datetime(2022, 1, 7),
+            ev_assignment="resstock_adoption",
+        )
 
 
 def test_load_ev_demand_config_rejects_match_on_vehicles(tmp_path):
@@ -1557,7 +1678,6 @@ def test_assign_ev_slots_pums_vehicles(calculator, mock_metadata):
     calc = EVDemandCalculator(
         metadata_df=meta,
         nhts_df=calculator.nhts_df,
-        ev_ownership_df=calculator.ev_ownership_df,
         ev_battery_df=calculator.ev_battery_df,
         ev_autonomie_df=calculator.ev_autonomie_df,
         start_date=calculator.start_date,

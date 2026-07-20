@@ -720,16 +720,37 @@ def _search_list_for_weather_station(data, path=""):
 
 
 def _remove_duplicates(weather_map_df: pl.DataFrame) -> pl.DataFrame:
-    """Remove duplicates from the weather map DataFrame."""
+    """Drop duplicate building→station rows for the same release/state/upgrade.
+
+    ``bldg_id`` alone is not unique across products, releases, or states (ResStock
+    reuses numeric IDs), so dedupe on the full identity key.
+    """
     if "bldg_id" not in weather_map_df.columns:
         raise MissingBldgIdError()
+    identity_cols = [
+        "product",
+        "release_year",
+        "weather_file",
+        "release_version",
+        "state",
+        "upgrade_id",
+        "bldg_id",
+    ]
+    missing = [c for c in identity_cols if c not in weather_map_df.columns]
+    if missing:
+        raise ValueError(
+            "weather map is missing identity columns required for deduplication: "
+            f"{missing}"
+        )
     original_count = len(weather_map_df)
-    weather_map_df = weather_map_df.unique(subset=["bldg_id"], maintain_order=False)
+    weather_map_df = weather_map_df.unique(subset=identity_cols, maintain_order=False)
     final_count = len(weather_map_df)
     if original_count != final_count:
-        print(f"Removed {original_count - final_count} duplicate bldg_id entries")
-    weather_map_df = weather_map_df.sort("bldg_id")
-    return weather_map_df
+        print(
+            f"Removed {original_count - final_count} duplicate "
+            f"(product/release/state/upgrade/bldg_id) entries"
+        )
+    return weather_map_df.sort(identity_cols)
 
 
 def _modify_buildstock_releases_json(release_name: str, state: str) -> dict:

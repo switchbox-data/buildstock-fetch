@@ -19,6 +19,7 @@ from utils.EVs.charging import (
     schedule_off_peak_charging,
     schedule_off_peak_immediate_charging,
 )
+from utils.EVs.ev_utils import resstock_temp_power_mult
 
 DEFAULT_LEVEL2_CHARGER_KW = 7.2  # typical 32 A @ 240 V residential Level 2 charger
 
@@ -123,6 +124,7 @@ class ChargingSimulator:
         hours_base: pl.DataFrame,
         *,
         kwh_per_mile_by_vehicle: pl.DataFrame,
+        hourly_temp_f_by_bldg: pl.DataFrame | None = None,
     ) -> pl.DataFrame:
         """Map each vehicle's trip schedule to an hourly schedule of discharge kWh for the instance date range.
         Spread each trip's driving energy uniformly over its away-from-home hours.
@@ -130,11 +132,16 @@ class ChargingSimulator:
         Away hours are ``range(departure_hour, arrival_hour)`` where ``arrival_hour`` is the
         first hour at home (exclusive end of the away interval).
 
+        When ``hourly_temp_f_by_bldg`` is provided (``bldg_id``, ``hour_index``, ``temp_f``),
+        each away-hour discharge share is scaled by the ResStock / OpenStudio-HPXML
+        ``resstock_temp_power_mult(temp_f)``. Charge power is not adjusted here.
+
         Args:
             trip_schedules (pl.DataFrame): DataFrame of trip schedules
             hours_base (pl.DataFrame): hourly calendar for the instance date range
             kwh_per_mile_by_vehicle: ``bldg_id``, ``vehicle_id``, ``kwh_per_mile`` frame
                 (from ResStock / Autonomie attributes)
+            hourly_temp_f_by_bldg: Optional per-building outdoor dry-bulb °F by ``hour_index``
 
         Returns:
             pl.DataFrame: hourly discharge kWh for each trip
@@ -172,7 +179,7 @@ class ChargingSimulator:
                 + ", ".join(repr((row["bldg_id"], row["vehicle_id"])) for row in missing_keys)
             )
 
-        # convert miles driven to kWh
+        # Baseline trip energy at Autonomie design-condition efficiency (before temp scale).
         trip_kwh_expr = pl.col("miles_driven") * pl.col("kwh_per_mile")
 
         # assume the trip is driven evenly across the away hours (uniform discharge over hours away)
@@ -193,11 +200,47 @@ class ChargingSimulator:
                 on=["date", "hour"],
                 how="inner",
             )
-            .group_by("bldg_id", "vehicle_id", "hour_index")
+        )
+
+        # apply temperature scaling to discharge
+        if hourly_temp_f_by_bldg is not None:
+            temp_required = {"bldg_id", "hour_index", "temp_f"}
+            temp_missing = temp_required - set(hourly_temp_f_by_bldg.columns)
+            if temp_missing:
+                raise ValueError(f"hourly_temp_f_by_bldg missing columns: {sorted(temp_missing)}")
+            away_hour_discharge = away_hour_discharge.join(
+                hourly_temp_f_by_bldg.select("bldg_id", "hour_index", "temp_f"),
+                on=["bldg_id", "hour_index"],
+                how="left",
+            )
+            if away_hour_discharge["temp_f"].null_count() > 0:
+                missing_temp = (
+                    away_hour_discharge.filter(pl.col("temp_f").is_null())
+                    .select("bldg_id", "hour_index")
+                    .unique()
+                    .head(5)
+                    .to_dicts()
+                )
+                raise ValueError(
+                    "hourly_temp_f_by_bldg missing outdoor temp for discharge hour(s); "
+                    f"examples: {missing_temp}"
+                )
+            # compute power multiplier for each hour based on temperature and apply to discharge
+            temps = away_hour_discharge["temp_f"].to_numpy()
+            power_mult = np.asarray(resstock_temp_power_mult(temps), dtype=np.float64) 
+            away_hour_discharge = away_hour_discharge.with_columns(
+                pl.Series("power_mult", power_mult),
+            ).with_columns(
+                (pl.col("discharge_kwh_per_away_hour") * pl.col("power_mult")).alias(
+                    "discharge_kwh_per_away_hour"
+                )
+            )
+
+        return (
+            away_hour_discharge.group_by("bldg_id", "vehicle_id", "hour_index")
             # overlapping trips contributing to the same hour add their discharge shares together
             .agg(pl.col("discharge_kwh_per_away_hour").sum().alias("discharge_kwh"))
         )
-        return away_hour_discharge
 
     @staticmethod
     def _battery_attrs_lookup(
@@ -257,6 +300,7 @@ class ChargingSimulator:
         soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
         soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
         allow_emergency_peak_charging: bool = False,
+        hourly_temp_f_by_bldg: pl.DataFrame | None = None,
     ) -> pl.DataFrame:
         """
         Map each vehicle to an hourly SOC, charging, and discharge schedule for the instance date range.
@@ -302,6 +346,9 @@ class ChargingSimulator:
             soc_safety_buffer_fraction: Extra SOC fraction above daily trip energy for ``off_peak``
             allow_emergency_peak_charging: For ``off_peak_immediate`` only; allow on-peak home
                 charging when remaining off-peak supply cannot cover the next trip
+            hourly_temp_f_by_bldg: Optional ``bldg_id``, ``hour_index``, ``temp_f`` (°F) used to
+                scale discharge kWh via ResStock ``resstock_temp_power_mult``; ``None`` leaves
+                Autonomie ``kwh_per_mile`` unscaled
 
         Returns:
             Long-form DataFrame with one row per vehicle-hour, including presence and SOC columns.
@@ -358,11 +405,12 @@ class ChargingSimulator:
             "kwh_per_mile": [vals[1] for vals in attrs_lookup.values()],
         })
 
-        # Build hourly discharge kWh from per-vehicle Autonomie efficiency.
+        # Build hourly discharge kWh from per-vehicle Autonomie efficiency (+ optional temp scale).
         discharge_by_hour = self._build_hourly_discharge_kwh(
             trip_schedules,
             hours_base,
             kwh_per_mile_by_vehicle=kwh_per_mile_by_vehicle,
+            hourly_temp_f_by_bldg=hourly_temp_f_by_bldg,
         )
 
         discharge_lookup: dict[tuple[str | int, int], dict[int, float]] = {}
