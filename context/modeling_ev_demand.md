@@ -51,29 +51,32 @@ We model trips with an hourly level of granularity, so we map the start and end 
 
 So, for example, a trip from 9:17am to 9:50am is logged as 9am departure from home and 10am arrival back home. As another example, a trip from 9:50am to 10:15am gets logged as a 9am departure and an 11am arrival. Future work should also consider modeling trips with a finer level of granularity.
 
+These clock hours are then placed on an NHTS **travel day** (4am → 3:59am next day): hours 0–3 belong to the calendar morning after the travel-day start date, and overnight trips may span midnight.
+
 Notes:
-- NHTS data should probably be matched from 4am one day to 3:59am the next day for consistency (otherwise they are only replaying trips from 12am-3:59am or 4am-11:59pm -- check this!)
 - If we assume that all households have at most one EV, then we should not be matching trip profiles based on the number of vehicles (this is fixed, now there is the match_on_vehicles flag)
 - Right now code assumes if multiple vehicles, they are matched in the same 'tier'
 - as a pre-processing step (or should this be done in load_nhts_data?), we recommend removing the bottom and top 10% (or 5%?) trip profiles in terms of daily miles traveled
 
 ## 4. Simulating hourly travel for a given period of time
 
-Next, for a given simulation range, we generate hourly travel for each EV over the date range passed to the model (typically a full calendar year). From step 3, each EV has a matched weekday trip profile and a matched weekend trip profile drawn from NHTS. We do this as follows:
+Next, for a given simulation range, we generate hourly travel for each EV over the date range passed to the model. The simulation window **must** align with NHTS travel days: `start_date` at 04:00 and `end_date` at 03:00 (e.g. `2024-01-01T04:00:00` through `2025-01-01T03:00:00`). Date-only config values are rejected. From step 3, each EV has a matched weekday trip profile and a matched weekend trip profile drawn from NHTS. We do this as follows:
 
-For each day in the simulation range:
-- Use the matched weekday profile if the calendar day is Monday–Friday, and the matched weekend profile if it is Saturday or Sunday. If a vehicle is missing a profile for that day type, skip the day entirely (treat the vehicle as home all day).
+For each travel day in the simulation range (4am on date $D$ through 3:59am on $D+1$):
+- Use the matched weekday profile if $D$ is Monday–Friday, and the matched weekend profile if it is Saturday or Sunday. If a vehicle is missing a profile for that day type, skip the travel day entirely (treat the vehicle as home).
+- Map each NHTS clock hour onto the travel-day axis (hours before 4am → early morning on $D+1$).
 - For each trip in that day's profile, independently draw a departure offset and an arrival offset from the discrete distribution on (-2, -1, 0, 1, 2) with probabilities p = (0.05, 0.10, 0.70, 0.10, 0.05), and draw miles traveled from a normal distribution centered at the logged miles with standard deviation equal to 10% of the mean.
-- Add the sampled offsets to the base departure and arrival hours, then clip departures to [0, 23] and arrivals to [1, 24].
-- Normalize the day's perturbed trips in departure order:
-  - enforce at least one away hour per trip (`arrival_hour > departure_hour`)
+- Add the sampled offsets in travel-day hours, then clip departures/arrivals to the travel-day window $[4, 28)$ (where 24–27 are clock hours 0–3 next day).
+- Normalize the travel day's perturbed trips in departure order:
+  - enforce at least one away hour per trip (`arrival > departure` on the travel-day axis)
   - if trips overlap, push later departures forward to the previous trip's arrival hour (the next trip may start immediately when the prior one ends)
-  - cap arrivals at hour 24, so trips ending after 11:59pm are truncated
-  - drop any trip whose departure can no longer fit before midnight, and drop all remaining trips after that point.
+  - cap arrivals at the travel-day end (4am next day), so trips cannot spill into the following travel day
+  - drop any trip whose departure can no longer fit before the travel-day end, and drop all remaining trips after that point.
+- Emit calendar `departure_date` / `arrival_date` with clock hours (overnight trips span midnight).
 - Keep the perturbed miles for trips that survive normalization; drop miles for dropped trips.
 
 Notes:
-- Each NHTS trip carries a trip weight, which could maybe be used in the future. Right now, weights are used to permute the order the trips are sampled but have essentially no impact on the resulting trip draws (unless some trips are pushed past midnight and dropped).
+- Each NHTS trip carries a trip weight, which could maybe be used in the future. Right now, weights are used to permute the order the trips are sampled but have essentially no impact on the resulting trip draws (unless some trips are pushed past the travel-day end and dropped).
 
 ## 5. Three different EV charging schedules
 
@@ -84,7 +87,7 @@ From step 4, we can obtain:
 What remains is to model how the vehicle is charged. We assume that the EV's battery is lossless and has full charge at the start of the simulation range. We consider three charging models:
 1. Immediate charging: As soon as the vehicle gets home, it immediately starts charging at maximum power until its battery is full or its next trip begins. If the battery does not have enough charge to fulfill a trip, we assume it uses public charging to obtain the remaining needed charge and it returns home at the originally scheduled arrival hour with an empty battery. These hours are flagged and it's likely that these trip profiles would not correspond to an EV owner (or that EV owner would have chosen a larger battery capacity). This should be considered with more detail in future work.
 
-2. Cost minimizing charging: Assume perfect foresight over the vehicle's trips for the entire year and formulate an LP to schedule charging for the entire simulation range to minimize costs. To do this, we define the following. First, let $T$ be number of hours in the simulation range ($T=8,760$ if the range is one year) and index it by $t=0, 1, \dots$ with $t=0$ corresponding to 12am on the first simulation day.
+2. Cost minimizing charging: Assume perfect foresight over the vehicle's trips for the entire year and formulate an LP to schedule charging for the entire simulation range to minimize costs. To do this, we define the following. First, let $T$ be number of hours in the simulation range ($T=8,784$ for the 2024 leap-year travel-day window from 4am Jan 1 through 3am Jan 1 next year) and index it by $t=0, 1, \dots$ with $t=0$ corresponding to the first hour of the simulation window (4am on the start date when using the NHTS-aligned year).
 
 Parameters:
 - $p_t$: price of electricity in hour $t$ (in $/kWh)

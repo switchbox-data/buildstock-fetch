@@ -1,3 +1,16 @@
+"""Hourly EV charging policies and calendar helpers.
+
+Pipeline role (inputs come from ``ChargingSimulator`` / ``TripScheduleGenerator``):
+
+1. **Calendar** — ``build_hours_base`` builds the simulation hour grid.
+2. **Presence** — expand ``tour_*`` intervals → away hours → ``at_home``.
+3. **Discharge** — expand ``trip_*`` drive intervals → ``discharge_kwh``.
+4. **Charge** — one of the ``schedule_*`` policies chooses ``charge_kwh``.
+5. **SOC** — ``compute_hourly_soc`` applies discharge then charge each hour.
+
+Strategies: ``immediate``, ``off_peak``, ``off_peak_immediate``, ``cost_minimizing``.
+"""
+
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from typing import Final, Literal
@@ -17,20 +30,24 @@ DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH = 1e6
 # How home charging is scheduled before SOC is derived from discharge + charge.
 
 def build_hourly_timestamps(start_date: datetime, end_date: datetime) -> pl.DataFrame:
-    """Build hourly timestamps for the instance date range (inclusive, aligned to whole hours).
+    """Build hourly timestamps for the simulation window (inclusive, aligned to whole hours).
+
+    Uses the clock hour of ``start_date`` / ``end_date`` (minutes/seconds cleared).
+    Typical NHTS-aligned year: ``2024-01-01 04:00`` through ``2025-01-01 03:00``
+    (last hour slot covering 03:00–03:59).
 
     Args:
-        start_date: Start date of the range
-        end_date: End date of the range
-    
+        start_date: Start of the range (hour included)
+        end_date: End of the range (hour included)
+
     Returns:
-        pl.DataFrame: hourly timestamps from ``start_date`` 00:00 through ``end_date`` 23:00
+        pl.DataFrame: hourly timestamps from ``start_date`` through ``end_date``
 
     Raises:
         ValueError: If ``end_date`` is before ``start_date``
     """
-    start_hour = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_hour = end_date.replace(hour=23, minute=0, second=0, microsecond=0)
+    start_hour = start_date.replace(minute=0, second=0, microsecond=0)
+    end_hour = end_date.replace(minute=0, second=0, microsecond=0)
     if end_hour < start_hour:
         raise ValueError(
             f"end_date {end_date} must be on or after start_date {start_date}"
@@ -44,13 +61,14 @@ def build_hourly_timestamps(start_date: datetime, end_date: datetime) -> pl.Data
 
     return pl.DataFrame({"timestamp": timestamps})
 
+
 def build_hours_base(start_date: datetime, end_date: datetime) -> pl.DataFrame:
-    """Build the hourly calendar for the instance date range, used for trip-to-hour joins.
+    """Build the hourly calendar for the simulation window, used for trip-to-hour joins.
 
     Args:
-        start_date: Start date of the range
-        end_date: End date of the range
-    
+        start_date: Start of the range (hour included)
+        end_date: End of the range (hour included)
+
     Returns:
         pl.DataFrame: hourly calendar for the instance date range
     """
@@ -62,6 +80,178 @@ def build_hours_base(start_date: datetime, end_date: datetime) -> pl.DataFrame:
             pl.col("timestamp").dt.hour().alias("hour"),  # clock hour (0..23) for joining trip rows
         )
     )
+
+
+def expand_trips_to_away_hour_rows(
+    trip_schedules: pl.DataFrame,
+    *,
+    prefix: str = "trip",
+) -> pl.DataFrame:
+    """Expand each trip/tour interval to one row per hour in ``[dep, arr)``.
+
+    Adds calendar ``date`` / ``hour`` columns for every hour in the interval.
+    Overnight spans emit hours on both calendar days.
+
+    Column names are ``{prefix}_departure_date``, ``{prefix}_departure_hour``,
+    ``{prefix}_arrival_date``, ``{prefix}_arrival_hour`` (``prefix`` is ``trip``
+    for drive legs or ``tour`` for home-away windows).
+
+    Args:
+        trip_schedules (pl.DataFrame): Schedules with prefixed interval columns
+        prefix (str): ``trip`` (discharge) or ``tour`` (presence)
+
+    Returns:
+        pl.DataFrame: Expanded rows with calendar ``date`` / ``hour``
+    """
+    # Nothing to expand.
+    if trip_schedules.is_empty():
+        return trip_schedules
+
+    dep_date = f"{prefix}_departure_date"
+    dep_hour = f"{prefix}_departure_hour"
+    arr_date = f"{prefix}_arrival_date"
+    arr_hour = f"{prefix}_arrival_hour"
+    required = {dep_date, dep_hour, arr_date, arr_hour}
+    missing = required - set(trip_schedules.columns)
+    if missing:
+        raise ValueError(f"trip_schedules missing columns: {sorted(missing)}")
+
+    # Normalize join keys to date-only (drop any time component).
+    trips = trip_schedules.with_columns(
+        pl.col(dep_date).cast(pl.Date).alias(dep_date),
+        pl.col(arr_date).cast(pl.Date).alias(arr_date),
+    )
+
+    # Same-calendar-day intervals: hours range(dep, arr) on that date.
+    same_day = trips.filter(pl.col(arr_date) == pl.col(dep_date)).with_columns(
+        pl.int_ranges(pl.col(dep_hour), pl.col(arr_hour)).alias("hour"),
+        pl.col(dep_date).alias("date"),
+    )
+
+    # Overnight intervals: dep_hour..23 on departure date, then 0..arr_hour on arrival date.
+    overnight = trips.filter(pl.col(arr_date) > pl.col(dep_date))
+
+    frames: list[pl.DataFrame] = []
+    if same_day.height > 0:
+        frames.append(same_day.explode("hour"))
+    if overnight.height > 0:
+        # Hours after departure on the leave day (up to midnight).
+        dep_part = overnight.with_columns(
+            pl.int_ranges(pl.col(dep_hour), pl.lit(24)).alias("hour"),
+            pl.col(dep_date).alias("date"),
+        ).explode("hour")
+        # Hours before arrival on the return day (from midnight).
+        arr_part = overnight.with_columns(
+            pl.int_ranges(pl.lit(0), pl.col(arr_hour)).alias("hour"),
+            pl.col(arr_date).alias("date"),
+        ).explode("hour")
+        frames.append(dep_part)
+        frames.append(arr_part)
+
+    # Degenerate case: all intervals filtered out (e.g. arr == dep with no overnight).
+    if not frames:
+        return trips.clear().with_columns(
+            pl.lit(None).cast(pl.Date).alias("date"),
+            pl.lit(None).cast(pl.Int64).alias("hour"),
+        )
+
+    return pl.concat(frames, how="diagonal_relaxed")
+
+
+def expand_trip_away_hours(
+    trip_schedules: pl.DataFrame,
+    *,
+    prefix: str = "tour",
+) -> pl.DataFrame:
+    """Expand interval rows into unique per-hour away markers on the calendar timeline.
+
+    Defaults to ``prefix='tour'`` (presence). Pass ``prefix='trip'`` only if expanding
+    drive intervals for diagnostics.
+
+    Args:
+        trip_schedules (pl.DataFrame): Intervals with ``{prefix}_departure/arrival_*``
+        prefix (str): Column-name prefix for the interval bounds
+
+    Returns:
+        pl.DataFrame: DataFrame with ``bldg_id``, ``vehicle_id``, ``date``, ``hour``
+    """
+    if trip_schedules.is_empty():
+        return pl.DataFrame(
+            schema={
+                "bldg_id": trip_schedules.schema.get("bldg_id", pl.Utf8),
+                "vehicle_id": trip_schedules.schema.get("vehicle_id", pl.Int64),
+                "date": pl.Date,
+                "hour": pl.Int64,
+            }
+        )
+
+    return (
+        expand_trips_to_away_hour_rows(trip_schedules, prefix=prefix)
+        .select("bldg_id", "vehicle_id", "date", "hour")
+        .unique()  # overlapping intervals (e.g. multi-leg same hour) → one away marker
+    )
+
+
+def tours_from_trip_schedules(trip_schedules: pl.DataFrame) -> pl.DataFrame:
+    """Derive unique home-away tour intervals from trip schedule rows.
+
+    When tour columns are present (``tour_departure_*`` / ``tour_arrival_*``),
+    each distinct tour becomes one away window (columns kept as ``tour_*``).
+
+    When tour columns are absent, each trip row's ``trip_*`` bounds are copied to
+    ``tour_*`` so fixtures without explicit tours still work.
+
+    Args:
+        trip_schedules (pl.DataFrame): Trip schedules with ``trip_*`` and ``tour_*`` columns
+
+    Returns:
+        pl.DataFrame: Tour schedules with ``tour_*`` columns
+    """
+    if trip_schedules.is_empty():
+        return trip_schedules
+
+    tour_cols = {
+        "tour_departure_date",
+        "tour_departure_hour",
+        "tour_arrival_date",
+        "tour_arrival_hour",
+    }
+    if tour_cols.issubset(trip_schedules.columns):
+        # Prefer travel_date as the tour grouping key; fall back to legacy "date".
+        key_cols = ["bldg_id", "vehicle_id", "travel_date"]
+        if "travel_date" not in trip_schedules.columns and "date" in trip_schedules.columns:
+            key_cols = ["bldg_id", "vehicle_id", "date"]
+        if "tour_id" in trip_schedules.columns:
+            key_cols.append("tour_id")
+        keep = [c for c in key_cols if c in trip_schedules.columns]
+        # One row per distinct tour window (legs that share a tour collapse here).
+        return trip_schedules.select(
+            *keep,
+            "tour_departure_date",
+            "tour_departure_hour",
+            "tour_arrival_date",
+            "tour_arrival_hour",
+        ).unique()
+
+    # Legacy / fixture: treat drive interval as the away window.
+    trip_cols = {
+        "trip_departure_date",
+        "trip_departure_hour",
+        "trip_arrival_date",
+        "trip_arrival_hour",
+    }
+    if not trip_cols.issubset(trip_schedules.columns):
+        raise ValueError(
+            "trip_schedules need tour_* columns or trip_* interval columns; "
+            f"got {sorted(trip_schedules.columns)}"
+        )
+    return trip_schedules.rename({
+        "trip_departure_date": "tour_departure_date",
+        "trip_departure_hour": "tour_departure_hour",
+        "trip_arrival_date": "tour_arrival_date",
+        "trip_arrival_hour": "tour_arrival_hour",
+    })
+
 
 def schedule_immediate_charging(
     at_home: np.ndarray,
@@ -99,6 +289,7 @@ def schedule_immediate_charging(
     charge_kwh = np.zeros(num_hours, dtype=np.float64)
     current_soc = initial_soc_kwh
 
+    # Greedy forward sim: each hour, apply trip draw then maybe charge to full.
     for hour_idx in range(num_hours):
         # Discharge first (same order as compute_hourly_soc).
         trip_draw = discharge_kwh[hour_idx]
@@ -122,6 +313,7 @@ def _next_trip_span(discharge_kwh: np.ndarray, start_idx: int) -> tuple[int, int
     A trip block is a run of hours with positive discharge. Returns ``None`` if no future
     trip draw exists.
     """
+    # Find first hour with positive discharge at or after start_idx.
     num_hours = len(discharge_kwh)
     trip_start = None
     for hour_idx in range(start_idx, num_hours):
@@ -130,6 +322,7 @@ def _next_trip_span(discharge_kwh: np.ndarray, start_idx: int) -> tuple[int, int
             break
     if trip_start is None:
         return None
+    # Extend through the contiguous run of discharge hours.
     trip_end = trip_start + 1
     while trip_end < num_hours and discharge_kwh[trip_end] > 1e-12:
         trip_end += 1
@@ -158,7 +351,7 @@ def _emergency_peak_needed(
     if need <= 1e-12:
         return False
 
-    # Off-peak home charging available before the trip starts (excluding this on-peak hour).
+    # Max kWh we could still add in future off-peak+home hours before the trip.
     remaining_headroom = max(0.0, battery_capacity_kwh - current_soc)
     supply = 0.0
     for future_idx in range(hour_idx + 1, trip_start):
@@ -169,6 +362,7 @@ def _emergency_peak_needed(
             supply += added
             remaining_headroom -= added
 
+    # Emergency peak charging if SOC + future off-peak supply cannot cover need.
     return current_soc + supply + 1e-9 < need
 
 
@@ -219,6 +413,7 @@ def schedule_off_peak_immediate_charging(
     charge_kwh = np.zeros(num_hours, dtype=np.float64)
     current_soc = initial_soc_kwh
 
+    # Same greedy loop as immediate, but charge only off-peak (or emergency peak).
     for hour_idx in range(num_hours):
         trip_draw = discharge_kwh[hour_idx]
         if trip_draw > current_soc:
@@ -229,7 +424,9 @@ def schedule_off_peak_immediate_charging(
         if not at_home[hour_idx] or current_soc >= battery_capacity_kwh:
             continue
 
+        # Default: charge only in off-peak hours.
         may_charge = bool(is_off_peak[hour_idx])
+        # Optional foresight override when the next trip would otherwise be short.
         if (
             not may_charge
             and allow_emergency_peak_charging
@@ -326,12 +523,13 @@ def schedule_cost_minimizing_charging(
     if np.any(hourly_price_usd_per_kwh < 0):
         raise ValueError("hourly_price_usd_per_kwh must be non-negative")
 
+    # Fixed inputs for the LP.
     discharge = np.asarray(discharge_kwh, dtype=np.float64)
     prices = np.asarray(hourly_price_usd_per_kwh, dtype=np.float64)
-    max_charge = np.where(at_home, charger_power_kw, 0.0)
+    max_charge = np.where(at_home, charger_power_kw, 0.0)  # cannot charge while away
     s_0 = float(initial_soc_kwh)
 
-    # set default shed load penalty if none is passed
+    # Shed penalty: huge default ⇒ shed only when the LP would otherwise be infeasible.
     if shed_load_penalty_usd_per_kwh is None:
         shed_penalties = np.full(num_hours, DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH, dtype=np.float64)
     elif isinstance(shed_load_penalty_usd_per_kwh, np.ndarray):
@@ -346,25 +544,26 @@ def schedule_cost_minimizing_charging(
     if np.any(shed_penalties < 0):
         raise ValueError("shed_load_penalty_usd_per_kwh must be non-negative")
 
-    # Decision variables: x_t^CB (charge), x_t^SL (shed), and s_t for t = 1..T.
+    # Decision variables: charge x^CB, end-of-hour SOC s, shed load x^SL.
     charge = cp.Variable(num_hours, name="charge")
-    soc = cp.Variable(num_hours, name="soc")  # s_1..s_T
+    soc = cp.Variable(num_hours, name="soc")  # s after each hour's charge/discharge
     shed = cp.Variable(num_hours, name="shed_load")
 
+    # SOC balance, charger limits, battery box constraints.
     constraints: list[cp.Constraint] = [
-        soc[0] == s_0 + charge[0] - discharge[0] + shed[0], # first-hour SOC constraint
-        charge >= 0, # charge cannot be negative
-        charge <= max_charge,  # zero when away (discharge and charge never overlap)
-        shed >= 0, # shed cannot be negative
-        shed <= discharge, # shed cannot exceed planned trip draw
-        soc >= 0, # SOC cannot be negative
-        soc <= battery_capacity_kwh, # SOC cannot exceed battery capacity
+        soc[0] == s_0 + charge[0] - discharge[0] + shed[0],
+        charge >= 0,
+        charge <= max_charge,
+        shed >= 0,
+        shed <= discharge,
+        soc >= 0,
+        soc <= battery_capacity_kwh,
     ]
     if num_hours > 1:
-        constraints.append(soc[1:] == soc[:-1] + charge[1:] - discharge[1:] + shed[1:]) # hour-by-hour SOC constraints
+        constraints.append(soc[1:] == soc[:-1] + charge[1:] - discharge[1:] + shed[1:])
 
+    # Minimize energy cost + shed penalties (perfect foresight).
     objective = prices @ charge + shed_penalties @ shed
-
     problem = cp.Problem(cp.Minimize(objective), constraints)
     problem.solve()
 
@@ -374,6 +573,7 @@ def schedule_cost_minimizing_charging(
     charge_kwh = np.asarray(charge.value, dtype=np.float64).reshape(-1)
     shed_load_kwh = np.asarray(shed.value, dtype=np.float64).reshape(-1)
     return charge_kwh, shed_load_kwh
+
 
 def build_is_off_peak(
     hours_base: pl.DataFrame,
@@ -452,24 +652,72 @@ def build_off_peak_charging_params(
     dates = hours_base["date"].to_list()
     clock_hours = hours_base["hour"].to_numpy().astype(np.int64)
 
-    # Sum hourly trip draw into calendar-day totals (miles_total × kWh/mile in discharge_kwh).
+    # --- Daily energy need (from discharge_kwh already spread onto drive hours) ---
     daily_discharge_kwh: dict[date, float] = {}
     for day, discharge in zip(dates, discharge_kwh, strict=True):
         daily_discharge_kwh[day] = daily_discharge_kwh.get(day, 0.0) + float(discharge)
 
-    # Per-day trip bounds: t_dep^first and t_arr^last from trip rows.
+    # --- Per calendar day: (first_departure, last_arrival) from tour windows ---
+    # Overnight tours: last_arrival=24 on the leave day; arrival hour lands on next day.
     daily_bounds: dict[date, tuple[int, int]] = {}
     if not vehicle_trips.is_empty():
-        bounds_frame = (
-            vehicle_trips.with_columns(pl.col("date").cast(pl.Date).alias("date"))
-            .group_by("date")
-            .agg(
-                pl.col("departure_hour").min().alias("first_departure"),
-                pl.col("arrival_hour").max().alias("last_arrival"),
-            )
+        required = {
+            "tour_departure_date",
+            "tour_departure_hour",
+            "tour_arrival_date",
+            "tour_arrival_hour",
+        }
+        bound_trips = tours_from_trip_schedules(vehicle_trips)
+        missing = required - set(bound_trips.columns)
+        if missing:
+            raise ValueError(f"vehicle_trips missing columns: {sorted(missing)}")
+        trips = bound_trips.with_columns(
+            pl.col("tour_departure_date").cast(pl.Date).alias("tour_departure_date"),
+            pl.col("tour_arrival_date").cast(pl.Date).alias("tour_arrival_date"),
         )
+
+        # Earliest leave-home hour each calendar day.
+        first_dep = (
+            trips.group_by("tour_departure_date")
+            .agg(pl.col("tour_departure_hour").min().alias("first_departure"))
+            .rename({"tour_departure_date": "date"})
+        )
+        # Same-day returns: last home-arrival hour that day.
+        same_day_arr = (
+            trips.filter(pl.col("tour_arrival_date") == pl.col("tour_departure_date"))
+            .group_by("tour_arrival_date")
+            .agg(pl.col("tour_arrival_hour").max().alias("last_arrival"))
+            .rename({"tour_arrival_date": "date"})
+        )
+        # Overnight leave day: still away at midnight → last_arrival sentinel 24.
+        overnight_dep = (
+            trips.filter(pl.col("tour_arrival_date") > pl.col("tour_departure_date"))
+            .select(pl.col("tour_departure_date").alias("date"))
+            .unique()
+            .with_columns(pl.lit(24).cast(pl.Int64).alias("last_arrival"))
+        )
+        # Overnight return day: arrival hour is a last_arrival candidate.
+        next_day_arr = (
+            trips.filter(pl.col("tour_arrival_date") > pl.col("tour_departure_date"))
+            .group_by("tour_arrival_date")
+            .agg(pl.col("tour_arrival_hour").max().alias("last_arrival"))
+            .rename({"tour_arrival_date": "date"})
+        )
+        last_arr_parts = [df for df in (same_day_arr, overnight_dep, next_day_arr) if df.height > 0]
+        if last_arr_parts:
+            last_arr = (
+                pl.concat(last_arr_parts)
+                .group_by("date")
+                .agg(pl.col("last_arrival").max().alias("last_arrival"))
+            )
+        else:
+            last_arr = pl.DataFrame({"date": [], "last_arrival": []})
+
+        bounds_frame = first_dep.join(last_arr, on="date", how="full", coalesce=True)
         for row in bounds_frame.iter_rows(named=True):
-            daily_bounds[row["date"]] = (int(row["first_departure"]), int(row["last_arrival"]))
+            first = int(row["first_departure"]) if row["first_departure"] is not None else 24
+            last = int(row["last_arrival"]) if row["last_arrival"] is not None else 0
+            daily_bounds[row["date"]] = (first, last)
 
     def soc_req_kwh_for_day(day: date) -> float:
         """SOC_req^d = max(SOC_min, daily_trip_kWh / K^B + buffer), returned in kWh."""
@@ -483,32 +731,32 @@ def build_off_peak_charging_params(
     charge_allowed = np.zeros(num_hours, dtype=bool)
     soc_target_kwh = np.zeros(num_hours, dtype=np.float64)
 
+    # --- Mark each hour: in Window_avail? toward which day's SOC_req? ---
     for hour_idx, (day, clock_hour) in enumerate(zip(dates, clock_hours, strict=True)):
-        # Default (no trips that day): never depart (24), always home (0) → whole day is Window_avail.
+        # Default (no tours that day): (24, 0) → entire day is Window_avail.
         first_departure, last_arrival = daily_bounds.get(day, (24, 0))
-        # Morning slice of Window_avail: hours before first departure today.
-        in_morning_window = clock_hour < first_departure
-        # Evening slice of Window_avail: hours after last arrival today (overnight for tomorrow).
-        in_evening_window = clock_hour >= last_arrival
+        in_morning_window = clock_hour < first_departure  # before first leave-home
+        in_evening_window = clock_hour >= last_arrival  # after last return-home
 
-        # Midday away block (first_dep <= hour < last_arr) is outside Window_avail.
+        # Midday block between first leave and last return is outside Window_avail
+        # (includes mid-tour home stops — TOU primary rule does not charge then).
         if not (in_morning_window or in_evening_window):
             continue
 
-        # Decide which departure day this hour is charging toward.
+        # Which departure day is this hour preparing for?
         if in_morning_window and in_evening_window:
-            # No-trip day: both windows cover all 24 hours; use today's (minimal) SOC_req.
-            target_day = day
+            target_day = day  # no-tour day: both windows cover all 24 hours
         elif in_morning_window:
-            target_day = day  # pre-departure hours charge toward today's trips
+            target_day = day  # pre-departure → today's trips
         else:
-            target_day = day + timedelta(days=1)  # post-arrival hours charge toward tomorrow
+            target_day = day + timedelta(days=1)  # post-arrival → tomorrow's trips
 
         soc_target_kwh[hour_idx] = soc_req_kwh_for_day(target_day)
-        # Window_off = Window_avail ∩ off-peak ∩ at_home (no emergency peak override).
+        # Window_off = Window_avail ∩ off-peak ∩ at_home (no emergency peak here).
         charge_allowed[hour_idx] = bool(at_home[hour_idx] and is_off_peak[hour_idx])
 
     return charge_allowed, soc_target_kwh
+
 
 def schedule_off_peak_charging(
     at_home: np.ndarray,
@@ -577,6 +825,7 @@ def schedule_off_peak_charging(
 
     return charge_kwh
 
+
 def compute_hourly_soc(
     discharge_kwh: np.ndarray,
     charge_kwh: np.ndarray,
@@ -611,7 +860,8 @@ def compute_hourly_soc(
 
     current_soc = initial_soc_kwh
     for hour_idx in range(num_hours):
-        soc_kwh[hour_idx] = current_soc  # record beginning-of-hour SOC
+        # Record SOC at the start of the hour (before this hour's draw/charge).
+        soc_kwh[hour_idx] = current_soc
 
         trip_draw = discharge_kwh[hour_idx]
         if trip_draw > current_soc + 1e-9:
@@ -620,7 +870,8 @@ def compute_hourly_soc(
         else:
             current_soc -= trip_draw
 
-        current_soc += charge_kwh[hour_idx]  # charge after discharge within the hour
+        # Charge after discharge within the hour (same order as schedule_* policies).
+        current_soc += charge_kwh[hour_idx]
 
     return soc_kwh, soc_underflow
 

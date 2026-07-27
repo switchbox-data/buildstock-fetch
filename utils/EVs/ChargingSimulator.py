@@ -14,10 +14,13 @@ from utils.EVs.charging import (
     build_is_off_peak,
     build_off_peak_charging_params,
     compute_hourly_soc,
+    expand_trip_away_hours,
+    expand_trips_to_away_hour_rows,
     schedule_cost_minimizing_charging,
     schedule_immediate_charging,
     schedule_off_peak_charging,
     schedule_off_peak_immediate_charging,
+    tours_from_trip_schedules,
 )
 from utils.EVs.ev_utils import resstock_temp_power_mult
 
@@ -46,12 +49,12 @@ class ChargingSimulator:
         """
         Map each vehicle's trip schedule to an hourly schedule of home/away status for the instance date range.
 
-        Uses the same away-hour model as trip schedule generation: a vehicle is
-        away from home for hours ``range(departure_hour, arrival_hour)`` on each trip day,
-        where ``arrival_hour`` is the first hour at home. It is at home in all other hours.
+        Presence uses **tour** away windows (leave-home → return-home), including mid-tour
+        parking. Drive legs alone are not enough: a vehicle at work is away even when not
+        discharging. Tour intervals are derived via ``tours_from_trip_schedules``.
 
         Args:
-            trip_schedules (pl.DataFrame): DataFrame of trip schedules
+            trip_schedules (pl.DataFrame): DataFrame of trip schedules (with optional tour columns)
             hours_base (pl.DataFrame): hourly calendar for the instance date range
             vehicle_keys (Iterable[tuple[str | int, int]]): Iterable of vehicle keys to generate presence schedules for
 
@@ -81,16 +84,9 @@ class ChargingSimulator:
                 .select("bldg_id", "vehicle_id", "hour_index", "timestamp", "at_home", "away_from_home")
             )
         else:
-            away_hours = (
-                trip_schedules.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
-                .with_columns(
-                    # away from departure_hour (inclusive) through arrival_hour (exclusive)
-                    pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour")).alias("hour"),
-                )
-                .explode("hour")  # one row per away hour instead of one row per trip interval
-                .select("bldg_id", "vehicle_id", "date", "hour")  # minimal join keys for marking away hours
-                .unique()  # overlapping trips on the same day collapse to a single away marker
-            )
+            # Tours define away-from-home; mid-tour dwells stay away (no home charging).
+            tour_schedules = tours_from_trip_schedules(trip_schedules)
+            away_hours = expand_trip_away_hours(tour_schedules, prefix="tour")
 
             hourly_presence = (
                 vehicle_keys_df.join(hours_base, how="cross")  # hourly rows x number of vehicles
@@ -127,13 +123,14 @@ class ChargingSimulator:
         hourly_temp_f_by_bldg: pl.DataFrame | None = None,
     ) -> pl.DataFrame:
         """Map each vehicle's trip schedule to an hourly schedule of discharge kWh for the instance date range.
-        Spread each trip's driving energy uniformly over its away-from-home hours.
 
-        Away hours are ``range(departure_hour, arrival_hour)`` where ``arrival_hour`` is the
-        first hour at home (exclusive end of the away interval).
+        Spread each **drive leg's** energy uniformly over its driving hours
+        (``departure_*`` → ``arrival_*``), not over the full tour away window.
+        Mid-tour parking therefore has ``discharge_kwh=0`` but can still be
+        ``at_home=False`` via tour presence.
 
         When ``hourly_temp_f_by_bldg`` is provided (``bldg_id``, ``hour_index``, ``temp_f``),
-        each away-hour discharge share is scaled by the ResStock / OpenStudio-HPXML
+        each drive-hour discharge share is scaled by the ResStock / OpenStudio-HPXML
         ``resstock_temp_power_mult(temp_f)``. Charge power is not adjusted here.
 
         Args:
@@ -180,23 +177,21 @@ class ChargingSimulator:
             )
 
         # Baseline trip energy at Autonomie design-condition efficiency (before temp scale).
-        trip_kwh_expr = pl.col("miles_driven") * pl.col("kwh_per_mile")
+        # Tag each trip so overnight hour rows stay tied to one trip_kwh total.
+        trips = trips.with_row_index("_trip_idx").with_columns(
+            (pl.col("trip_miles_driven") * pl.col("kwh_per_mile")).alias("trip_kwh")
+        )
 
-        # assume the trip is driven evenly across the away hours (uniform discharge over hours away)
         away_hour_discharge = (
-            trips.with_columns(pl.col("date").cast(pl.Date).alias("date"))  # normalize to date-only key
+            expand_trips_to_away_hour_rows(trips, prefix="trip")
             .with_columns(
-                # away from departure_hour (inclusive) through arrival_hour (exclusive)
-                pl.int_ranges(pl.col("departure_hour"), pl.col("arrival_hour")).alias("hour"),
-                trip_kwh_expr.alias("trip_kwh"),
+                # divide total trip energy evenly across driving hours for that leg
+                (pl.col("trip_kwh") / pl.col("hour").count().over("_trip_idx")).alias(
+                    "discharge_kwh_per_away_hour"
+                )
             )
-            .with_columns(
-                # divide total trip energy evenly across all away hours for that trip
-                (pl.col("trip_kwh") / pl.col("hour").list.len()).alias("discharge_kwh_per_away_hour")
-            )
-            .explode("hour")  # one row per away hour instead of one row per trip
             .join(
-                hours_base.select("date", "hour", "hour_index"),  # map calendar (date, hour) -> hour_index index
+                hours_base.select("date", "hour", "hour_index"),
                 on=["date", "hour"],
                 how="inner",
             )
@@ -306,8 +301,8 @@ class ChargingSimulator:
         Map each vehicle to an hourly SOC, charging, and discharge schedule for the instance date range.
 
         Pipeline per vehicle:
-        1. Spread trip miles into hourly ``discharge_kwh`` (away hours only)
-        2. Build ``charge_kwh`` via ``charging_strategy`` (immediate, off-peak, or cost-minimizing LP)
+        1. Spread trip miles into hourly ``discharge_kwh`` on **drive** hours (temp-scaled)
+        2. Build ``charge_kwh`` via ``charging_strategy`` while ``at_home`` from **tours**
         3. Derive ``soc_kwh`` and ``soc_underflow`` from discharge + charge
 
         ``soc_kwh`` is the battery level at the beginning of each hour (aligned with ``timestamp``).

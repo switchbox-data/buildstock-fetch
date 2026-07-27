@@ -1,9 +1,19 @@
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal, overload
 
 import numpy as np
 import polars as pl
+
+from utils.EVs.nhts_tours import (
+    TripProfile,
+    build_tours_from_legs,
+    nhts_arrival_hour,
+    nhts_departure_hour,
+    trips_as_singleton_tours,
+)
 
 
 class NHTSDataError(Exception):
@@ -13,23 +23,8 @@ class NHTSDataError(Exception):
 
 
 @dataclass
-class TripProfile:
-    """One NHTS daily trip template (all trips on a weekday or weekend day)."""
-
-    departure_hours: list[int] = field(default_factory=list)  # List of departure hours for each trip
-    arrival_hours: list[int] = field(default_factory=list)  # First hour at home (exclusive end of away interval)
-    miles: list[float] = field(default_factory=list)  # List of miles for each trip
-    trip_weights: list[float] = field(default_factory=list)  # List of trip weights for each trip
-    trip_ids: list[int] = field(default_factory=list)  # List of trip IDs
-
-    @property
-    def has_trips(self) -> bool:
-        return len(self.miles) > 0
-
-
-@dataclass
 class VehicleProfile:
-    """Represents a vehicle's driving profile parameters."""
+    """Matched ResStock vehicle slot with weekday/weekend ``TripProfile`` templates."""
 
     bldg_id: str
     vehicle_id: int
@@ -37,38 +32,16 @@ class VehicleProfile:
     weekend: TripProfile = field(default_factory=TripProfile)
 
 
-def nhts_departure_hour(start_time: int) -> int:
-    """Clock hour when a trip starts (vehicle is away during this hour).
-
-    NHTS ``STRTTIME`` is HHMM; e.g. 830 → hour 8.
-
-    Args:
-        start_time (int): NHTS ``STRTTIME`` in HHMM format
-
-    Returns:
-        int: Clock hour when a trip starts
-    """
-    return int(start_time) // 100
-
-
-def nhts_arrival_hour(end_time: int) -> int:
-    """First clock hour at home after a trip ends (exclusive end of the away interval).
-
-    NHTS ``ENDTIME`` is HHMM. If the trip ends exactly on the hour (e.g. 1700),
-    the vehicle is home starting that hour. If it ends mid-hour (e.g. 1715),
-    it is still away for that full hour and home starting the next hour.
-
-    Away hours are ``range(departure_hour, arrival_hour)``.
-
-    Args:
-        end_time (int): NHTS ``ENDTIME`` in HHMM format
-
-    Returns:
-        int: First clock hour at home after a trip ends
-    """
-    end_time = int(end_time)
-    hour, minute = divmod(end_time, 100)
-    return hour if minute == 0 else hour + 1
+# Re-export day-template / hour helpers so existing imports from this module keep working.
+__all__ = [
+    "NHTSDataError",
+    "NHTSProfileSampler",
+    "TripProfile",
+    "VehicleProfile",
+    "nhts_arrival_hour",
+    "nhts_departure_hour",
+    "summarize_nhts_match_catalog",
+]
 
 
 def summarize_nhts_match_catalog(catalog: pl.DataFrame) -> pl.DataFrame:
@@ -353,15 +326,15 @@ class NHTSProfileSampler:
         Uses pre-built cache to eliminate expensive filtering operations.
         Only considers NHTS vehicles that have at least one trip on the requested day type.
 
-        Match order prefers urban/rural agreement when household structure still matches,
-        then drops urban before occupants. Match-type names are the dimensions held
-        (``exact`` = all four including urban):
+        Match order prefers urban/rural agreement (stronger VMT signal) over household
+        size. Match-type names are the dimensions held (``exact`` = all four including
+        urban):
 
         1. ``exact`` — (urban, income, occupants, vehicles) when ``match_on_vehicles``
         2. ``urban_income_occupants``
-        3. ``income_occupants_vehicles`` — drop urban; when ``match_on_vehicles``
-        4. ``income_occupants``
-        5. ``urban_income`` — keep urban only after occupants is dropped
+        3. ``urban_income`` — drop occupants; keep urban/rural
+        4. ``income_occupants_vehicles`` — drop urban; when ``match_on_vehicles``
+        5. ``income_occupants``
         6. ``income``
         7. ``closest_income``
 
@@ -402,7 +375,10 @@ class NHTSProfileSampler:
             (target_urban, target_income, target_occupants),
         ))
 
-        # 3–4: drop urbanicity before occupants (HH structure > place-type alone).
+        # 3: drop occupants but keep urban/rural (place-type > HH size for daily miles).
+        attempts.append(("urban_income", "urban_income", (target_urban, target_income)))
+
+        # 4–5: drop urbanicity; optionally keep vehicle count with HH structure.
         if match_on_vehicles:
             attempts.append((
                 "income_occupants_vehicles",
@@ -415,8 +391,7 @@ class NHTSProfileSampler:
             (target_income, target_occupants),
         ))
 
-        # 5–6: occupants gone; prefer same urban/rural at this income, else income only.
-        attempts.append(("urban_income", "urban_income", (target_urban, target_income)))
+        # 6: income bucket only.
         attempts.append(("income", "income", (target_income,)))
 
         for match_type, tier, parts in attempts:
@@ -445,7 +420,12 @@ class NHTSProfileSampler:
         weekday: bool,
     ) -> TripProfile:
         """
-        Extract trip profile from NHTS data for a given vehicle id and day type.
+        Extract trip + tour profile from NHTS for a vehicle id and day type.
+
+        When ``why_from`` / ``why_to`` are present, legs are chained into home-based
+        tours at **minute** resolution first (``build_tours_from_legs``), then snapped
+        to clock hours. Otherwise each leg is treated as its own tour (legacy /
+        unit-test fixtures; already hourly).
 
         Args:
             nhts_df (pl.DataFrame): NHTS trip data DataFrame
@@ -455,22 +435,46 @@ class NHTSProfileSampler:
         Returns:
             TripProfile for the matched vehicle and day type
         """
-        # filter NHTS data for the given vehicle id and day type
+        # One NHTS travel day per household: all driver legs for this vehicle + day type.
         day_flag = 2 if weekday else 1
         trip_data = nhts_df.filter(
             (pl.col("hh_vehicle_id") == matched_vehicle_id) & (pl.col("weekday") == day_flag)
         )
-        departures = [nhts_departure_hour(t) for t in trip_data["start_time"]]
-        arrivals = [nhts_arrival_hour(t) for t in trip_data["end_time"]]
-        miles = trip_data["miles_driven"].to_list()
-        weights = trip_data["trip_weight"].to_list()
-        trip_ids = list(range(1, len(departures) + 1))
-        return TripProfile(
-            departure_hours=departures,
-            arrival_hours=arrivals,
-            miles=miles,
+        if trip_data.is_empty():
+            return TripProfile()
+
+        # Chronological order: prefer SEQ_TRIPID when loaded, else start_time.
+        if "seq_trip_id" in trip_data.columns:
+            trip_data = trip_data.sort(["start_time", "seq_trip_id"])
+        else:
+            trip_data = trip_data.sort("start_time")
+
+        start_times = [int(t) for t in trip_data["start_time"].to_list()]
+        end_times = [int(t) for t in trip_data["end_time"].to_list()]
+        trip_miles_driven = [float(m) for m in trip_data["miles_driven"].to_list()]
+        weights = [float(w) for w in trip_data["trip_weight"].to_list()]
+
+        # Purpose columns enable true tour chaining; fixtures without them stay 1:1.
+        has_purposes = "why_from" in trip_data.columns and "why_to" in trip_data.columns
+        if has_purposes:
+            why_from = [int(v) for v in trip_data["why_from"].to_list()]
+            why_to = [int(v) for v in trip_data["why_to"].to_list()]
+            # Returns a TripProfile: minute-level tours, then hourly snap inside the builder.
+            return build_tours_from_legs(
+                start_times=start_times,
+                end_times=end_times,
+                trip_miles_driven=trip_miles_driven,
+                trip_weights=weights,
+                why_from=why_from,
+                why_to=why_to,
+            )
+
+        # Fixtures already use clock hours as start_time/end_time stand-ins.
+        return trips_as_singleton_tours(
+            trip_departure_hours=[nhts_departure_hour(t) for t in start_times],
+            trip_arrival_hours=[nhts_arrival_hour(t) for t in end_times],
+            trip_miles_driven=trip_miles_driven,
             trip_weights=weights,
-            trip_ids=trip_ids,
         )
 
     @overload
@@ -618,8 +622,8 @@ class NHTSProfileSampler:
                         "matched_weekend_hh_vehicle_id": weekend_vehicle_id,
                         "has_weekday_trips": has_weekday_trips,
                         "has_weekend_trips": has_weekend_trips,
-                        "weekday_trip_count": len(weekday_profile.miles),
-                        "weekend_trip_count": len(weekend_profile.miles),
+                        "weekday_trip_count": len(weekday_profile.trip_miles_driven),
+                        "weekend_trip_count": len(weekend_profile.trip_miles_driven),
                     })
 
             # Log progress for buildings with vehicles

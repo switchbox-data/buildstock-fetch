@@ -4,7 +4,7 @@ import os
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, fields
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
@@ -29,6 +29,7 @@ from utils.EVs.TripScheduleGenerator import (
     DEFAULT_MIN_TRIP_AWAY_HOURS,
     DEFAULT_TIME_OFFSET_PROBABILITIES,
     DEFAULT_TIME_OFFSETS,
+    DEFAULT_TRAVEL_DAY_START_HOUR,
     TripScheduleGenerator,
 )
 from utils.EVs.VehicleOwnershipModel import VehicleOwnershipModel
@@ -62,10 +63,20 @@ logger = logging.getLogger(__name__)
 
 
 class InvalidDateFormatError(ValueError):
-    """Raised when date string is not in YYYY-MM-DD format."""
+    """Raised when a config datetime string is not a valid ISO datetime with clock hour."""
 
     def __init__(self, date_str: str):
-        super().__init__(f"Invalid date format: {date_str}. Use YYYY-MM-DD format.")
+        super().__init__(
+            f"Invalid datetime format: {date_str!r}. "
+            "Use an ISO datetime with clock hour, e.g. 2024-01-01T04:00:00 "
+            "(date-only values are not allowed)."
+        )
+
+
+# Simulation windows must align to NHTS travel days: start at 4am, end at 3am
+# (last included hour slot covering 03:00–03:59).
+REQUIRED_SIM_START_HOUR = DEFAULT_TRAVEL_DAY_START_HOUR  # 4
+REQUIRED_SIM_END_HOUR = (DEFAULT_TRAVEL_DAY_START_HOUR - 1) % 24  # 3
 
 
 @dataclass
@@ -156,6 +167,9 @@ class EVDemandConfig:
     daily_price_usd_per_kwh: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
+        if self.start_date is not None and self.end_date is not None:
+            validate_travel_day_simulation_window(self.start_date, self.end_date)
+
         if self.ev_assignment not in EV_ASSIGNMENT_MODES:
             raise ValueError(
                 f"ev_assignment must be one of {sorted(EV_ASSIGNMENT_MODES)}; "
@@ -401,32 +415,90 @@ class EVDemandConfig:
         return self.ev_assignment == "pums_vehicles"
 
     def num_simulation_hours(self) -> int:
-        """Inclusive hourly count from ``start_date`` 00:00 through ``end_date`` 23:00."""
+        """Inclusive hourly count from ``start_date`` through ``end_date`` (hour-aligned)."""
         if self.start_date is None or self.end_date is None:
             raise ValueError("start_date and end_date are required to compute simulation hours")
-        days = (self.end_date.date() - self.start_date.date()).days + 1
-        if days < 1:
+        start_hour = self.start_date.replace(minute=0, second=0, microsecond=0)
+        end_hour = self.end_date.replace(minute=0, second=0, microsecond=0)
+        if end_hour < start_hour:
             raise ValueError("end_date must be on or after start_date")
-        return days * 24
+        return int((end_hour - start_hour).total_seconds() // 3600) + 1
 
 
 def parse_date(date_str: str) -> datetime:
-    """Parse date string in YYYY-MM-DD format."""
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d")
-    except ValueError as e:
-        raise InvalidDateFormatError(date_str) from e
+    """Parse an ISO datetime string that includes a clock hour.
+
+    Date-only values (``YYYY-MM-DD``) are rejected. Accepted examples:
+    ``2024-01-01T04:00:00``, ``2024-01-01 04:00``, ``2025-01-01T03:00:00``.
+
+    Args:
+        date_str: Datetime string to parse
+
+    Returns:
+        datetime: Parsed datetime
+
+    Raises:
+        InvalidDateFormatError: If the string is not a datetime with clock hour
+    """
+    raw = date_str.strip()
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M",
+    ):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    raise InvalidDateFormatError(date_str)
 
 
 def _coerce_config_date(value: Any) -> datetime:
-    """Accept ISO strings or ``datetime.date`` / ``datetime`` from YAML."""
+    """Accept ISO datetime strings or ``datetime`` values from YAML (time required)."""
     if isinstance(value, datetime):
         return value
     if isinstance(value, str):
         return parse_date(value)
-    if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
-        return datetime(int(value.year), int(value.month), int(value.day))
+    if isinstance(value, date):
+        raise ValueError(
+            f"Config dates must include a clock hour (got date-only {value!r}). "
+            f"Use e.g. {value}T{REQUIRED_SIM_START_HOUR:02d}:00:00 for start or "
+            f"…T{REQUIRED_SIM_END_HOUR:02d}:00:00 for end."
+        )
     raise TypeError(f"Cannot parse config date from {type(value)}: {value!r}")
+
+
+def validate_travel_day_simulation_window(start: datetime, end: datetime) -> None:
+    """Require an NHTS-aligned window: start at 4am, end at 3am (hour slots).
+
+    Minutes/seconds are allowed (e.g. ``03:59``) but only the clock hour is checked;
+    the hourly calendar floors to ``:00`` of that hour.
+
+    Args:
+        start (datetime): Start of the simulation window
+        end (datetime): End of the simulation window
+
+    Raises:
+        ValueError: If the start or end date is not a valid ISO datetime with clock hour
+        ValueError: If the start date is not at 04:00
+        ValueError: If the end date is not at 03:00
+        ValueError: If the end date is before the start date
+    """
+    if end < start:
+        raise ValueError(f"end_date {end} must be on or after start_date {start}")
+    if start.hour != REQUIRED_SIM_START_HOUR:
+        raise ValueError(
+            f"start_date must be at {REQUIRED_SIM_START_HOUR:02d}:00 "
+            f"(NHTS travel-day start); got {start.isoformat(sep=' ')}"
+        )
+    if end.hour != REQUIRED_SIM_END_HOUR:
+        raise ValueError(
+            f"end_date must be at {REQUIRED_SIM_END_HOUR:02d}:00 "
+            f"(last hour of an NHTS travel day, covering "
+            f"{REQUIRED_SIM_END_HOUR:02d}:00–{REQUIRED_SIM_END_HOUR:02d}:59); "
+            f"got {end.isoformat(sep=' ')}"
+        )
 
 
 def _load_hourly_price_file(path: str | Path, *, num_hours: int) -> np.ndarray:
@@ -481,7 +553,9 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
     """Load an ``EVDemandConfig`` from a YAML scenario file.
 
     Nested sections ``paths``, ``sampling``, ``trips``, ``battery``, ``temperature``,
-    ``pipeline``, and ``charging`` are flattened into dataclass fields. Dates may be ISO strings.
+    ``pipeline``, and ``charging`` are flattened into dataclass fields. Dates must be
+    ISO datetimes with clock hour (e.g. ``2024-01-01T04:00:00``); date-only values are
+    rejected. ``start_date`` must be at 04:00 and ``end_date`` at 03:00 (NHTS travel day).
     """
     config_path = Path(path)
     with config_path.open() as f:
@@ -1145,7 +1219,7 @@ def main():
             final_trip_schedules = combined_trip_schedules.with_columns([
                 pl.lit(config.release).alias("release"),
                 pl.lit(config.state).alias("state"),
-            ]).sort(["bldg_id", "vehicle_id", "date"])
+            ]).sort(["bldg_id", "vehicle_id", "travel_date"])
 
             local_trip_path = f"{config.output_dir}/{trip_file_name}"
             final_trip_schedules.write_parquet(local_trip_path, partition_by=["release", "state"])

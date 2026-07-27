@@ -1,4 +1,5 @@
-# EV demand scenario for Maryland, full calendar year 2024.
+# EV demand scenario for Maryland, NHTS travel-day year 2024.
+# Simulation window must start at 04:00 and end at 03:00 (last hour slot = 03:00–03:59).
 # Run:
 #   python -m utils.EVs.ev_demand --config utils/EVs/configs/md_2024.yaml
 #
@@ -7,8 +8,8 @@
 
 state: MD
 release: res_2024_tmy3_2
-start_date: 2024-01-01
-end_date: 2024-12-31
+start_date: 2024-01-01T04:00:00
+end_date: 2025-01-01T03:00:00
 
 paths:
   # Omit to use defaults under utils/EVs/ev_data/
@@ -37,12 +38,13 @@ sampling:
 
 trips:
   min_trip_away_hours: 1
-  max_departure_hour: 23
-  max_arrival_hour: 24
+  # Travel-day extended hours (4=4am start day … 27=3am next day; arrival exclusive end 28=4am)
+  max_departure_hour: 27
+  max_arrival_hour: 28
   # Discrete hour offsets applied independently to departure and arrival
   time_offsets: [-2, -1, 0, 1, 2]
   time_offset_probabilities: [0.05, 0.10, 0.70, 0.10, 0.05]
-  # Miles ~ Normal(base, base * miles_noise_std_fraction)
+  # Miles ~ truncated Normal(base, base * miles_noise_std_fraction) on [0, ∞)
   miles_noise_std_fraction: 0.1
 
 battery:

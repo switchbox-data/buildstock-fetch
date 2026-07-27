@@ -119,7 +119,7 @@ def test_load_resstock_weather_station_temps_hour_ending(tmp_path):
         "hour": list(range(24)),
         "temp_f": [32.0] * 24,
     })
-    hours_base = build_hours_base(datetime(2024, 1, 1), datetime(2024, 1, 1))
+    hours_base = build_hours_base(datetime(2024, 1, 1, 0), datetime(2024, 1, 1, 23))
     hourly = build_bldg_hourly_temp_f(
         hours_base=hours_base,
         bldg_stations=pl.DataFrame({"bldg_id": ["b1"], "weather_station_name": ["G2400310"]}),

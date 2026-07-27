@@ -14,6 +14,7 @@ from utils.EVs.NHTSProfileSampler import (
     summarize_nhts_match_catalog,
     NHTSProfileSampler,
 )
+from utils.EVs.nhts_tours import trips_as_singleton_tours
 from utils.EVs.TripScheduleGenerator import TripScheduleGenerator
 from utils.EVs.charging import (
     build_hours_base,
@@ -31,24 +32,27 @@ HOURS_PER_YEAR = 8760
 
 
 def make_trip_profile(
-    departure_hours: list[int],
-    arrival_hours: list[int],
-    miles: list[float],
+    trip_departure_hours: list[int],
+    trip_arrival_hours: list[int],
+    trip_miles_driven: list[float],
     trip_weights: list[float] | None = None,
     trip_ids: list[int] | None = None,
 ) -> TripProfile:
-    n = len(departure_hours)
-    return TripProfile(
-        departure_hours=departure_hours,
-        arrival_hours=arrival_hours,
-        miles=miles,
+    """Test helper: one tour per leg (explicit; no TripProfile auto-fill)."""
+    n = len(trip_departure_hours)
+    return trips_as_singleton_tours(
+        trip_departure_hours=trip_departure_hours,
+        trip_arrival_hours=trip_arrival_hours,
+        trip_miles_driven=trip_miles_driven,
         trip_weights=trip_weights or [1.0] * n,
-        trip_ids=trip_ids or list(range(1, n + 1)),
+        trip_ids=trip_ids,
     )
 
 
 def num_hours_for_range(start_date: datetime, end_date: datetime) -> int:
-    return ((end_date - start_date).days + 1) * 24
+    start_hour = start_date.replace(minute=0, second=0, microsecond=0)
+    end_hour = end_date.replace(minute=0, second=0, microsecond=0)
+    return int((end_hour - start_hour).total_seconds() // 3600) + 1
 
 
 def make_ev_attributes(
@@ -142,8 +146,8 @@ def calculator(mock_nhts_data, mock_metadata, ev_ownership_df, ev_battery_df, ev
         ev_ownership_df=ev_ownership_df,
         ev_battery_df=ev_battery_df,
         ev_autonomie_df=ev_autonomie_df,
-        start_date=datetime(2022, 1, 1),
-        end_date=datetime(2022, 1, 7),
+        start_date=datetime(2022, 1, 1, 4),
+        end_date=datetime(2022, 1, 8, 3),
         pums_df=mock_metadata,  # Using same data for simplicity
         random_state=42,
     )
@@ -253,15 +257,43 @@ def test_match_prefers_urban_over_income_only_cross_urban(calculator):
     assert vehicle_ids == ["v4"]
 
 
-def test_match_drops_urban_before_occupants(calculator):
-    """Cross urban/rural to keep income+occupants rather than urban_income alone.
+def test_match_prefers_urban_income_over_income_occupants():
+    """Keep urban/rural when dropping occupants; place-type beats HH size for VMT.
 
-    Fixture has urban v2/v3 at income=2, occupants=3; no rural profiles with that HH size.
-    A rural target should hit income_occupants (cross urban) before urban_income.
+    Pool has rural income=2 with occupants=4 and urban income=2 with occupants=3.
+    A rural target at income=2, occupants=3 should hit urban_income (rural peer)
+    before income_occupants (cross-urban same HH size).
     """
+    nhts = pl.DataFrame({
+        "hh_vehicle_id": ["urban_occ3", "rural_occ4", "urban_occ3", "rural_occ4"],
+        "income_bucket": [2, 2, 2, 2],
+        "occupants": [3, 4, 3, 4],
+        "vehicles": [1, 1, 1, 1],
+        "urban": [1, 2, 1, 2],
+        "weekday": [2, 2, 1, 1],
+        "start_time": [900, 800, 1100, 1000],
+        "end_time": [1700, 1200, 1500, 1400],
+        "miles_driven": [30.0, 25.0, 28.0, 22.0],
+        "trip_weight": [1.0, 1.0, 1.0, 1.0],
+    })
+    sampler = NHTSProfileSampler(nhts_df=nhts, random_state=42)
+    match_type, vehicle_ids = sampler.match(
+        target_income=2,
+        target_urban=2,
+        target_occupants=3,
+        target_vehicles=1,
+        num_samples=1,
+        weekday=True,
+    )
+    assert match_type == "urban_income"
+    assert vehicle_ids == ["rural_occ4"]
+
+
+def test_match_falls_back_to_income_occupants_when_urban_income_misses(calculator):
+    """When no same-urban pool exists at the income, cross urban to keep occupants."""
     match_type, vehicle_ids = calculator.nhts_sampler.match(
         target_income=2,
-        target_urban=2,  # rural; only urban NHTS rows have income=2, occupants=3
+        target_urban=2,  # rural; fixture has income=2 only as urban v2/v3
         target_occupants=3,
         target_vehicles=1,
         num_samples=1,
@@ -279,8 +311,8 @@ def test_sample_uses_sampler_nhts_by_default(
         "ev_ownership_df": ev_ownership_df,
         "ev_battery_df": ev_battery_df,
         "ev_autonomie_df": ev_autonomie_df,
-        "start_date": datetime(2022, 1, 1),
-        "end_date": datetime(2022, 1, 7),
+        "start_date": datetime(2022, 1, 1, 4),
+        "end_date": datetime(2022, 1, 8, 3),
         "random_state": 42,
     }
     profiles_explicit = EVDemandCalculator(**calculator_kwargs).nhts_sampler.sample(
@@ -306,64 +338,64 @@ def test_sample(calculator):
     expected_profiles = {
         ("b1", 1): {
             "weekday": {
-                "departure_hours": [8],
-                "arrival_hours": [17],
-                "miles": [20.0],
+                "trip_departure_hours": [8],
+                "trip_arrival_hours": [17],
+                "trip_miles_driven": [20.0],
                 "trip_weights": [1.0],
                 "trip_ids": [1],
             },
             "weekend": {
-                "departure_hours": [11],
-                "arrival_hours": [15],
-                "miles": [25.0],
+                "trip_departure_hours": [11],
+                "trip_arrival_hours": [15],
+                "trip_miles_driven": [25.0],
                 "trip_weights": [1.0],
                 "trip_ids": [1],
             },
         },
         ("b2", 1): {
             "weekday": {
-                "departure_hours": [10],
-                "arrival_hours": [19],
-                "miles": [40.0],
+                "trip_departure_hours": [10],
+                "trip_arrival_hours": [19],
+                "trip_miles_driven": [40.0],
                 "trip_weights": [1.0],
                 "trip_ids": [1],
             },
             "weekend": {
-                "departure_hours": [12],
-                "arrival_hours": [16],
-                "miles": [28.0],
+                "trip_departure_hours": [12],
+                "trip_arrival_hours": [16],
+                "trip_miles_driven": [28.0],
                 "trip_weights": [1.0],
                 "trip_ids": [1],
             },
         },
         ("b2", 2): {
             "weekday": {
-                "departure_hours": [9],
-                "arrival_hours": [18],
-                "miles": [30.0],
+                "trip_departure_hours": [9],
+                "trip_arrival_hours": [18],
+                "trip_miles_driven": [30.0],
                 "trip_weights": [1.0],
                 "trip_ids": [1],
             },
             "weekend": {
-                "departure_hours": [14],
-                "arrival_hours": [18],
-                "miles": [35.0],
+                "trip_departure_hours": [14],
+                "trip_arrival_hours": [18],
+                "trip_miles_driven": [35.0],
                 "trip_weights": [1.0],
                 "trip_ids": [1],
             },
         },
         ("b3", 1): {
             "weekday": {
-                "departure_hours": [8, 13],
-                "arrival_hours": [12, 17],
-                "miles": [10.0, 15.0],
+                "trip_departure_hours": [8, 13],
+                "trip_arrival_hours": [12, 17],
+                "trip_miles_driven": [10.0, 15.0],
                 "trip_weights": [1.0, 1.0],
                 "trip_ids": [1, 2],
             },
             "weekend": {
-                "departure_hours": [14],
-                "arrival_hours": [18],
-                "miles": [35.0],
+                "trip_departure_hours": [14],
+                "trip_arrival_hours": [18],
+                "trip_miles_driven": [35.0],
                 "trip_weights": [1.0],
                 "trip_ids": [1],
             },
@@ -382,16 +414,16 @@ def test_sample(calculator):
         assert profile.vehicle_id == vehicle_id
 
         expected_weekday = expected["weekday"]
-        assert profile.weekday.departure_hours == expected_weekday["departure_hours"]
-        assert profile.weekday.arrival_hours == expected_weekday["arrival_hours"]
-        assert profile.weekday.miles == expected_weekday["miles"]
+        assert profile.weekday.trip_departure_hours == expected_weekday["trip_departure_hours"]
+        assert profile.weekday.trip_arrival_hours == expected_weekday["trip_arrival_hours"]
+        assert profile.weekday.trip_miles_driven == expected_weekday["trip_miles_driven"]
         assert profile.weekday.trip_weights == expected_weekday["trip_weights"]
         assert profile.weekday.trip_ids == expected_weekday["trip_ids"]
 
         expected_weekend = expected["weekend"]
-        assert profile.weekend.departure_hours == expected_weekend["departure_hours"]
-        assert profile.weekend.arrival_hours == expected_weekend["arrival_hours"]
-        assert profile.weekend.miles == expected_weekend["miles"]
+        assert profile.weekend.trip_departure_hours == expected_weekend["trip_departure_hours"]
+        assert profile.weekend.trip_arrival_hours == expected_weekend["trip_arrival_hours"]
+        assert profile.weekend.trip_miles_driven == expected_weekend["trip_miles_driven"]
         assert profile.weekend.trip_weights == expected_weekend["trip_weights"]
         assert profile.weekend.trip_ids == expected_weekend["trip_ids"]
 
@@ -429,8 +461,8 @@ def test_sample_zero_vehicles(
         ev_ownership_df=ev_ownership_df,
         ev_battery_df=ev_battery_df,
         ev_autonomie_df=ev_autonomie_df,
-        start_date=datetime(2022, 1, 1),
-        end_date=datetime(2022, 1, 7),
+        start_date=datetime(2022, 1, 1, 4),
+        end_date=datetime(2022, 1, 8, 3),
         pums_df=mock_metadata_with_zero,
         random_state=42,
     )
@@ -463,35 +495,41 @@ def test_generate_daily_schedules(calculator):
     schedules = calculator.trip_schedule_generator.generate_daily_trip_schedule(profile)
 
     expected_schedules = [
-        # Weekend days (Sat-Sun)
-        {"date": datetime(2022, 1, 1), "departure_hour": 10, "arrival_hour": 18, "miles_driven": 22.22029970},
-        {"date": datetime(2022, 1, 2), "departure_hour": 10, "arrival_hour": 19, "miles_driven": 25.79725546},
-        # Weekdays (Mon-Fri)
-        {"date": datetime(2022, 1, 3), "departure_hour": 8, "arrival_hour": 17, "miles_driven": 18.83824373},
-        {"date": datetime(2022, 1, 4), "departure_hour": 8, "arrival_hour": 17, "miles_driven": 18.94966038},
-        {"date": datetime(2022, 1, 5), "departure_hour": 8, "arrival_hour": 17, "miles_driven": 19.14390787},
-        {"date": datetime(2022, 1, 6), "departure_hour": 8, "arrival_hour": 17, "miles_driven": 18.51518632},
-        {"date": datetime(2022, 1, 7), "departure_hour": 8, "arrival_hour": 16, "miles_driven": 20.24443833},
+        # Weekend travel days (Sat-Sun) — independent dep/arr offsets can stretch duration
+        {"travel_date": datetime(2022, 1, 1), "trip_departure_hour": 10, "trip_arrival_hour": 21, "trip_miles_driven": 26.61922135},
+        {"travel_date": datetime(2022, 1, 2), "trip_departure_hour": 10, "trip_arrival_hour": 19, "trip_miles_driven": 28.80757464},
+        # Weekday travel days (Mon-Fri)
+        {"travel_date": datetime(2022, 1, 3), "trip_departure_hour": 7, "trip_arrival_hour": 18, "trip_miles_driven": 23.15842563},
+        {"travel_date": datetime(2022, 1, 4), "trip_departure_hour": 6, "trip_arrival_hour": 19, "trip_miles_driven": 21.53486946},
+        {"travel_date": datetime(2022, 1, 5), "trip_departure_hour": 8, "trip_arrival_hour": 17, "trip_miles_driven": 19.07316461},
+        {"travel_date": datetime(2022, 1, 6), "trip_departure_hour": 8, "trip_arrival_hour": 17, "trip_miles_driven": 19.06854049},
+        {"travel_date": datetime(2022, 1, 7), "trip_departure_hour": 8, "trip_arrival_hour": 17, "trip_miles_driven": 17.97433776},
     ]
-    print(schedules)
     assert len(schedules) == len(expected_schedules)
 
     for actual, expected in zip(schedules.iter_rows(named=True), expected_schedules, strict=True):
         assert actual["bldg_id"] == "b1"
         assert actual["vehicle_id"] == 1
-        assert actual["date"] == expected["date"]
-        assert actual["departure_hour"] == expected["departure_hour"]
-        assert actual["arrival_hour"] == expected["arrival_hour"]
-        assert pytest.approx(actual["miles_driven"], rel=1e-8) == expected["miles_driven"]
+        assert actual["travel_date"] == expected["travel_date"]
+        assert actual["trip_departure_date"] == expected["travel_date"]
+        assert actual["trip_arrival_date"] == expected["travel_date"]
+        assert actual["trip_departure_hour"] == expected["trip_departure_hour"]
+        assert actual["trip_arrival_hour"] == expected["trip_arrival_hour"]
+        assert pytest.approx(actual["trip_miles_driven"], rel=1e-8) == expected["trip_miles_driven"]
+        # Singleton-tour profiles: tour window matches the drive interval.
+        assert actual["tour_id"] == 1
+        assert actual["tour_departure_hour"] == actual["trip_departure_hour"]
+        assert actual["tour_arrival_hour"] == actual["trip_arrival_hour"]
 
 
 def test_normalize_day_trip_times_enforces_order_and_non_overlap():
+    # Travel-day extended hours (same as clock hours when both are >= 4am)
     departures = np.array([12, 8])
     arrival_hours = np.array([11, 17])  # first trip inverted; second overlaps first chronologically
 
     gen = TripScheduleGenerator(
-        start_date=datetime(2022, 1, 1),
-        end_date=datetime(2022, 1, 1),
+        start_date=datetime(2022, 1, 1, 4),
+        end_date=datetime(2022, 1, 2, 3),
     )
     dep, arrival, keep = gen._normalize_day_trip_times(departures, arrival_hours)
 
@@ -505,7 +543,8 @@ def test_normalize_day_trip_times_enforces_order_and_non_overlap():
         assert next_dep >= prev_arrival
 
 
-def test_generate_daily_schedules_no_invalid_or_overlapping_trips(calculator):
+def test_generate_daily_schedules_no_invalid_trips_or_overlapping_tours(calculator):
+    """Drive intervals stay valid; tour away windows on a day do not overlap."""
     profile = make_vehicle_profile(
         weekday=make_trip_profile([8, 13], [12, 17], [20.0, 10.0]),
         weekend=make_trip_profile([10, 15], [14, 18], [25.0, 5.0], trip_ids=[1, 2]),
@@ -515,21 +554,247 @@ def test_generate_daily_schedules_no_invalid_or_overlapping_trips(calculator):
         profile, rng=np.random.RandomState(0)
     )
 
-    for day_trips in schedules.partition_by("date", as_dict=False):
-        deps = day_trips["departure_hour"].to_list()
-        assert deps == sorted(deps)
+    for day_trips in schedules.partition_by("travel_date", as_dict=False):
         for row in day_trips.iter_rows(named=True):
-            assert row["arrival_hour"] > row["departure_hour"]
+            dep_key = (row["trip_departure_date"], row["trip_departure_hour"])
+            arr_key = (row["trip_arrival_date"], row["trip_arrival_hour"])
+            assert arr_key > dep_key
 
-        for prev, nxt in pairwise(day_trips.iter_rows(named=True)):
-            assert nxt["departure_hour"] >= prev["arrival_hour"]
+        tours = list(
+            day_trips.unique(
+                subset=[
+                    "tour_id",
+                    "tour_departure_date",
+                    "tour_departure_hour",
+                    "tour_arrival_date",
+                    "tour_arrival_hour",
+                ]
+            )
+            .sort(
+                [
+                    "tour_departure_date",
+                    "tour_departure_hour",
+                    "tour_arrival_date",
+                    "tour_arrival_hour",
+                ]
+            )
+            .iter_rows(named=True)
+        )
+        for prev, nxt in pairwise(tours):
+            prev_arr = (prev["tour_arrival_date"], prev["tour_arrival_hour"])
+            next_dep = (nxt["tour_departure_date"], nxt["tour_departure_hour"])
+            assert next_dep >= prev_arr
+
+
+def test_per_trip_offsets_can_stretch_duration_and_differ_across_legs():
+    """Independent dep/arr offsets (Turk-style) can change trip length; legs are not rigid-shifted together."""
+    from utils.EVs.NHTSProfileSampler import TripProfile
+
+    weekday = TripProfile(
+        trip_departure_hours=[8, 16],
+        trip_arrival_hours=[9, 17],
+        trip_miles_driven=[10.0, 10.0],
+        trip_weights=[1.0, 1.0],
+        trip_ids=[1, 2],
+        tour_ids=[1, 1],
+        tour_departure_hours=[8],
+        tour_arrival_hours=[17],
+        tour_ends_away=[False],
+    )
+    profile = make_vehicle_profile(weekday=weekday, weekend=TripProfile())
+    gen = TripScheduleGenerator(
+        start_date=datetime(2022, 1, 3, 4),
+        end_date=datetime(2022, 1, 4, 3),
+        random_state=0,
+        time_offsets=(-1, 1),
+        time_offset_probabilities=(0.5, 0.5),
+        miles_noise_std_fraction=0.0,
+    )
+
+    class _ForcedOffsets(np.random.RandomState):
+        """First choice → all dep -1; second → all arr +1; later draws use parent RNG."""
+
+        def __init__(self):
+            super().__init__(0)
+            self._choice_calls = 0
+
+        def choice(self, a, size=None, replace=True, p=None):  # noqa: A003
+            self._choice_calls += 1
+            if self._choice_calls == 1:
+                return np.full(size, -1, dtype=int)
+            if self._choice_calls == 2:
+                return np.full(size, 1, dtype=int)
+            return super().choice(a, size=size, replace=replace, p=p)
+
+    trips = gen.generate_daily_trip_schedule(profile, rng=_ForcedOffsets())
+    assert trips.height == 2
+    # Base legs were 1 hour; dep -1 and arr +1 stretch each to 3 hours.
+    durations = (
+        trips["trip_arrival_hour"] - trips["trip_departure_hour"]
+    ).to_list()
+    assert durations == [3, 3]
+    assert trips["tour_departure_hour"].unique().to_list() == [
+        int(trips["trip_departure_hour"].min())
+    ]
+    assert trips["tour_arrival_hour"].unique().to_list() == [
+        int(trips["trip_arrival_hour"].max())
+    ]
+
+def test_overnight_trip_spans_midnight(calculator):
+    """NHTS early-morning / overnight legs land on the next calendar morning."""
+    profile = make_vehicle_profile(
+        weekday=make_trip_profile([22], [2], [30.0]),  # 10pm → 2am on travel day
+        weekend=make_trip_profile([22], [2], [30.0]),
+    )
+    # Single weekday travel day: Mon 2022-01-03
+    gen = TripScheduleGenerator(
+        start_date=datetime(2022, 1, 3, 4),
+        end_date=datetime(2022, 1, 4, 3),
+        random_state=0,
+        time_offsets=(0,),
+        time_offset_probabilities=(1.0,),
+        miles_noise_std_fraction=0.0,
+    )
+    schedules = gen.generate_daily_trip_schedule(profile, rng=np.random.RandomState(0))
+    assert schedules.height == 1
+    row = schedules.row(0, named=True)
+    assert row["travel_date"] == datetime(2022, 1, 3)
+    assert row["trip_departure_date"] == datetime(2022, 1, 3)
+    assert row["trip_departure_hour"] == 22
+    assert row["trip_arrival_date"] == datetime(2022, 1, 4)
+    assert row["trip_arrival_hour"] == 2
+
+    presence = calculator.charging_simulator.generate_presence(
+        schedules,
+        hours_base=build_hours_base(datetime(2022, 1, 3, 4), datetime(2022, 1, 4, 3)),
+    )[("b1", 1)]
+    away = presence.filter(pl.col("away_from_home"))
+    away_hours = set(zip(away["timestamp"].dt.date().to_list(), away["timestamp"].dt.hour().to_list()))
+    assert (datetime(2022, 1, 3).date(), 22) in away_hours
+    assert (datetime(2022, 1, 3).date(), 23) in away_hours
+    assert (datetime(2022, 1, 4).date(), 0) in away_hours
+    assert (datetime(2022, 1, 4).date(), 1) in away_hours
+    assert (datetime(2022, 1, 4).date(), 2) not in away_hours
+
+
+def test_build_tours_from_nhts_legs_school_dropoff_commute():
+    """Home→dropoff→work→dropoff→home becomes one tour with four drive legs."""
+    from utils.EVs.nhts_tours import build_tours_from_legs, nhts_arrival_hour
+
+    # Real pattern from NHTS household 9000013847 (times HHMM, purposes WHY*).
+    start_times = [840, 850, 1715, 1805]
+    end_times = [845, 925, 1800, 1815]
+    why_from = [1, 10, 3, 10]  # home, dropoff, work, dropoff
+    why_to = [10, 3, 10, 1]  # dropoff, work, dropoff, home
+    miles = [2.8, 33.5, 31.7, 3.1]
+    weights = [1.0, 1.0, 1.0, 1.0]
+
+    day = build_tours_from_legs(
+        start_times=start_times,
+        end_times=end_times,
+        trip_miles_driven=miles,
+        trip_weights=weights,
+        why_from=why_from,
+        why_to=why_to,
+    )
+
+    assert day.tour_ids == [1, 1, 1, 1]
+    assert len(day.tour_departure_hours) == 1
+    assert day.tour_departure_hours[0] == 8  # STRTTIME 840 → hour after tour chain
+    assert day.tour_arrival_hours[0] == nhts_arrival_hour(1815)  # 18:15 → exclusive hour 19
+    assert day.trip_departure_hours == [8, 8, 17, 18]
+    assert day.trip_arrival_hours == [9, 10, 18, 19]
+    assert day.trip_miles_driven == miles
+    assert day.tour_ends_away == [False]
+
+
+def test_long_work_dwell_stays_one_tour():
+    """Home→work (park all day)→home is one tour; dwell length does not split."""
+    from utils.EVs.nhts_tours import build_tours_from_legs
+
+    day = build_tours_from_legs(
+        start_times=[800, 1700],
+        end_times=[830, 1730],
+        trip_miles_driven=[15.0, 15.0],
+        trip_weights=[1.0, 1.0],
+        why_from=[1, 3],  # home → work, work → home
+        why_to=[3, 1],
+    )
+    assert day.tour_ids == [1, 1]
+    assert day.tour_departure_hours == [8]
+    assert day.tour_arrival_hours == [18]  # 1730 → exclusive hour 18
+    assert len(day.tour_departure_hours) == 1
+
+
+def test_presence_uses_tour_discharge_uses_drive_legs(calculator):
+    """Mid-tour parking is away (no home charge) but has zero discharge / no temp draw."""
+    from utils.EVs.NHTSProfileSampler import TripProfile
+
+    # One tour 8→17 away; drives only 8→9 and 16→17 (parked at work 9–16).
+    weekday = TripProfile(
+        trip_departure_hours=[8, 16],
+        trip_arrival_hours=[9, 17],
+        trip_miles_driven=[10.0, 10.0],
+        trip_weights=[1.0, 1.0],
+        trip_ids=[1, 2],
+        tour_ids=[1, 1],
+        tour_departure_hours=[8],
+        tour_arrival_hours=[17],
+        tour_ends_away=[False],
+    )
+    profile = make_vehicle_profile(weekday=weekday, weekend=TripProfile())
+    gen = TripScheduleGenerator(
+        start_date=datetime(2022, 1, 3, 4),  # Monday only
+        end_date=datetime(2022, 1, 4, 3),
+        random_state=0,
+        time_offsets=(0,),
+        time_offset_probabilities=(1.0,),
+        miles_noise_std_fraction=0.0,
+    )
+    trips = gen.generate_daily_trip_schedule(profile, rng=np.random.RandomState(0))
+    assert trips.height == 2
+    assert set(trips["tour_id"].to_list()) == {1}
+    assert trips["tour_departure_hour"].unique().to_list() == [8]
+    assert trips["tour_arrival_hour"].unique().to_list() == [17]
+
+    hours_base = build_hours_base(datetime(2022, 1, 3, 4), datetime(2022, 1, 4, 3))
+    presence = calculator.charging_simulator.generate_presence(trips, hours_base=hours_base)[("b1", 1)]
+    day = presence.filter(pl.col("timestamp").dt.date() == datetime(2022, 1, 3).date())
+    # Away for tour window hours 8..16 inclusive (arrival exclusive at 17).
+    away_hours = set(day.filter(~pl.col("at_home"))["timestamp"].dt.hour().to_list())
+    assert away_hours == set(range(8, 17))
+
+    attrs = make_ev_attributes([("b1", 1)], kwh_per_mile=0.3)
+    soc = calculator.charging_simulator.generate_soc(
+        trips,
+        ev_attributes=attrs,
+        hours_base=hours_base,
+    )
+    soc_day = soc.filter(pl.col("timestamp").dt.date() == datetime(2022, 1, 3).date())
+    discharge_by_hour = {
+        int(r["timestamp"].hour): float(r["discharge_kwh"])
+        for r in soc_day.iter_rows(named=True)
+    }
+    # Discharge only on drive hours 8 and 16; parked 9–15 is away but 0 kWh.
+    assert discharge_by_hour[8] == pytest.approx(10.0 * 0.3)
+    assert discharge_by_hour[16] == pytest.approx(10.0 * 0.3)
+    for hour in range(9, 16):
+        assert discharge_by_hour[hour] == 0.0
+    assert discharge_by_hour[17] == 0.0
+    # Still away (not charging) during parked work hours.
+    at_home_by_hour = {
+        int(r["timestamp"].hour): bool(r["at_home"])
+        for r in soc_day.iter_rows(named=True)
+    }
+    assert at_home_by_hour[12] is False
+    assert at_home_by_hour[17] is True
 
 
 def test_build_hours_base_matches_instance_date_range(calculator):
     hours_base = build_hours_base(calculator.start_date, calculator.end_date)
     assert hours_base.height == num_hours_for_range(calculator.start_date, calculator.end_date)
-    assert hours_base["timestamp"][0] == datetime(2022, 1, 1, 0, 0, 0)
-    assert hours_base["timestamp"][-1] == datetime(2022, 1, 7, 23, 0, 0)
+    assert hours_base["timestamp"][0] == datetime(2022, 1, 1, 4, 0, 0)
+    assert hours_base["timestamp"][-1] == datetime(2022, 1, 8, 3, 0, 0)
 
 
 def _vehicle_hourly_schedule(df: pl.DataFrame, bldg_id: str, vehicle_id: int) -> pl.DataFrame:
@@ -565,10 +830,12 @@ def test_generate_presence_schedules_all_home_without_trips(calculator):
         pl.DataFrame({
             "bldg_id": [],
             "vehicle_id": [],
-            "date": [],
-            "departure_hour": [],
-            "arrival_hour": [],
-            "miles_driven": [],
+            "travel_date": [],
+            "trip_departure_date": [],
+            "trip_departure_hour": [],
+            "trip_arrival_date": [],
+            "trip_arrival_hour": [],
+            "trip_miles_driven": [],
         }),
         vehicle_keys=[("b1", 1)],
     )[("b1", 1)]
@@ -605,7 +872,7 @@ def test_generate_soc_schedules_energy_balance(calculator):
     assert soc_schedule["soc_kwh"].min() >= 0.0
     assert soc_schedule["soc_kwh"].max() <= battery_capacity_kwh + 1e-9
 
-    expected_discharge = trip_schedules["miles_driven"].sum() * kwh_per_mile
+    expected_discharge = trip_schedules["trip_miles_driven"].sum() * kwh_per_mile
     assert soc_schedule["discharge_kwh"].sum() == pytest.approx(expected_discharge, rel=1e-6)
     assert soc_schedule["charge_kwh"].sum() == pytest.approx(expected_discharge, rel=1e-6)
     assert not soc_schedule["soc_underflow"].any()
@@ -863,10 +1130,12 @@ def test_off_peak_charging_never_charges_during_peak():
     vehicle_trips = pl.DataFrame({
         "bldg_id": ["b1"],
         "vehicle_id": [1],
-        "date": [datetime(2022, 1, 1)],
-        "departure_hour": [8],
-        "arrival_hour": [17],
-        "miles_driven": [20.0],
+        "travel_date": [datetime(2022, 1, 1)],
+        "trip_departure_date": [datetime(2022, 1, 1)],
+        "trip_departure_hour": [8],
+        "trip_arrival_date": [datetime(2022, 1, 1)],
+        "trip_arrival_hour": [17],
+        "trip_miles_driven": [20.0],
     })
     charge_allowed, soc_target_kwh = build_off_peak_charging_params(
         at_home,
@@ -910,10 +1179,12 @@ def test_off_peak_charging_blocks_between_trip_arrival_hours():
     vehicle_trips = pl.DataFrame({
         "bldg_id": ["b1", "b1"],
         "vehicle_id": [1, 1],
-        "date": [datetime(2022, 1, 1), datetime(2022, 1, 1)],
-        "departure_hour": [8, 14],
-        "arrival_hour": [12, 17],
-        "miles_driven": [13.33, 6.67],
+        "travel_date": [datetime(2022, 1, 1), datetime(2022, 1, 1)],
+        "trip_departure_date": [datetime(2022, 1, 1), datetime(2022, 1, 1)],
+        "trip_departure_hour": [8, 14],
+        "trip_arrival_date": [datetime(2022, 1, 1), datetime(2022, 1, 1)],
+        "trip_arrival_hour": [12, 17],
+        "trip_miles_driven": [13.33, 6.67],
     })
     charge_allowed, _ = build_off_peak_charging_params(
         at_home,
@@ -945,10 +1216,12 @@ def test_off_peak_charging_no_emergency_override_after_low_soc_return():
     vehicle_trips = pl.DataFrame({
         "bldg_id": ["b1"],
         "vehicle_id": [1],
-        "date": [datetime(2022, 1, 1)],
-        "departure_hour": [8],
-        "arrival_hour": [17],
-        "miles_driven": [100.0],
+        "travel_date": [datetime(2022, 1, 1)],
+        "trip_departure_date": [datetime(2022, 1, 1)],
+        "trip_departure_hour": [8],
+        "trip_arrival_date": [datetime(2022, 1, 1)],
+        "trip_arrival_hour": [17],
+        "trip_miles_driven": [100.0],
     })
     charge_allowed, soc_target_kwh = build_off_peak_charging_params(
         at_home,
@@ -987,7 +1260,7 @@ def test_off_peak_charging_no_emergency_override_after_low_soc_return():
 
 def test_off_peak_immediate_never_charges_during_peak_by_default():
     """Pure TOU Immediate: max power off-peak only; no on-peak even with low SOC."""
-    hours_base = build_hours_base(datetime(2022, 1, 1), datetime(2022, 1, 1))
+    hours_base = build_hours_base(datetime(2022, 1, 1, 0), datetime(2022, 1, 1, 23))
     is_off_peak = build_is_off_peak(hours_base, peak_clock_hours=(17, 18, 19, 20, 21))
     # Home overnight; away 8–17; return into peak at 17 with nearly empty pack.
     at_home = np.array([hour < 8 or hour >= 17 for hour in range(24)])
@@ -1013,7 +1286,7 @@ def test_off_peak_immediate_never_charges_during_peak_by_default():
 
 def test_off_peak_immediate_fills_to_full_not_soc_req():
     """Unlike off_peak, off_peak_immediate keeps charging toward full capacity."""
-    hours_base = build_hours_base(datetime(2022, 1, 1), datetime(2022, 1, 1))
+    hours_base = build_hours_base(datetime(2022, 1, 1, 0), datetime(2022, 1, 1, 23))
     is_off_peak = build_is_off_peak(hours_base, peak_clock_hours=(17, 18, 19, 20, 21))
     at_home = np.ones(24, dtype=bool)
     discharge = np.zeros(24, dtype=np.float64)
@@ -1034,7 +1307,7 @@ def test_off_peak_immediate_fills_to_full_not_soc_req():
 
 def test_off_peak_immediate_emergency_allows_peak_when_shortfall():
     """With emergency on, charge on-peak if remaining off-peak supply cannot cover next trip."""
-    hours_base = build_hours_base(datetime(2022, 1, 1), datetime(2022, 1, 1))
+    hours_base = build_hours_base(datetime(2022, 1, 1, 0), datetime(2022, 1, 1, 23))
     # Peak 12–21; only home after 17 (return into peak). Next trip at 22 needs 20 kWh;
     # no off-peak home hours remain before that departure.
     is_off_peak = build_is_off_peak(hours_base, peak_clock_hours=tuple(range(12, 22)))
@@ -1141,13 +1414,13 @@ def test_max_daily_miles_from_trip_schedules():
     trips = pl.DataFrame({
         "bldg_id": ["a", "a", "a", "b"],
         "vehicle_id": [1, 1, 1, 1],
-        "date": [
+        "travel_date": [
             datetime(2022, 1, 1),
             datetime(2022, 1, 1),
             datetime(2022, 1, 2),
             datetime(2022, 1, 1),
         ],
-        "miles_driven": [10.0, 15.0, 20.0, 5.0],
+        "trip_miles_driven": [10.0, 15.0, 20.0, 5.0],
     })
     # a day1 = 25, day2 = 20 → max 25; b → 5.
     result = TripScheduleGenerator.max_daily_miles_from_trip_schedules(trips).sort("bldg_id")
@@ -1178,10 +1451,12 @@ def test_match_and_generate_trip_schedules(sample_evs, sample_profiles, generate
     schedule_data = {
         "bldg_id": ["b1", "b1"],
         "vehicle_id": [1, 1],
-        "date": [datetime(2022, 1, 1), datetime(2022, 1, 2)],
-        "departure_hour": [10, 10],
-        "arrival_hour": [19, 19],
-        "miles_driven": [25.0, 25.0],
+        "travel_date": [datetime(2022, 1, 1), datetime(2022, 1, 2)],
+        "trip_departure_date": [datetime(2022, 1, 1), datetime(2022, 1, 2)],
+        "trip_departure_hour": [10, 10],
+        "trip_arrival_date": [datetime(2022, 1, 1), datetime(2022, 1, 2)],
+        "trip_arrival_hour": [19, 19],
+        "trip_miles_driven": [25.0, 25.0],
     }
     generate_schedule.return_value = pl.DataFrame(schedule_data)
 
@@ -1190,15 +1465,21 @@ def test_match_and_generate_trip_schedules(sample_evs, sample_profiles, generate
 
     # Verify exact expected output
     assert isinstance(result, pl.DataFrame)
-    assert result.shape == (2, 6)  # 2 rows, 6 columns
+    assert result.shape == (2, 8)  # 2 rows, 8 columns
 
     # Check exact values
     assert result["bldg_id"].to_list() == schedule_data["bldg_id"]
     assert result["vehicle_id"].to_list() == schedule_data["vehicle_id"]
-    assert result["departure_hour"].to_list() == schedule_data["departure_hour"]
-    assert result["arrival_hour"].to_list() == schedule_data["arrival_hour"]
-    assert result["miles_driven"].to_list() == schedule_data["miles_driven"]
-    assert [d.strftime("%Y-%m-%d") for d in result["date"]] == [d.strftime("%Y-%m-%d") for d in schedule_data["date"]]
+    assert result["trip_departure_hour"].to_list() == schedule_data["trip_departure_hour"]
+    assert result["trip_arrival_hour"].to_list() == schedule_data["trip_arrival_hour"]
+    assert result["trip_miles_driven"].to_list() == schedule_data["trip_miles_driven"]
+    assert [d.strftime("%Y-%m-%d") for d in result["travel_date"]] == [d.strftime("%Y-%m-%d") for d in schedule_data["travel_date"]]
+    assert [d.strftime("%Y-%m-%d") for d in result["trip_departure_date"]] == [
+        d.strftime("%Y-%m-%d") for d in schedule_data["trip_departure_date"]
+    ]
+    assert [d.strftime("%Y-%m-%d") for d in result["trip_arrival_date"]] == [
+        d.strftime("%Y-%m-%d") for d in schedule_data["trip_arrival_date"]
+    ]
 
     # Battery attributes assigned for the EV slots present after sample
     # (mock sets evs=1 on all 3 metadata buildings → 3 attribute rows).
@@ -1217,10 +1498,12 @@ def test_generate_soc_schedules_respects_per_vehicle_battery_attrs(calculator):
     trips = pl.DataFrame({
         "bldg_id": ["b1", "b2"],
         "vehicle_id": [1, 1],
-        "date": [datetime(2022, 1, 1), datetime(2022, 1, 1)],
-        "departure_hour": [9, 9],
-        "arrival_hour": [10, 10],
-        "miles_driven": [10.0, 10.0],
+        "travel_date": [datetime(2022, 1, 1), datetime(2022, 1, 1)],
+        "trip_departure_date": [datetime(2022, 1, 1), datetime(2022, 1, 1)],
+        "trip_departure_hour": [9, 9],
+        "trip_arrival_date": [datetime(2022, 1, 1), datetime(2022, 1, 1)],
+        "trip_arrival_hour": [10, 10],
+        "trip_miles_driven": [10.0, 10.0],
     })
     # Compact (efficient, smaller pack) vs pickup (thirstier, larger pack).
     attrs = pl.DataFrame({
@@ -1260,10 +1543,12 @@ def test_generate_soc_schedules_applies_resstock_temp_scale(calculator):
     trips = pl.DataFrame({
         "bldg_id": ["b1"],
         "vehicle_id": [1],
-        "date": [calculator.start_date],
-        "departure_hour": [9],
-        "arrival_hour": [10],
-        "miles_driven": [10.0],
+        "travel_date": [calculator.start_date],
+        "trip_departure_date": [calculator.start_date],
+        "trip_departure_hour": [9],
+        "trip_arrival_date": [calculator.start_date],
+        "trip_arrival_hour": [10],
+        "trip_miles_driven": [10.0],
     })
     attrs = make_ev_attributes([("b1", 1)], battery_capacity_kwh=90.0, kwh_per_mile=0.30)
     hours_base = build_hours_base(calculator.start_date, calculator.end_date)
@@ -1297,8 +1582,8 @@ def test_load_ev_demand_config_temperature_section(tmp_path):
         """
 state: MD
 release: res_2024_tmy3_2
-start_date: 2024-01-01
-end_date: 2024-01-02
+start_date: 2024-01-01T04:00:00
+end_date: 2024-01-03T03:00:00
 sampling:
   ev_assignment: resstock_adoption
 temperature:
@@ -1356,8 +1641,8 @@ def test_load_ev_demand_config_from_yaml(tmp_path):
         """
 state: MD
 release: res_2024_tmy3_2
-start_date: 2024-01-01
-end_date: 2024-01-31
+start_date: 2024-01-01T04:00:00
+end_date: 2024-02-01T03:00:00
 sampling:
   nhts_daily_miles_percentile_low: 10
   nhts_daily_miles_percentile_high: 90
@@ -1377,8 +1662,8 @@ charging:
     config = load_ev_demand_config(path)
     assert config.state == "MD"
     assert config.release == "res_2024_tmy3_2"
-    assert config.start_date == datetime(2024, 1, 1)
-    assert config.end_date == datetime(2024, 1, 31)
+    assert config.start_date == datetime(2024, 1, 1, 4)
+    assert config.end_date == datetime(2024, 2, 1, 3)
     assert config.ev_assignment == "resstock_adoption"
     assert config.match_on_vehicles is False
     assert config.max_vehicles is None
@@ -1407,8 +1692,8 @@ def test_resolve_hourly_prices_flat_and_daily():
     flat_cfg = EVDemandConfig(
         state="MD",
         release="res_2024_tmy3_2",
-        start_date=datetime(2024, 1, 1),
-        end_date=datetime(2024, 1, 2),
+        start_date=datetime(2024, 1, 1, 4),
+        end_date=datetime(2024, 1, 3, 3),
         charging_strategy="cost_minimizing",
         flat_price_usd_per_kwh=0.12,
         shed_load_penalty_usd_per_kwh=1000.0,
@@ -1422,8 +1707,8 @@ def test_resolve_hourly_prices_flat_and_daily():
     daily_cfg = EVDemandConfig(
         state="MD",
         release="res_2024_tmy3_2",
-        start_date=datetime(2024, 1, 1),
-        end_date=datetime(2024, 1, 2),
+        start_date=datetime(2024, 1, 1, 4),
+        end_date=datetime(2024, 1, 3, 3),
         charging_strategy="cost_minimizing",
         daily_price_usd_per_kwh=daily,
         shed_load_penalty_usd_per_kwh=1000.0,
@@ -1443,8 +1728,8 @@ def test_cost_minimizing_requires_prices_and_shed_penalty():
         EVDemandConfig(
             state="MD",
             release="res_2024_tmy3_2",
-            start_date=datetime(2024, 1, 1),
-            end_date=datetime(2024, 1, 2),
+            start_date=datetime(2024, 1, 1, 4),
+            end_date=datetime(2024, 1, 2, 3),
             charging_strategy="cost_minimizing",
             shed_load_penalty_usd_per_kwh=1000.0,
         )
@@ -1453,8 +1738,8 @@ def test_cost_minimizing_requires_prices_and_shed_penalty():
         EVDemandConfig(
             state="MD",
             release="res_2024_tmy3_2",
-            start_date=datetime(2024, 1, 1),
-            end_date=datetime(2024, 1, 2),
+            start_date=datetime(2024, 1, 1, 4),
+            end_date=datetime(2024, 1, 2, 3),
             charging_strategy="cost_minimizing",
             flat_price_usd_per_kwh=0.12,
         )
@@ -1467,16 +1752,16 @@ def test_off_peak_requires_peak_window_and_soc_targets():
         EVDemandConfig(
             state="MD",
             release="res_2024_tmy3_2",
-            start_date=datetime(2024, 1, 1),
-            end_date=datetime(2024, 1, 2),
+            start_date=datetime(2024, 1, 1, 4),
+            end_date=datetime(2024, 1, 2, 3),
             charging_strategy="off_peak",
         )
 
     cfg = EVDemandConfig(
         state="MD",
         release="res_2024_tmy3_2",
-        start_date=datetime(2024, 1, 1),
-        end_date=datetime(2024, 1, 2),
+        start_date=datetime(2024, 1, 1, 4),
+        end_date=datetime(2024, 1, 2, 3),
         charging_strategy="off_peak",
         peak_clock_hours=(17, 18, 19, 20, 21),
         soc_min_fraction=0.2,
@@ -1489,6 +1774,9 @@ def test_load_md_2024_config_off_peak():
     from utils.EVs.ev_demand import load_ev_demand_config
 
     config = load_ev_demand_config("utils/EVs/configs/md_2024.yaml")
+    assert config.start_date == datetime(2024, 1, 1, 4)
+    assert config.end_date == datetime(2025, 1, 1, 3)
+    assert config.num_simulation_hours() == 366 * 24  # 2024 leap year travel-day window
     assert config.charging_strategy == "off_peak_immediate"
     assert config.peak_clock_hours == (17, 18, 19, 20, 21)
     assert config.soc_min_fraction is None
@@ -1496,7 +1784,51 @@ def test_load_md_2024_config_off_peak():
     assert config.shed_load_penalty_usd_per_kwh is None
     assert config.flat_price_usd_per_kwh is None
     assert config.allow_emergency_peak_charging is False
-    assert config.temperature_adjustment == "none"
+    assert config.temperature_adjustment == "resstock"
+    assert config.max_departure_hour == 27
+    assert config.max_arrival_hour == 28
+
+
+def test_config_requires_travel_day_aligned_datetimes(tmp_path):
+    from utils.EVs.ev_demand import (
+        EVDemandConfig,
+        InvalidDateFormatError,
+        load_ev_demand_config,
+    )
+
+    # Date-only strings are rejected at parse time.
+    path = tmp_path / "date_only.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01
+end_date: 2024-01-02T03:00:00
+charging:
+  charging_strategy: immediate
+  charger_power_kw: 7.2
+"""
+    )
+    with pytest.raises((InvalidDateFormatError, ValueError)):
+        load_ev_demand_config(path)
+
+    # Wrong clock hours rejected in EVDemandConfig.
+    with pytest.raises(ValueError, match="start_date must be at 04:00"):
+        EVDemandConfig(
+            state="MD",
+            release="res_2024_tmy3_2",
+            start_date=datetime(2024, 1, 1, 0),
+            end_date=datetime(2024, 1, 2, 3),
+            charging_strategy="immediate",
+        )
+    with pytest.raises(ValueError, match="end_date must be at 03:00"):
+        EVDemandConfig(
+            state="MD",
+            release="res_2024_tmy3_2",
+            start_date=datetime(2024, 1, 1, 4),
+            end_date=datetime(2024, 1, 2, 23),
+            charging_strategy="immediate",
+        )
 
 
 def test_off_peak_immediate_config_requires_peak_only():
@@ -1506,16 +1838,16 @@ def test_off_peak_immediate_config_requires_peak_only():
         EVDemandConfig(
             state="MD",
             release="res_2024_tmy3_2",
-            start_date=datetime(2024, 1, 1),
-            end_date=datetime(2024, 1, 2),
+            start_date=datetime(2024, 1, 1, 4),
+            end_date=datetime(2024, 1, 2, 3),
             charging_strategy="off_peak_immediate",
         )
 
     cfg = EVDemandConfig(
         state="MD",
         release="res_2024_tmy3_2",
-        start_date=datetime(2024, 1, 1),
-        end_date=datetime(2024, 1, 2),
+        start_date=datetime(2024, 1, 1, 4),
+        end_date=datetime(2024, 1, 2, 3),
         charging_strategy="off_peak_immediate",
         peak_clock_hours=(17, 18, 19, 20, 21),
         allow_emergency_peak_charging=True,
@@ -1532,8 +1864,8 @@ def test_load_ev_demand_config_pums_vehicles_requires_max_vehicles(tmp_path):
         """
 state: MD
 release: res_2024_tmy3_2
-start_date: 2024-01-01
-end_date: 2024-01-31
+start_date: 2024-01-01T04:00:00
+end_date: 2024-02-01T03:00:00
 sampling:
   ev_assignment: pums_vehicles
 """
@@ -1550,8 +1882,8 @@ def test_load_ev_demand_config_pums_vehicles_ok(tmp_path):
         """
 state: MD
 release: res_2024_tmy3_2
-start_date: 2024-01-01
-end_date: 2024-01-31
+start_date: 2024-01-01T04:00:00
+end_date: 2024-02-01T03:00:00
 sampling:
   ev_assignment: pums_vehicles
   max_vehicles: 2
@@ -1572,8 +1904,8 @@ def test_config_path_defaults_by_mode():
     adoption = EVDemandConfig(
         state="MD",
         release="res_2024_tmy3_2",
-        start_date=datetime(2024, 1, 1),
-        end_date=datetime(2024, 1, 2),
+        start_date=datetime(2024, 1, 1, 4),
+        end_date=datetime(2024, 1, 2, 3),
         ev_assignment="resstock_adoption",
     )
     assert adoption.ev_ownership_path is not None
@@ -1583,8 +1915,8 @@ def test_config_path_defaults_by_mode():
     pums = EVDemandConfig(
         state="MD",
         release="res_2024_tmy3_2",
-        start_date=datetime(2024, 1, 1),
-        end_date=datetime(2024, 1, 2),
+        start_date=datetime(2024, 1, 1, 4),
+        end_date=datetime(2024, 1, 2, 3),
         ev_assignment="pums_vehicles",
         max_vehicles=2,
     )
@@ -1594,8 +1926,8 @@ def test_config_path_defaults_by_mode():
     with_temp = EVDemandConfig(
         state="MD",
         release="res_2024_tmy3_2",
-        start_date=datetime(2024, 1, 1),
-        end_date=datetime(2024, 1, 2),
+        start_date=datetime(2024, 1, 1, 4),
+        end_date=datetime(2024, 1, 2, 3),
         temperature_adjustment="resstock",
     )
     assert with_temp.weather_dir is not None
@@ -1610,8 +1942,8 @@ def test_calculator_requires_ownership_for_adoption(
             nhts_df=mock_nhts_data,
             ev_battery_df=ev_battery_df,
             ev_autonomie_df=ev_autonomie_df,
-            start_date=datetime(2022, 1, 1),
-            end_date=datetime(2022, 1, 7),
+            start_date=datetime(2022, 1, 1, 4),
+            end_date=datetime(2022, 1, 8, 3),
             ev_assignment="resstock_adoption",
         )
 
@@ -1624,8 +1956,8 @@ def test_load_ev_demand_config_rejects_match_on_vehicles(tmp_path):
         """
 state: MD
 release: res_2024_tmy3_2
-start_date: 2024-01-01
-end_date: 2024-01-31
+start_date: 2024-01-01T04:00:00
+end_date: 2024-02-01T03:00:00
 sampling:
   match_on_vehicles: false
 """

@@ -409,6 +409,11 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
     """
     Load and preprocess the NHTS trip data for a specific state.
 
+    Keeps purpose / sequencing columns so vehicle-day legs can be chained into
+    home-based tours (``why_from`` / ``why_to`` / ``seq_trip_id``). Restricts to
+    household-vehicle *driver* trips (``DRVR_FLG=01``) so passenger duplicates do
+    not double-count vehicle movement.
+
     Args:
         nhts_path: Path to the NHTS trip data file
         state: State abbreviation to filter data for
@@ -435,10 +440,19 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         "HHVEHCNT",  # total number of vehicles
         "URBRUR",  # urban/rural status urban(1)/rural(2)
         "WTTRDFIN",  # trip weight
+        # Tour chaining / vehicle timeline
+        "WHYFROM",  # origin purpose (home = 01/02)
+        "WHYTO",  # destination purpose (home = 01/02)
+        "SEQ_TRIPID",  # order within person travel day
+        "DRVR_FLG",  # 01=driver (moves the vehicle), 02=passenger
     ]
 
     # Load only the needed columns
-    nhts_df = pl.read_csv(nhts_path, columns=needed_columns, schema_overrides={"VEHCASEID": pl.Utf8})
+    nhts_df = pl.read_csv(
+        nhts_path,
+        columns=needed_columns,
+        schema_overrides={"VEHCASEID": pl.Utf8},
+    )
 
     # Get the census division for this state
     state_division = get_census_division_for_state(state)
@@ -455,10 +469,12 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         pl.col("VEHCASEID") != "-1",
         pl.col("HHFAMINC") > 0,  # -7, -8 are not valid income bucket values
         pl.col("VEHTYPE").cast(pl.Int64).is_in(light_duty_veh_types),
+        # Driver only: passenger rows share VEHCASEID but do not move the car again.
+        pl.col("DRVR_FLG").cast(pl.Int64) == 1,
     )
 
     # Drop filter-only columns
-    nhts_df = nhts_df.drop("CENSUS_D", "VEHTYPE")
+    nhts_df = nhts_df.drop("CENSUS_D", "VEHTYPE", "DRVR_FLG")
 
     # Derive the weekday/weekend flag from TRAVDAY (day the trip was taken) rather than
     # NHTS's TDWKND, which reclassifies Friday trips starting at/after 18:00 as weekend.
@@ -482,10 +498,19 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         "ENDTIME": "end_time",
         "TRPMILES": "miles_driven",
         "WTTRDFIN": "trip_weight",
+        "WHYFROM": "why_from",
+        "WHYTO": "why_to",
+        "SEQ_TRIPID": "seq_trip_id",
     })
 
     # NHTS URBRUR is 1=Urban, 2=Rural (may arrive as 01/02 strings from CSV).
-    nhts_df = nhts_df.with_columns(pl.col("urban").cast(pl.Int64))
+    # Purpose / sequence codes arrive as zero-padded strings; cast for tour logic.
+    nhts_df = nhts_df.with_columns(
+        pl.col("urban").cast(pl.Int64),
+        pl.col("why_from").cast(pl.Int64),
+        pl.col("why_to").cast(pl.Int64),
+        pl.col("seq_trip_id").cast(pl.Int64),
+    )
 
     return nhts_df
 
