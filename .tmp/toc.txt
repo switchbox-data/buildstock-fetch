@@ -1,0 +1,766 @@
+Designing Electricity Distribution Network Tariffs for
+Beneficial Electrification
+by
+Graham Turk
+B.S.E. Computer Science, Princeton University, 2017
+Submitted to the Institute for Data, Systems, and Society
+in partial fulfillment of the requirements for the degree of
+MASTER OF SCIENCE IN TECHNOLOGY AND POLICY
+at the
+MASSACHUSETTS INSTITUTE OF TECHNOLOGY
+May 2024
+© 2024 Graham Turk. This work is licensed under a CC BY-NC-ND 4.0 license.
+The author hereby grants to MIT a nonexclusive, worldwide, irrevocable, royalty-free
+license to exercise any and all rights under copyright, including to reproduce, preserve,
+distribute and publicly display copies of the thesis, or release the thesis under an
+open-access license.
+Authored by:
+
+Graham Turk
+Institute for Data, Systems, and Society
+May 10, 2024
+
+Certified by:
+
+Pablo Duenas-Martinez
+Research Scientist, MIT Energy Initiative, Thesis Supervisor
+
+Certified by:
+
+Paul L. Joskow
+Elizabeth and James Killian Professor of Economics, Emeritus
+MIT Department of Economics, Thesis Supervisor
+
+Accepted by:
+
+Frank R. Field III
+Senior Research Engineer, Sociotechnical Systems Research
+Interim Director, Technology and Policy Program
+
+2
+
+Designing Electricity Distribution Network Tariffs for Beneficial
+Electrification
+by
+Graham Turk
+Submitted to the Institute for Data, Systems, and Society
+on May 10, 2024 in partial fulfillment of the requirements for the degree of
+MASTER OF SCIENCE IN TECHNOLOGY AND POLICY
+
+ABSTRACT
+Decarbonizing the transportation and residential building sectors will require rapid electrification through the uptake of electric vehicles (EVs) and cold climate heat pumps (CCHPs),
+respectively. There is broad consensus that the flat volumetric electricity tariffs currently in
+place for residential customers in most of the US discourage electrification and do not reflect
+the underlying marginal costs of electricity delivery. Under flat volumetric tariffs, utilities
+are projecting sharp rises in distribution-level peak demand, which will necessitate network
+upgrades whose costs are recovered from all grid users. Alternative rate designs can help mitigate the need for these upgrades by shifting new demand away from peak periods. However,
+there is an emerging narrative that electricity tariff design is a zero-sum game: regulators
+can either protect vulnerable households or encourage electrification, but not both. In this
+thesis, we challenge that perception by asking whether well-designed distribution network
+tariffs can deliver a win-win in the long run, reducing operating costs for EVs and/or CCHPs
+and average network costs for households that cannot yet afford to electrify. We answer this
+question by running a series of bottom-up optimizations to simulate household’s responses to
+alternative network tariff designs in two distinct geographies, then assessing cost impacts on
+different household groups. We use open-source data on household electricity consumption
+and travel behavior. We find that beyond very low adoption levels, time-of-use per-kWh
+network tariffs, which several states have adopted as the default, perform poorly on all metrics and lead to large increases in local peak demand. Per-kW capacity tariffs (subscription
+and demand charges) are effective at mitigating EV-driven peaks, especially when paired
+with TOU energy tariffs. We recommend that regulators separate network charges from
+energy charges and introduce a per-kW subscription network tariff to collect a portion of
+the network revenue requirement. This approach will reduce the total cost of ownership of
+electrified devices while mitigating the network upgrades needed to maintain reliability. Our
+recommendations offer a path towards rapid electrification that benefits all grid users.
+Thesis supervisor: Pablo Duenas-Martinez
+Title: Research Scientist, MIT Energy Initiative
+Thesis supervisor: Paul L. Joskow
+Title: Elizabeth and James Killian Professor of Economics, Emeritus
+MIT Department of Economics
+3
+
+4
+
+Acknowledgments
+This thesis is the culmination of two incredible years at MIT. I am indebted to my research
+advisors Pablo Duenas-Martinez and Tim Schittekatte for their expert guidance, support,
+and feedback every step of the way, and for handling the behind-the-scenes logistics so I
+could focus on research. A special thank you to Paul Joskow and Richard Schmalensee;
+our conversations and email threads have been an education in electricity regulation and
+rate design. Paul and Pablo provided invaluable comments on earlier drafts of this thesis.
+I could not have asked for better research collaborators in Abdelrahman Ayad and Zachary
+Schmitz. I am grateful to Elena Byrne, Barb DeLaBarre, Frank Field, and Noelle Selin for
+their tireless dedication to cultivating a close-knit TPP community. To Abby, Lauren, Mike,
+Luc, Peter, Ben, Johnattan, and Nirmal: thanks for letting this TPP elder feel young again.
+Finally, to my parents, Jon and Carolyn: thank you for encouraging me to go back to school
+and the constant love and support from grades K-18. Though I clearly did not heed your
+advice to omit needless words, this thesis is dedicated to you.
+
+5
+
+6
+
+Contents
+Title page
+
+1
+
+Abstract
+
+3
+
+Acknowledgments
+
+5
+
+List of Figures
+
+11
+
+List of Tables
+
+13
+
+1 Introduction: Electrification’s Role in Meeting Climate Targets
+1.1 Current Trends in US Electricity Networks . . . . . . . . . . . . . . . . . . .
+1.2 How Rate Design Impacts Electrification . . . . . . . . . . . . . . . . . . . .
+1.3 Central Question and Thesis Outline . . . . . . . . . . . . . . . . . . . . . .
+
+15
+16
+16
+20
+
+2 Background on the Electric Power Sector and Cost of Service Regulation 23
+2.1 The Electric Power Sector in the US . . . . . . . . . . . . . . . . . . . . . . 23
+2.1.1 Ownership Structure . . . . . . . . . . . . . . . . . . . . . . . . . . . 23
+2.1.2 Level of Vertical Integration . . . . . . . . . . . . . . . . . . . . . . . 24
+2.2 Origins of Regulation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 25
+2.3 Cost of Service Regulation and Rate Cases . . . . . . . . . . . . . . . . . . . 26
+2.4 Limitations of Cost of Service Regulation and Alternatives . . . . . . . . . . 27
+2.5 The Link Between Rate Design and Network Investments . . . . . . . . . . . 28
+3 Literature Review and Research Contribution
+3.1 Impacts of Electrification Under Flat Volumetric Tariffs . . . . . . . . . . . .
+3.1.1 Heat Pump Impacts . . . . . . . . . . . . . . . . . . . . . . . . . . .
+3.1.2 Electric Vehicle Impacts . . . . . . . . . . . . . . . . . . . . . . . . .
+3.2 Network Tariff Design in Theory . . . . . . . . . . . . . . . . . . . . . . . . .
+3.2.1 Tariff Design with Retroactive Analysis . . . . . . . . . . . . . . . . .
+3.2.2 Tariff Design with Proactive Analysis . . . . . . . . . . . . . . . . . .
+3.3 Research Contribution . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+31
+31
+31
+32
+33
+35
+36
+37
+
+4 Distribution Network Tariff Design in Practice: Approaches from the US
+and Europe
+39
+4.1 Distribution Network Tariff Design in the US . . . . . . . . . . . . . . . . . . 39
+7
+
+4.2
+
+4.1.1 Default Time-of-Use Tariffs . . . . . . . . . . . . . . . . . . . . . . .
+4.1.2 Technology-Specific Tariffs . . . . . . . . . . . . . . . . . . . . . . . .
+Distribution Network Tariff Design in Europe . . . . . . . . . . . . . . . . .
+
+39
+41
+43
+
+5 Methodology: Simulating Residential Electrification Under Distribution
+Network Tariff Alternatives
+45
+5.1 Data Sources . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 46
+5.1.1 Household Energy Consumption Profiles . . . . . . . . . . . . . . . . 46
+5.1.2 Vehicle Driving Profiles . . . . . . . . . . . . . . . . . . . . . . . . . . 47
+5.1.3 Distribution Network Topology . . . . . . . . . . . . . . . . . . . . . 48
+5.2 Tariff Price Calculation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 49
+5.2.1 Fixed Charges . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 49
+5.2.2 Per-kWh Charges . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 49
+5.2.3 Capacity Charges . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 50
+5.3 Analytical Methods . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 52
+5.3.1 Optimization Formulations . . . . . . . . . . . . . . . . . . . . . . . . 52
+5.3.2 Feedback Loop for Recovering Network Investments and Recomputing
+Charges . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 54
+5.4 Case Study Outlines . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 57
+5.4.1 Greensboro (North Carolina): Price-Responsive EV Charging in a
+Warm-Climate Geography with a Detailed Network Model . . . . . . 57
+5.4.2 Massachusetts: Price-Responsive EV and CCHP Operation in a ColdClimate Geography with a Simplified Network Model . . . . . . . . . 58
+5.5 Key Metrics . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 59
+6 Results
+6.1 Results for Greensboro Case Study . . . . . . . . . . . . . . . . . . . . . . .
+6.1.1 Greensboro: Annual Peak . . . . . . . . . . . . . . . . . . . . . . . .
+6.1.2 Greensboro: Levelized EV Charging Cost . . . . . . . . . . . . . . . .
+6.1.3 Greensboro: Difference in Network Costs for Non-EV Households . .
+6.2 Results for Massachusetts Case Study . . . . . . . . . . . . . . . . . . . . . .
+6.2.1 Massachusetts: Annual Peak . . . . . . . . . . . . . . . . . . . . . . .
+6.2.2 Massachusetts: Levelized EV/CCHP Costs . . . . . . . . . . . . . . .
+6.2.3 Massachusetts: Difference in Network Costs for Non-Electrified Households . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+63
+63
+63
+68
+70
+73
+73
+75
+
+7 Discussion
+7.1 Assessment of Model Results . . . . . . . . . . . . . . . . . . . . . . . . . . .
+7.2 Tariff Design Considerations . . . . . . . . . . . . . . . . . . . . . . . . . . .
+7.2.1 Addressing the Apparent Benefits of Flat Volumetric Tariffs . . . . .
+7.2.2 Subscription versus Demand Charges . . . . . . . . . . . . . . . . . .
+7.2.3 Direct Load Control . . . . . . . . . . . . . . . . . . . . . . . . . . .
+7.2.4 Hybrid Heating Systems and Gas Network Cost Recovery . . . . . . .
+7.2.5 Balancing Stakeholder Interests for Efficiency and Solar . . . . . . . .
+7.3 Limitations of Methodology . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+78
+78
+79
+81
+82
+84
+85
+87
+88
+
+8
+
+76
+
+8 Conclusion and Policy Recommendations
+
+91
+
+References
+
+95
+
+9
+
+10
+
+List of Figures
+1.1
+1.2
+
+Difference in simplified 5-year total ownership cost between an EV and a
+comparable internal combustion engine vehicle . . . . . . . . . . . . . . . . .
+Example residential electricity bill with major charge categories labeled . . .
+
+17
+18
+
+4.1
+
+Illustration of rebound peak due to EV charging . . . . . . . . . . . . . . . .
+
+41
+
+5.1
+5.2
+
+Discrete distribution used to select departure and arrival hour for driving profiles 48
+Illustrative flowchart of methodology . . . . . . . . . . . . . . . . . . . . . . 56
+
+6.1
+
+Annual peak demand under each tariff scenario at 5% EV adoption increments
+(Greensboro) . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 64
+6.2 Aggregate average weekday demand at 50% EV adoption under the flat and
+TOU per-kWh tariff scenarios (Greensboro) . . . . . . . . . . . . . . . . . . 65
+6.3 EV charging behavior under a TOU per-kWh tariff versus a subscription tariff
+at the individual household and aggregate levels (Greensboro) . . . . . . . . 66
+6.4 Annual peak demand at 100% and 70% price signal compliance with tariff
+price signals (Greensboro) . . . . . . . . . . . . . . . . . . . . . . . . . . . . 67
+6.5 Levelized charging costs for EV owners (Greensboro) . . . . . . . . . . . . . 69
+6.6 Distribution in levelized costs paid by EV households for the subscription
+tariff scenario (Greensboro) . . . . . . . . . . . . . . . . . . . . . . . . . . . 70
+6.7 Change in network costs for non-EV households (Greensboro) . . . . . . . . 71
+6.8 Distribution in change of network costs paid by non-EV households for the
+subscription tariff scenario (Greensboro) . . . . . . . . . . . . . . . . . . . . 72
+6.9 Aggregate demand by load type for two representative weeks at 50% electrification (Massachusetts) . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 73
+6.10 Annual aggregate peak demand at 5% electrification increments (Massachusetts) 74
+6.11 Load duration curves at 50% electrification for the Greensboro and Massachusetts case studies under a 1-part demand charge . . . . . . . . . . . . . 75
+6.12 Levelized cost of EV and CCHP operation at 5% electrification adoption increments (Massachusetts) . . . . . . . . . . . . . . . . . . . . . . . . . . . . 76
+6.13 Change in network costs for non-electrified households at 5% EV/CCHP adoption increments (Massachusetts) . . . . . . . . . . . . . . . . . . . . . . . . . 77
+7.1
+
+Annual peak demand in the Massachusetts case study with gas backup . . .
+
+11
+
+86
+
+12
+
+List of Tables
+1.1
+
+Description of major categories of charges on residential electricity bills . . .
+
+19
+
+3.1
+
+Classification of network tariff design studies with an application to electrification . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+38
+
+4.1
+4.2
+4.3
+
+Default TOU rates approved in the US . . . . . . . . . . . . . . . . . . . . .
+Selection of EV-specific residential tariffs in the US . . . . . . . . . . . . . .
+Central Maine Power’s seasonal heat pump rate compared to its standard
+residential service rate . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+40
+42
+
+5.1
+5.2
+5.3
+
+Summary of distribution network tariff types with illustrative prices . . . . .
+Tariffs tested in the Greensboro case study . . . . . . . . . . . . . . . . . . .
+Tariffs tested in the Massachusetts case study . . . . . . . . . . . . . . . . .
+
+50
+61
+62
+
+7.1
+
+Key metrics in the Greensboro case study for each tariff at 50% EV adoption
+for low and high LRMC cases . . . . . . . . . . . . . . . . . . . . . . . . . .
+Key metrics in the Massachusetts case study for each tariff at 50% EV adoption for low and high LRMC cases . . . . . . . . . . . . . . . . . . . . . . . .
+
+7.2
+8.1
+
+Summary of key insights and policy recommendations . . . . . . . . . . . . .
+
+13
+
+43
+
+78
+79
+94
+
+14
+
+Chapter 1
+Introduction: Electrification’s Role in
+Meeting Climate Targets
+Transportation and buildings are responsible for 41% of direct greenhouse gas emissions in
+the US [1]. To decarbonize these sectors, there is widespread consensus that electrification
+– replacing fossil-fueled vehicles and heating equipment with electric alternatives – offers
+the most cost-effective and scalable pathway [2] [3]. In transportation, where 58% emissions
+come from light-duty passenger vehicles [4], electrification is synonymous with the purchase
+of electric vehicles (EVs). For residential buildings, where space heating is the number
+one source of direct emissions [1], electrification requires installing cold climate heat pumps
+(CCHPs), which provide both heating and cooling and replace or supplement conventional
+boilers and furnaces fueled by natural gas, propane, or oil.
+While electrification does not eliminate emissions completely, both EVs and CCHPs offer
+a significant reduction in emissions compared to fossil-fueled equipment [5] [6]. This emissions
+gap will improve as the electricity generation mix becomes cleaner, which many states have
+mandated through renewable portfolio standards (RPS). In addition to RPS statutes, there
+are numerous policy drivers for electrification. The Inflation Reduction Act, passed in 2022,
+provides purchase incentives for both EVs and CCHPs that reduce consumers’ up-front costs.
+Several states offer purchase rebates that can be stacked on top of IRA funds. Furthermore,
+in 2020 California’s governor issued an executive order (N-79-20) that all new passenger cars,
+trucks, and SUVs sold after 2035 must be EVs, which was codified in regulation approved
+by the California Air Resources Board in 2022. Nine other states, which have historically
+followed California’s vehicle emissions standard, plan to follow suit and prohibit the sale of
+new internal combustion engine vehicles after 2035 [7].
+Both EVs and CCHPs consume a significant amount of electricity; a typical EV uses
+2,363 kWh per year for at-home charging [8]. CCHP consumption varies widely depending
+on climate; in cold regions, electric heating is expected to increase a home’s electricity
+consumption by over 6,000 kWh per year [9]. Taken together, electrifying the light duty
+vehicle fleet and residential housing stock is projected to nearly double annual residential
+electricity consumption [2]. As states aim to substitute electricity as the primary “fuel”
+to power our vehicles and condition our buildings, the electricity grid has emerged as the
+backbone for decarbonization efforts.
+
+15
+
+1.1
+
+Current Trends in US Electricity Networks
+
+While the cost of generating electricity in the US has consistently fallen over the past 20
+years, driven by cheap natural gas and the declining cost of renewables, the cost of delivering
+electricity has steadily grown [10]. Electricity utilities build and maintain a complex network
+of poles, wires, and power electronics equipment to send electricity over long distances to
+every building connected to the grid. The size of this network is determined in large part
+by the maximum (or "peak") electricity demand at each network level. Peak demand is
+correlated with extreme temperatures and diurnal patterns; for example, the 2023 peak for
+the New England region occurred on September 7 at 5:00 PM, with an average temperature of
+88ºF and 70ºF dew point [11], close to the end of the workday as millions of New Englanders
+returned home and turned on air conditioning units.
+In many parts of the US, peak demand has tapered [12]. However, electrification –
+combined with growth in data center construction and clean energy manufacturing – is
+expected to reverse this trend [13]. If EV owners plug in their vehicles upon returning
+home and heat pumps operate unmitigated during the hottest and coldest days of the year,
+peak demand is projected to grow rapidly [14][15]. This is expected to impact various
+portions of the electricity grid, from aggregate peak demand at the generation and highvoltage transmission levels down to peak demand on various distribution feeders and “semicollective” groups of feeders [16].
+To meet the expected growth in peak demand, electricity utilities are already making
+plans to expand delivery capacity. For example, in Massachusetts, the two largest investorowned utilities – Eversource and National Grid – recently filed plans to invest over $10B
+for distribution infrastructure upgrades to support electrification [14][15]. Demand-driven
+investment costs will be passed through to grid users via electricity rates, which may exacerbate energy burdens and (paradoxically) disincentivize electrification [17].
+In utility plans and in the modeling literature, a narrative is emerging that rapid peak
+demand growth is an inevitable consequence of electrification and that electrification, as a
+result, will increase electricity rates. However, this is only one possible path. Electrification,
+if managed to efficiently utilize existing infrastructure, can apply downward rate pressure.
+We refer to this phenomenon as "beneficial electrification." 1 One study by the California
+Public Utility Commission found that “the increase in electricity sales from electrification
+may outweigh the costs of distribution investments,” a benefit to not just those who adopt
+EVs and CCHPs but all grid users [18]. Yet the structure of electricity rates today is not
+conducive to this beneficial outcome.
+
+1.2
+
+How Rate Design Impacts Electrification
+
+When households consider whether to adopt EVs and CCHPs, one determinant is the total
+cost of ownership compared to conventional fossil fuel appliances [19][20]. If a household
+cannot save money over a reasonable time period, they will have little incentive to electrify.
+While "beneficial electrification" is often used to describe the broad set of environmental and cost benefits
+associated with electrifying various end uses, we define it narrowly to mean electrification that achieves a
+reduction in the average cost of electricity for all network users.
+1
+
+16
+
+Figure 1.1: Difference in simplified 5-year total ownership cost between an EV and a comparable internal combustion engine vehicle. Maintenance costs are omitted.
+Total cost of ownership consists of the cost of the equipment itself (inclusive of rebates),
+installation, and the cost of operating the equipment over its lifetime. EVs today cost
+more up front than conventional gasoline vehicles but experience lower operating costs due
+to the positive gap between the cost of electricity and gasoline [21]. Figure 1.1 shows a
+simple comparison of the 5-year ownership costs of an EV versus a comparable internal
+combustion engine vehicle driven for 12,000 miles per year, assuming manufacturer-listed
+prices and efficiencies [22], using US nationwide average gas ($3.66/gallon) [23] and electricity
+($0.15/kWh) [24] prices as of January 2024.
+CCHP systems have already achieved cost parity with conventional heating and cooling
+solutions for new construction [25]. But the economics are less favorable for retrofit installations, especially in areas connected to natural gas infrastructure where electricity costs are
+relatively high. In Massachusetts, for example, at current electricity and gas prices, it is less
+expensive to heat with natural gas once the outdoor temperature falls below 35F [26], and
+a household switching to all-electric heating can expect to spend more per year in operating
+costs [27]. With a negative cost gap, heat pump installations are far behind state targets
+[28]. By contrast, in Maine, which has a similar (if not less favorable) climate but where
+the dominant heating fuel is oil, over 100,000 CCHP systems have been installed, exceeding
+the state’s ambitious targets [29]. These examples and prior research (e.g., [19]) provide
+evidence that electricity cost is a key determinant for CCHP adoption.
+If we accept that the cost of electricity will play a central role in influencing the speed
+of electrification, we need to consider how consumers pay for electricity. Figure 1.2 shows a
+standard residential bill. The costs are broken into several categories – distribution, transmission, supply, etc. - described in Table 1.1.
+Distribution and transmission together represent the cost of delivering electricity, as opposed to generating electricity, which is represented by the generation service charge (Category 1), and other policy costs (Category 5), which pay for policy-driven initiatives like
+renewable energy deployment and energy efficiency.
+In this thesis, we focus on the distribution portion of the bill, which accounts for 26%
+of customer costs on average [30]. For investor-owned utilities (IOUs), which serve 72% of
+US electricity customers [31], distribution costs are regulated by each state’s public utility
+commission (PUC), detailed in Chapter 2. In most of the US, distribution network costs
+are recovered from residential customers through “flat volumetric” electricity rates, or tariffs.
+17
+
+Figure 1.2: Example residential electricity bill (the author’s bill), with major charge categories labeled. We omit consideration of the transition and revenue decoupling charges,
+which are not universal among US utilities and account for a very small portion of total
+costs.
+
+18
+
+Table 1.1: Description of major categories of charges on residential electricity bills
+Category
+
+Charge(s)
+
+What the charge pays for
+
+1
+
+Generation Service
+
+The cost of generating electricity, sometimes
+called the supply charge
+
+2
+
+Customer
+
+Fixed costs including overhead (salaries, office space, etc) and metering equipment
+
+3
+
+Distribution
+
+The cost of building and operating the lowvoltage distribution grid
+
+4
+
+Transmission
+
+The cost of building and operating the highvoltage transmission grid
+
+5
+
+Distributed Solar
+Renewable Energy
+Energy Efficiency
+
+Public policy programs to promote conservation and deployment of clean energy
+
+Flat meaning that the price is the same at all hours (i.e., time-invariant) and volumetric
+meaning that consumers pay based on their total consumption (per-kWh) over the course of
+a billing period.2 Under flat volumetric rates, someone who consumes 200 kWh in a month
+will pay twice as much as someone who consumes 100 kWh. However, the costs underlying
+those charges depend on other factors besides total monthly consumption. Many utilities’
+distribution costs are fixed in the short run, reflecting past investments, and in the longer
+run are driven by the need to make incremental investments to handle periods of higher kW
+demand [32].
+This misalignment between the drivers of increasing network costs and how those costs
+are recovered from consumers presents two major problems:
+1. Under flat volumetric network tariffs, consumers do not receive any information about
+when the network is congested. This makes it more likely that newly electrified load
+(e.g., from EVs and CCHPs) will trigger network investments, whose costs are borne
+by all consumers in the form of higher rates.
+2. Flat volumetric network tariffs provide no opportunity for consumers to reduce their
+costs by shifting the timing of consumption to periods when the network has excess
+capacity and marginal delivery costs are negligible. This has a negative impact on the
+economics of electrification.
+For many years, a flat volumetric tariff was the only option for utilities to collect money
+from customers. Analog electricity meters measure only total consumption, not the timing of
+that consumption. But advanced meters can measure and communicate consumption at subhourly intervals, enabling “time-varying” rates where the price to consume electricity changes
+We use the terms "volumetric" and "per-kWh" interchangeably. Flat volumetric tariffs are also widely
+used to collect transmission and generation costs, but we focus only on the design of distribution network
+tariffs in this thesis.
+2
+
+19
+
+depending on the hour, day, and/or season. Internet-connected devices, like EV charging
+stations and smart thermostats, make it simple for consumers to schedule consumption in
+response to these rates. Today, while approximately 73% of residential customers in the US
+have advanced meters [33], only 10% are enrolled on time-varying tariffs [34].
+There is broad consensus that flat volumetric network tariffs are not cost-reflective [32]
+and discourage electrification [35].3 There is a significant body of research recommending
+alternatives that more accurately reflect the true cost of consumption; as technology has
+improved, these proposals have grown increasingly complex, relying on such mechanisms as
+real-time auctions and autonomous home energy management agents. Yet US utilities and
+regulators have largely ignored these proposals; flat volumetric rates continue to prevail. This
+gap between what economists agree to be theoretically optimal rate designs and how rates
+are designed in practice can be partially explained by the regulatory framework dominant in
+the US today. Under cost-of-service regulation, IOUs have no incentive to offer alternative
+rates (discussed in Chapter 2). And regulators are hesitant to impose changes that might
+confuse customers or create large winners and losers compared to the status quo. This barrier
+highlights the need for simple solutions that consumers understand, that offer protections
+against large bill increases, and that do not rely on utilities to be active participants in
+managing load (against their own financial interest).
+PUCs in California, Hawaii, Missouri, Colorado, and Michigan have illuminated a path
+forward by mandating that utilities offer per-kWh time-of-use (TOU) rates as the default. We
+review these initiatives in Chapter 4. This is a step in the right direction towards reflecting
+the underlying marginal cost of electricity delivery. But while TOU rates can improve
+the short-to-medium term economics of electrification, they may actually exacerbate peak
+demand growth and subsequent network investment. Other initiatives in the US to reduce the
+cost of electrification, most notably California’s Income-Graduated Fixed Charge (IGFC),
+have been met with fierce opposition by solar and energy efficiency advocates. If we look
+outside the US, primarily in Europe, we find alternative approaches to tariff design that
+have the potential to reduce the marginal cost of electricity for consumers electrifying their
+heating and transportation and help defer network upgrades, which delivers benefits to all
+grid users.
+
+1.3
+
+Central Question and Thesis Outline
+
+Under flat volumetric rates prevalent today, utilities are projecting significant network investments due to electrification, especially for the distribution grid. These investments will
+be recovered from all grid users through electricity rates. An increase in the cost of electricity will not only raise energy burdens broadly, but also threaten the positive gap (or
+3
+Unless otherwise stated, the term "network tariff" in this thesis refers exclusively to the distribution
+network tariff. Despite our narrow focus, many of the proposed tariff-based solutions to deferring or avoided
+distribution investments can also be leveraged for transmission and generation constraints. A recent report
+by DOE projects a shortfall in generating capacity of 200 GW by 2030 to meet nationwide peak load [36].
+Demand flexibility (i.e., devices acting in response to well-design tariffs) can help meet this gap; a recent
+study by Lawrence Berkeley National Lab found that price-based demand response is the most cost effective
+planning option for bulk system reliability [37].
+
+20
+
+exacerbate the negative cost gap) between electricity and fossil fuels, which will risks slowing decarbonization progress. Attempts to reform electricity rates in the US to promote
+electrification have primarily addressed symptoms of poor rate design, not their underlying
+causes, and have faced opposition from ratepayer advocates and consumer protection organizations. This opposition stems in part from the concern that vulnerable households will
+pay more under new rates because they cannot shift the timing of their consumption. There
+is an emerging narrative that rate reform is a zero-sum game; regulators can either protect
+vulnerable customers or encourage electrification, but not both. In this thesis, we challenge
+that perception: can well-designed distribution network tariffs deliver a win-win,
+reducing costs for households that adopt EVs and/or CCHPs and households
+that cannot yet afford to electrify? To answer this question, we calibrate a series
+of case studies in which we model household responses to different electricity tariffs under
+increasing levels of electrification. We consider the flat volumetric rates prevalent today,
+time-of-use rates recently implemented as the default in several states, and alternative rate
+designs that have already been implemented widely outside the US and which can be imposed
+by PUCs without specific legislative action. In each scenario, we assess the total network
+costs, economics of electrification, and distributional impacts on different household groups.
+While many previous studies focus on the impacts of electrification on transmission and
+generation needs (e.g., [38], [39]), there has been relatively little analysis on the distribution
+grid under alternative tariff scenarios. Yet distribution, especially residential feeders with
+low load diversity, is where the majority of upgrades related to electrification are expected
+to occur [40]. Among studies focusing on the distribution grid, many rely on direct load
+control to reduce coincident peak demand from EVs and CCHPs, but this has not been
+widely implemented and many utilities in the US have no financial incentive to pursue
+direct load control. We address these barriers in Chapter 7. We are concerned that as
+the technical capabilities of load management evolve, advocates and regulators will ignore
+simpler solutions to harvest the low-hanging fruit. We believe direct load control, along
+with distributed generation and storage, will serve an important purpose in mitigating the
+need for expensive capital investments. But these are not substitutes for sound tariff design,
+which can be implemented at very low cost due to the existing metering infrastructure.
+The central thesis question is particularly relevant for public utility commissioners who
+have a statutory obligation to regulate utilities in such a way that provides reliable service at
+least cost, ratepayer advocates who represent the public interest, climate advocates working
+to accelerate electrification, and state lawmakers focused on achieving climate, energy equity,
+and affordability targets who can influence PUC decision-making through legislative action if
+PUCs do not take the initiative themselves. Electricity rates are an often-overlooked barrier
+to decarbonization that do not require permitting change, extensive funding, or technology
+evolution. Using existing technology and existing statutory authority, every US state can
+undertake rate reform today. Our recommendations offer a path to removing one key barrier
+to rapid electrification while protecting all grid users from higher bills.
+This thesis is organized as follows. Chapter 2 provides a brief background on utility
+regulation. Chapter 3 reviews the academic literature on electricity rate design and electrification impacts. Chapter 4 explores initiatives in both the US and Europe to replace flat
+volumetric rates. Chapter 5 presents the methodology for two case studies that examine
+performance of alternative rates against evaluative criteria. Chapter 6 presents the results of
+21
+
+our case studies. Chapter 7 summarizes and discusses the policy implications of our results.
+Chapter 8 concludes and offers recommendations for public utility commissions.
+
+22
+
+Chapter 2
+Background on the Electric Power Sector
+and Cost of Service Regulation
+"Free competition, the very basis of the modern social organization, superseded
+almost completely medieval restrictions, but it has just come to be recognized
+that the process of free competition fails in some cases to secure the public good,
+and it has been at last admitted that some control is necessary over such lines of
+industry as are affected with a public interest."
+- Bruce Wyman [41]
+This chapter provides background context on the electric power industry and the cost of
+service regulatory model. This context helps inform our methodology and is important for
+understanding both past and future considerations for rate design.
+
+2.1
+
+The Electric Power Sector in the US
+
+We start with a brief overview of the structure of the electric power sector in the US today.
+The physical infrastructure comprising the electricity sector can be divided into three functions: generation (converting various forms of energy into electricity), transmission (transporting electricity across long distances at high voltage), and distribution (delivering electricity to homes and businesses at low voltage). Among US states, there is considerable
+diversity in the type of entity that provides each function, with two categories of distinction
+outlined below: ownership structure and level of vertical integration. The term "electricity
+utility" is typically used to describe any entity involved in transmission and/or distribution,
+regardless of its involvement in generation. Entities that own only generation are typically
+called independent power producers (IPPs).
+
+2.1.1
+
+Ownership Structure
+
+In the US, there are three models for utility ownership: investor-owned (IOU), publiclyowned (federal, state, or municipal), and cooperative member-owned. IOUs serve 72% of
+US electricity customers while public and cooperative utilities serve the remaining 28% [31].
+Among IOUs, some are publicly traded while others are privately held. The vast majority of
+23
+
+public utilities are municipally owned. Notable exceptions are the Tennessee Valley Authority (federally-owned), Bonneville Power Administration (federally-owned), New York Power
+Authority (state-owned), and Nebraska Public Power District (state-owned). Investor-owned
+utilities are regulated at the state level. Municipally- and cooperatively-owned utilities are
+often exempted from state regulation. In this thesis, we are concerned primarily with the
+the distribution function of investor-owned utilities. However, while most of the recommendations in this thesis are directed at state regulators, they could equally apply to municipal
+and cooperative utility board members.
+
+2.1.2
+
+Level of Vertical Integration
+
+Fully vertically integrated utilities own and operate generation, transmission, and distribution infrastructure. They are the sole entities responsible for balancing supply and demand
+within their territories to ensure system reliability. Examples include Georgia Power (Georgia) and Xcel Energy (Colorado).
+In the 1990s and early 2000s, several states passed electricity sector restructuring laws
+that required vertically integrated utilities to divest themselves of generation assets [42].
+At the federal level, FERC Order No. 888 (issued in 1996) required utilities to file nondiscriminatory open access transmission tariffs, removing a competitive barrier for thirdparty generators to interconnect with the transmission network. Shortly thereafter, FERC
+Order No. 2000 (issued in 1999) led to the voluntary formation of independent non-profit
+entities responsible for operating the transmission network, planning transmission upgrades,
+and administering competitive wholesale electricity markets. There are seven of these independent system operators (ISOs) in the US, which may span one state (e.g., NYISO,
+CAISO) or several (e.g., MISO, PJM). With the exception of ERCOT, ISOs are regulated
+by the Federal Energy Regulatory Commission (FERC), which approves market design and
+transmission access tariffs. There are two types of utilities operating within ISO service
+territories: 1) "wires-only" utilities, which own only transmission and/or distribution infrastructure. Examples include National Grid (Massachusetts) and Commonwealth Edison
+(Illinois); 2) utilities that are permitted to own generation assets in addition to transmission and distribution, but whose generation assets are dispatched economically by the ISO.
+Green Mountain Power (Vermont) and PacifiCorp (California) are two such examples, which
+purchase some portion of their electricity supply from the wholesale market.
+In 13 states and the District of Columbia, restructuring applied not only to generation
+but also the supply component of the bill. Customers in these states are able to select
+their electricity supplier [43].1 Suppliers do not own or operate physical infrastructure but
+purchase electricity on behalf of their customers. In all states except Texas, the local distribution utility is designated as the default supplier [44]. Suppliers are not subject to price or
+profit regulation [45]. While all states with retail choice fall within ISO territories, not all
+states in ISO territories permit retail choice (e.g., Vermont). We turn now to the origins of
+regulation in the electric power sector.
+As retail choice is sometimes called energy deregulation, there is a common misconception that these
+states deregulated all utility functions. This is not true; transmission and distribution remain tightly regulated in states with retail choice.
+1
+
+24
+
+2.2
+
+Origins of Regulation
+
+Electricity distribution, or delivery, is a geographical natural monopoly. The industry is characterized by high sunk capital costs and significant economies of scale; the more network users
+in a particular geographical area, the lower the average price because fixed infrastructure
+costs are spread over higher consumption [46].
+Unlike most industries, competition in electricity distribution drives costs up. When
+there are multiple electricity providers in one area, geographic economies of scale cannot be
+fully captured due to duplication of distribution facilities in the same geographic area. The
+summary judgment in Idaho Power & Light Co. v. Blomquist et al. (from 1914) offers a
+helpful hypothetical example to illustrate this phenomenon:
+"An existing utility has already expended, say, $1,000,000 in the power plant and
+transmission lines and distribution system in a town. Another utility, coming in,
+must also provide a power plant and transmission lines and a distributing system.
+If there is to be unrestricted competition, then the later distribution system must
+cover the same area as that of the older one. If it costs the same money, then there
+is an additional $1,000,000 expended in a town where a $1,000,000 system would
+be amply sufficient. There would be two sets of poles and transmission wires
+in the streets, the construction and keeping in repair of which would necessarily
+interfere with and obstruct the free use of the streets by the people more than one
+set of poles and wires; and two sets of electrical wires in a city would necessarily
+increase the danger to the lives and limbs of the people, and thus interfere with
+the peace, health, and welfare of the community."2
+In light of this fact, as early as 1905, state legislatures passed laws establishing quasijudicial statewide commissions (public utility commissions, or PUCs) to regulate investorowned electricity utilities [47].3 The legality of state regulation over private industries "affected with a public interest" (as quoted above in Wyman [41]) was enshrined in the landmark
+1876 US Supreme Court case, Munn v. Illinois.4 Regulation over electricity prices existed
+prior to the creation of state PUCs but consisted primarily of municipal franchise contract
+agreements [45]. The formation of PUCs shifted oversight of private electricity utilities to
+the state level. As it relates to electricity utilities, PUCs have two primary roles: 1) controlling market entry by issuing certificates of public convenience that grant exclusive franchise
+rights for IOUs to serve a particular geographic area; and 2) determining the prices IOUs
+are allowed to charge.
+Today, PUCs are comprised of 3-7 commissioners and professional staff. Commissioners
+serve terms between 4-6 years and are either appointed by the governor or state legislature
+or publicly elected. PUCs regulate not only electricity utilities but also those operating in
+the telecommunications, water, and waste water industries.
+2
+
+Idaho Power & Light Co. v. Blomquist et al. 26 Idaho 222 (1914)
+We use PUC as a generic term to refer to the state agency that regulates privately-owned electricity
+distribution utilities. In some states, these agencies go by different names, e.g., Public Service Commission
+or Department of Public Utilities.
+4
+Munn v. Illinois 94 U.S. 113 (1876)
+3
+
+25
+
+

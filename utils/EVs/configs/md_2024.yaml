@@ -1,0 +1,94 @@
+# EV demand scenario for Maryland, NHTS travel-day year 2024.
+# Simulation window must start at 04:00 and end at 03:00 (last hour slot = 03:00–03:59).
+# Run:
+#   python -m utils.EVs.ev_demand --config utils/EVs/configs/md_2024.yaml
+#
+# All tunable pipeline parameters live here. Downstream modules receive these
+# values from EVDemandConfig — do not hardcode scenario knobs in Python.
+
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01T04:00:00
+end_date: 2025-01-01T03:00:00
+
+paths:
+  # Omit to use defaults under utils/EVs/ev_data/
+  # metadata_path: utils/EVs/ev_data/inputs/res_2024_tmy3_2/metadata/MD/metadata.parquet
+  # nhts_path: utils/EVs/ev_data/inputs/NHTS_v2_1_trip_surveys.csv
+  # output_dir: utils/EVs/ev_data/outputs/MD_res_2024_tmy3_2
+  # Only needed for sampling.ev_assignment=pums_vehicles:
+  # pums_path: utils/EVs/ev_data/inputs/MD_2021_pums_PUMA_HINCP_VEH_NP.csv
+  # Only needed for sampling.ev_assignment=resstock_adoption (default path if omitted):
+  # ev_ownership_path: utils/EVs/ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Ownership.tsv
+  # Only needed for temperature.temperature_adjustment=resstock:
+  # weather_dir: utils/EVs/ev_data/inputs/res_2024_tmy3_2/weather/MD
+
+sampling:
+  random_state: 42
+  # How to assign EV slots to households:
+  #   resstock_adoption — ResStock P(EV) Bernoulli sample (max 1 EV); do not match NHTS on vehicles
+  #                       (loads Electric_Vehicle_Ownership.tsv; does not load PUMS)
+  #   pums_vehicles     — PUMS vehicle-count model; treat all as EVs; match NHTS on vehicles
+  #                       (requires max_vehicles; loads PUMS; does not load ownership TSV)
+  ev_assignment: resstock_adoption
+  # max_vehicles: 2  # required only when ev_assignment=pums_vehicles
+  # Keep middle of NHTS vehicles by max survey-day miles (0–100 = full pool)
+  nhts_daily_miles_percentile_low: 10
+  nhts_daily_miles_percentile_high: 90
+
+trips:
+  min_trip_away_hours: 1
+  # Travel-day extended hours (4=4am start day … 27=3am next day; arrival exclusive end 28=4am)
+  max_departure_hour: 27
+  max_arrival_hour: 28
+  # Discrete hour offsets applied independently to departure and arrival
+  time_offsets: [-2, -1, 0, 1, 2]
+  time_offset_probabilities: [0.05, 0.10, 0.70, 0.10, 0.05]
+  # Miles ~ truncated Normal(base, base * miles_noise_std_fraction) on [0, ∞)
+  miles_noise_std_fraction: 0.1
+
+battery:
+  # Feasible pack must cover max_daily_miles * kwh_per_mile * (1 + buffer)
+  capacity_buffer_fraction: 0.2
+
+temperature:
+  # none — Autonomie kWh/mi only (no weather files loaded)
+  # resstock — scale discharge by OpenStudio-HPXML / Geotab–Recurrent power_mult(T)
+  #            preloads weather_map + station CSVs for all metadata buildings
+  #            (paths.weather_dir; default under
+  #            utils/EVs/ev_data/inputs/<release>/weather/<state>/{station}.csv)
+  temperature_adjustment: resstock
+  # weather_dir: utils/EVs/ev_data/inputs/res_2024_tmy3_2/weather/MD
+
+pipeline:
+  max_workers: 8
+  batch_size: 20000
+  upload_s3: false
+
+charging:
+  # Strategy-specific required knobs:
+  #   immediate             — charger_power_kw (+ optional initial_soc_kwh)
+  #   off_peak              — + peak_clock_hours, soc_min_fraction, soc_safety_buffer_fraction
+  #   off_peak_immediate    — + peak_clock_hours (+ optional allow_emergency_peak_charging)
+  #   cost_minimizing       — + prices (one source below) and shed_load_penalty_usd_per_kwh
+  charging_strategy: off_peak_immediate
+  charger_power_kw: 7.2
+  # null = each vehicle starts at full battery capacity
+  initial_soc_kwh: null
+
+  # --- required for off_peak and off_peak_immediate ---
+  peak_clock_hours: [17, 18, 19, 20, 21]
+
+  # --- required for off_peak only (SOC_req targets) ---
+  # soc_min_fraction: 0.2
+  # soc_safety_buffer_fraction: 0.2
+
+  # --- optional for off_peak_immediate (default false = never charge on peak) ---
+  # allow_emergency_peak_charging: false
+
+  # --- required for cost_minimizing (uncomment and set strategy above) ---
+  # shed_load_penalty_usd_per_kwh: 1000000.0
+  # Use exactly one price source:
+  # hourly_price_path: path/to/prices.parquet  # column usd_per_kwh or price; length = num hours
+  # flat_price_usd_per_kwh: 0.12
+  # daily_price_usd_per_kwh: [0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.20, 0.20, 0.20, 0.20, 0.20, 0.10, 0.10, 0.10]
