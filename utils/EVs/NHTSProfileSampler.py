@@ -298,9 +298,11 @@ class NHTSProfileSampler:
                 cache[key] = sorted(row["hh_vehicle_id"])
 
         # --- Urban-aware and unconditional indexes (match() chooses cascade order) ---
+        # Expects coarse bins from load_nhts_data / load_metadata: income 1–3, occupants 1/2/3+.
         # urban=1/2 from NHTS URBRUR; ResStock maps metro status onto the same codes.
         _store("urban_income_occupants_vehicles", ["urban", "income_bucket", "occupants", "vehicles"])
         _store("urban_income_occupants", ["urban", "income_bucket", "occupants"])
+        _store("urban_occupants", ["urban", "occupants"])
         _store("urban_income", ["urban", "income_bucket"])
         _store("income_occupants_vehicles", ["income_bucket", "occupants", "vehicles"])
         _store("income_occupants", ["income_bucket", "occupants"])
@@ -326,22 +328,23 @@ class NHTSProfileSampler:
         Uses pre-built cache to eliminate expensive filtering operations.
         Only considers NHTS vehicles that have at least one trip on the requested day type.
 
-        Match order prefers urban/rural agreement (stronger VMT signal) over household
-        size. Match-type names are the dimensions held (``exact`` = all four including
-        urban):
+        Expects ``income_bucket`` (1–3) and ``occupants`` (1 / 2 / 3+) already coarsened by
+        ``load_nhts_data`` / ``load_metadata``. Match order prefers urban/rural, then
+        occupants over income when dropping dimensions. Match-type names are the
+        dimensions held (``exact`` = all four including urban):
 
         1. ``exact`` — (urban, income, occupants, vehicles) when ``match_on_vehicles``
         2. ``urban_income_occupants``
-        3. ``urban_income`` — drop occupants; keep urban/rural
-        4. ``income_occupants_vehicles`` — drop urban; when ``match_on_vehicles``
-        5. ``income_occupants``
-        6. ``income``
-        7. ``closest_income``
+        3. ``urban_occupants`` — drop income; keep urban + HH size
+        4. ``urban_income`` — drop occupants; keep urban + income
+        5. ``income_occupants_vehicles`` — drop urban; when ``match_on_vehicles``
+        6. ``income_occupants``
+        7. ``income``
 
         Args:
-            target_income: Target income bucket to match
+            target_income: Target coarse income bin (1–3)
             target_urban: Target urbanicity (1=urban, 2=rural), from ResStock metro mapping
-            target_occupants: Target number of occupants to match
+            target_occupants: Target household size bin (1 / 2 / 3+)
             target_vehicles: Target number of vehicles to match (used only when
                 ``match_on_vehicles`` is True)
             num_samples: Number of different vehicles to sample
@@ -351,6 +354,9 @@ class NHTSProfileSampler:
 
         Returns:
             Tuple of (match_type, list of matched_vehicle_ids)
+
+        Raises:
+            ValueError: If no tier in the cascade contains enough matching profiles
         """
         if match_on_vehicles is None:
             match_on_vehicles = self.match_on_vehicles
@@ -375,10 +381,17 @@ class NHTSProfileSampler:
             (target_urban, target_income, target_occupants),
         ))
 
-        # 3: drop occupants but keep urban/rural (place-type > HH size for daily miles).
+        # 3: drop income but keep urban + occupants (HH size > income for daily miles).
+        attempts.append((
+            "urban_occupants",
+            "urban_occupants",
+            (target_urban, target_occupants),
+        ))
+
+        # 4: drop occupants but keep urban + income.
         attempts.append(("urban_income", "urban_income", (target_urban, target_income)))
 
-        # 4–5: drop urbanicity; optionally keep vehicle count with HH structure.
+        # 5–6: drop urbanicity; optionally keep vehicle count with HH structure.
         if match_on_vehicles:
             attempts.append((
                 "income_occupants_vehicles",
@@ -391,7 +404,7 @@ class NHTSProfileSampler:
             (target_income, target_occupants),
         ))
 
-        # 6: income bucket only.
+        # 7: income bucket only.
         attempts.append(("income", "income", (target_income,)))
 
         for match_type, tier, parts in attempts:
@@ -400,17 +413,13 @@ class NHTSProfileSampler:
             if ids is not None and len(ids) >= num_samples:
                 return match_type, np.random.choice(ids, size=num_samples, replace=False).tolist()
 
-        # 7: no exact income bucket; pick the closest income among unconditional pools.
-        available_incomes = [key[1] for key in cache if key[0] == "income"]
-        if available_incomes:
-            closest_income = min(available_incomes, key=lambda x: abs(x - target_income))
-            closest_key = ("income", closest_income)
-            ids = cache[closest_key]
-            if len(ids) >= num_samples:
-                return "closest_income", np.random.choice(ids, size=num_samples, replace=False).tolist()
-            return "closest_income", ids
-
-        return "no_match", []
+        day_type = "weekday" if weekday else "weekend"
+        available_incomes = sorted(key[1] for key in cache if key[0] == "income")
+        raise ValueError(
+            f"No NHTS {day_type} match with at least {num_samples} profile(s) for "
+            f"income={target_income}, urban={target_urban}, occupants={target_occupants}, "
+            f"vehicles={target_vehicles}; available income bins={available_incomes}."
+        )
 
     @staticmethod
     def _trip_profile_from_nhts(

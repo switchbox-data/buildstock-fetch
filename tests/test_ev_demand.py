@@ -85,20 +85,22 @@ def make_vehicle_profile(
 
 
 # Test data fixtures
+# income_bucket / occupants mirror load_nhts_data / load_metadata: income bins
+# 1=≤$50k, 2=$50–150k, 3=$150k+; occupants 1 / 2 / 3+.
 @pytest.fixture
 def mock_nhts_data():
     # urban: 1=urban, 2=rural (NHTS URBRUR). v1–v3 urban; v4 rural.
     data = {
-        "hh_vehicle_id": ["v1", "v2", "v3", "v4", "v4", "v1", "v2", "v3"],
-        "income_bucket": [1, 2, 2, 3, 3, 1, 2, 2],
-        "occupants": [2, 3, 3, 4, 4, 2, 3, 3],
-        "vehicles": [1, 2, 2, 1, 1, 1, 2, 2],
-        "urban": [1, 1, 1, 2, 2, 1, 1, 1],
-        "weekday": [2, 2, 2, 2, 2, 1, 1, 1],
-        "start_time": [800, 900, 1000, 800, 1300, 1100, 1200, 1400],
-        "end_time": [1700, 1800, 1900, 1200, 1700, 1500, 1600, 1800],
-        "miles_driven": [20.0, 30.0, 40.0, 10.0, 15.0, 25.0, 28.0, 35.0],
-        "trip_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        "hh_vehicle_id": ["v1", "v2", "v3", "v4", "v4", "v1", "v2", "v3", "v4"],
+        "income_bucket": [1, 2, 2, 3, 3, 1, 2, 2, 3],
+        "occupants": [2, 3, 3, 3, 3, 2, 3, 3, 3],
+        "vehicles": [1, 2, 2, 1, 1, 1, 2, 2, 1],
+        "urban": [1, 1, 1, 2, 2, 1, 1, 1, 2],
+        "weekday": [2, 2, 2, 2, 2, 1, 1, 1, 1],
+        "start_time": [800, 900, 1000, 800, 1300, 1100, 1200, 1400, 900],
+        "end_time": [1700, 1800, 1900, 1200, 1700, 1500, 1600, 1800, 1300],
+        "miles_driven": [20.0, 30.0, 40.0, 10.0, 15.0, 25.0, 28.0, 35.0, 18.0],
+        "trip_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
     }
     return pl.DataFrame(data)  # Return eager DataFrame to match production
 
@@ -108,7 +110,7 @@ def mock_metadata():
     data = {
         "bldg_id": ["b1", "b2", "b3"],
         "income_bucket": [1, 2, 3],
-        "occupants": [2, 3, 4],
+        "occupants": [2, 3, 3],
         "vehicles": [1, 2, 1],  # b1 has 1 vehicle, b2 has 2, b3 has 1
         "metro": [
             "In metro area, principal city",
@@ -125,7 +127,7 @@ def mock_metadata_with_zero():
     data = {
         "bldg_id": ["b1", "b2", "b3", "b4"],  # Added b4 with 0 vehicles
         "income_bucket": [1, 2, 3, 2],
-        "occupants": [2, 3, 4, 1],
+        "occupants": [2, 3, 3, 1],
         "vehicles": [1, 2, 1, 0],  # b4 has 0 vehicles
         "metro": [
             "In metro area, principal city",
@@ -215,39 +217,52 @@ def test_match_with_vehicle_tier(calculator):
     assert match_type == "urban_income_occupants"
     assert vehicle_ids[0] in ["v2", "v3"]
 
-    # Test income-only match after urban tiers miss (income=3 is rural-only in fixture)
+    # High income is rural-only (v4). Urban + occ=1 misses urban_occupants (no occ=1
+    # in pool) and urban_income, then income → v4.
     match_type, vehicle_ids = calculator.nhts_sampler.match(
         target_income=3,
         target_urban=1,  # urban request; v4 is rural → drop urban
-        target_occupants=2,  # Different from data
-        target_vehicles=1,  # Different from data
-        num_samples=1,
-        weekday=True,
-        match_on_vehicles=True,
-    )
-    assert match_type == "income"
-    assert vehicle_ids[0] == "v4"  # v4 has income=3
-
-    # Test closest income match
-    match_type, vehicle_ids = calculator.nhts_sampler.match(
-        target_income=4,  # Not in data
-        target_urban=1,
-        target_occupants=2,
+        target_occupants=1,  # no occ=1 peers in fixture
         target_vehicles=1,
         num_samples=1,
         weekday=True,
         match_on_vehicles=True,
     )
-    assert match_type == "closest_income"
-    assert vehicle_ids[0] in ["v1", "v2", "v3", "v4"]
+    assert match_type == "income"
+    assert vehicle_ids[0] == "v4"
+
+    # Missing target income bin raises rather than borrowing another income group.
+    sparse = pl.DataFrame({
+        "hh_vehicle_id": ["lo", "mid", "lo", "mid"],
+        "income_bucket": [1, 2, 1, 2],
+        "occupants": [2, 2, 2, 2],
+        "vehicles": [1, 1, 1, 1],
+        "urban": [1, 1, 1, 1],
+        "weekday": [2, 2, 1, 1],
+        "start_time": [800, 900, 1100, 1200],
+        "end_time": [1700, 1800, 1500, 1600],
+        "miles_driven": [20.0, 30.0, 25.0, 28.0],
+        "trip_weight": [1.0, 1.0, 1.0, 1.0],
+    })
+    sparse_sampler = NHTSProfileSampler(nhts_df=sparse, random_state=42)
+    with pytest.raises(ValueError, match="No NHTS weekday match.*available income bins=\\[1, 2\\]"):
+        sparse_sampler.match(
+            target_income=3,
+            target_urban=1,
+            target_occupants=1,
+            target_vehicles=1,
+            num_samples=1,
+            weekday=True,
+            match_on_vehicles=True,
+        )
 
 
 def test_match_prefers_urban_over_income_only_cross_urban(calculator):
-    """Rural building with income=3 matches rural v4 via exact (urban held)."""
+    """Rural building with high income matches rural v4 via exact (urban held)."""
     match_type, vehicle_ids = calculator.nhts_sampler.match(
         target_income=3,
         target_urban=2,
-        target_occupants=4,
+        target_occupants=3,
         target_vehicles=1,
         num_samples=1,
         weekday=True,
@@ -257,17 +272,47 @@ def test_match_prefers_urban_over_income_only_cross_urban(calculator):
     assert vehicle_ids == ["v4"]
 
 
-def test_match_prefers_urban_income_over_income_occupants():
-    """Keep urban/rural when dropping occupants; place-type beats HH size for VMT.
+def test_match_prefers_urban_occupants_over_urban_income():
+    """Drop income before occupants when keeping urban/rural.
 
-    Pool has rural income=2 with occupants=4 and urban income=2 with occupants=3.
-    A rural target at income=2, occupants=3 should hit urban_income (rural peer)
-    before income_occupants (cross-urban same HH size).
+    Rural target mid-income occ=2: rural peer is low-income occ=2 (urban_occupants),
+    urban peer is mid-income occ=2 (would be income_occupants). Prefer rural peer.
     """
     nhts = pl.DataFrame({
-        "hh_vehicle_id": ["urban_occ3", "rural_occ4", "urban_occ3", "rural_occ4"],
+        "hh_vehicle_id": ["rural_lo", "urban_mid", "rural_lo", "urban_mid"],
+        "income_bucket": [1, 2, 1, 2],
+        "occupants": [2, 2, 2, 2],
+        "vehicles": [1, 1, 1, 1],
+        "urban": [2, 1, 2, 1],
+        "weekday": [2, 2, 1, 1],
+        "start_time": [800, 900, 1100, 1000],
+        "end_time": [1200, 1700, 1500, 1400],
+        "miles_driven": [25.0, 30.0, 22.0, 28.0],
+        "trip_weight": [1.0, 1.0, 1.0, 1.0],
+    })
+    sampler = NHTSProfileSampler(nhts_df=nhts, random_state=42)
+    match_type, vehicle_ids = sampler.match(
+        target_income=2,
+        target_urban=2,
+        target_occupants=2,
+        target_vehicles=1,
+        num_samples=1,
+        weekday=True,
+    )
+    assert match_type == "urban_occupants"
+    assert vehicle_ids == ["rural_lo"]
+
+
+def test_match_prefers_urban_income_over_income_occupants():
+    """Keep urban/rural when dropping occupants; place-type beats cross-urban HH size.
+
+    Rural target mid-income occ=2: rural peer mid-income occ=1 (urban_income),
+    urban peer mid-income occ=2 (income_occupants). Prefer rural peer.
+    """
+    nhts = pl.DataFrame({
+        "hh_vehicle_id": ["urban_occ2", "rural_occ1", "urban_occ2", "rural_occ1"],
         "income_bucket": [2, 2, 2, 2],
-        "occupants": [3, 4, 3, 4],
+        "occupants": [2, 1, 2, 1],
         "vehicles": [1, 1, 1, 1],
         "urban": [1, 2, 1, 2],
         "weekday": [2, 2, 1, 1],
@@ -280,26 +325,29 @@ def test_match_prefers_urban_income_over_income_occupants():
     match_type, vehicle_ids = sampler.match(
         target_income=2,
         target_urban=2,
-        target_occupants=3,
+        target_occupants=2,
         target_vehicles=1,
         num_samples=1,
         weekday=True,
     )
     assert match_type == "urban_income"
-    assert vehicle_ids == ["rural_occ4"]
+    assert vehicle_ids == ["rural_occ1"]
 
 
-def test_match_falls_back_to_income_occupants_when_urban_income_misses(calculator):
-    """When no same-urban pool exists at the income, cross urban to keep occupants."""
+def test_match_falls_back_to_income_occupants_when_urban_tiers_miss(calculator):
+    """No rural mid-income / rural occ=1 peer → fall through to income-only.
+
+    Mid-income+occ=3 exists only as urban v2/v3; rural v4 is high-income occ=3+.
+    """
     match_type, vehicle_ids = calculator.nhts_sampler.match(
         target_income=2,
-        target_urban=2,  # rural; fixture has income=2 only as urban v2/v3
-        target_occupants=3,
+        target_urban=2,
+        target_occupants=1,
         target_vehicles=1,
         num_samples=1,
         weekday=True,
     )
-    assert match_type == "income_occupants"
+    assert match_type == "income"
     assert vehicle_ids[0] in ["v2", "v3"]
 
 def test_sample_uses_sampler_nhts_by_default(
@@ -393,9 +441,9 @@ def test_sample(calculator):
                 "trip_ids": [1, 2],
             },
             "weekend": {
-                "trip_departure_hours": [14],
-                "trip_arrival_hours": [18],
-                "trip_miles_driven": [35.0],
+                "trip_departure_hours": [9],
+                "trip_arrival_hours": [13],
+                "trip_miles_driven": [18.0],
                 "trip_weights": [1.0],
                 "trip_ids": [1],
             },

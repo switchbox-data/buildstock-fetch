@@ -17,6 +17,8 @@ import boto3
 import numpy as np
 import polars as pl
 
+from utils.EVs.nhts_tours import NHTS_HOME_PURPOSES
+
 __all__ = [
     "EVDemandInputs",
     "assign_urban_from_metro",
@@ -193,47 +195,34 @@ def assign_urban_from_metro(metro: str) -> int:
 
 def assign_nhts_income_bucket(income: int) -> int:
     """
-    Assign an income bucket to an NHTS income value.
+    Assign a coarse income bin for NHTS profile matching.
+
+    Collapses the NHTS HHFAMINC 1–11 scale into three stable pools:
+
+        1 = less than $50,000          (HHFAMINC 01–05)
+        2 = $50,000 to $149,999        (HHFAMINC 06–09)
+        3 = $150,000 or more           (HHFAMINC 10–11)
 
     Args:
         income: Annual household income in dollars
 
     Returns:
-        NHTS income bucket number (1-11)
-
-    NHTS Income Buckets:
-        01 = Less than $10,000
-        02 = $10,000 to $14,999
-        03 = $15,000 to $24,999
-        04 = $25,000 to $34,999
-        05 = $35,000 to $49,999
-        06 = $50,000 to $74,999
-        07 = $75,000 to $99,999
-        08 = $100,000 to $124,999
-        09 = $125,000 to $149,999
-        10 = $150,000 to $199,999
-        11 = $200,000 or more
+        Coarse income bin (1–3)
     """
-    # List of (threshold, bucket) pairs
-    income_buckets = [
-        (10000, 1),
-        (15000, 2),
-        (25000, 3),
-        (35000, 4),
-        (50000, 5),
-        (75000, 6),
-        (100000, 7),
-        (125000, 8),
-        (150000, 9),
-        (200000, 10),
-        (float("inf"), 11),  # Catch all for $200,000 or more
-    ]
+    if income < 50000:
+        return 1
+    if income < 150000:
+        return 2
+    return 3
 
-    for threshold, bucket in income_buckets:
-        if income < threshold:
-            return bucket
 
-    return 11  # Should never reach here due to inf threshold, but makes mypy happy
+def coarsen_nhts_hhfaminc(hhfaminc: int) -> int:
+    """Map raw NHTS HHFAMINC codes (1–11) to the same 1–3 bins as ``assign_nhts_income_bucket``."""
+    if hhfaminc <= 5:
+        return 1
+    if hhfaminc <= 9:
+        return 2
+    return 3
 
 
 def resstock_puma_dependency(state: str, puma_geoid: str) -> str:
@@ -358,7 +347,7 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
             # we key off in.vacancy_status directly for is_vacant.
             (pl.col("in.vacancy_status") == "Vacant").alias("is_vacant"),
         ])
-        # Process household size - replace "10+" with "10" and cast to numeric
+        # Process household size - replace "10+" with "10", cast numeric, cap at 3+ for matching
         .with_columns([
             pl.when(pl.col("occupants") == "10+")
             .then(pl.lit("10"))
@@ -367,6 +356,12 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
             .alias("occupants")
         ])
         .filter(pl.col("occupants") > 0)
+        .with_columns([
+            pl.when(pl.col("occupants") >= 3)
+            .then(3)
+            .otherwise(pl.col("occupants"))
+            .alias("occupants")
+        ])
         # Process income categories - convert to standard ranges
         .with_columns([
             pl.when(pl.col("income") == "<10000")
@@ -394,8 +389,8 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
             pl.concat_str([pl.lit(f"{state}, "), pl.col("puma").str.zfill(5)]).alias("puma_dependency"),
         )
         .with_columns([
-            pl.col("occupants").cast(pl.UInt8),  # Instead of Int64
-            pl.col("income_bucket").cast(pl.UInt8),  # 1-11 fits in UInt8
+            pl.col("occupants").cast(pl.UInt8),  # 1 / 2 / 3+
+            pl.col("income_bucket").cast(pl.UInt8),  # 1–3 coarse bins
             pl.col("urban").cast(pl.UInt8),  # 1=urban, 2=rural
             pl.col("puma").cast(pl.Utf8),
         ])
@@ -403,6 +398,22 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
     )
 
     return metadata_df
+
+
+def _nhts_persons_path(nhts_trip_path: str | Path) -> Path:
+    """Resolve the sibling NHTS persons CSV used for ``OUTOFTWN``.
+
+    Trip surveys live at ``NHTS_v2_1_trip_surveys.csv``; the person file is
+    expected beside it as ``NHTS_v2_1_persons.csv`` (same ORNL NextGen release).
+
+    Args:
+        nhts_trip_path: Path to the NHTS trip data file
+
+    Returns:
+        Path to the NHTS persons data file
+    """
+    trip_path = Path(nhts_trip_path)
+    return trip_path.with_name("NHTS_v2_1_persons.csv")
 
 
 def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
@@ -413,6 +424,11 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
     home-based tours (``why_from`` / ``why_to`` / ``seq_trip_id``). Restricts to
     household-vehicle *driver* trips (``DRVR_FLG=01``) so passenger duplicates do
     not double-count vehicle movement.
+
+    Home-charging-only pool: keep vehicle-days that start and end at home
+    (first-leg ``WHYFROM`` and last-leg ``WHYTO`` in ``NHTS_HOME_PURPOSES``) and
+    whose driver was not away for the entire travel day (person-file
+    ``OUTOFTWN=02``).
 
     Args:
         nhts_path: Path to the NHTS trip data file
@@ -425,9 +441,22 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         msg = f"NHTS file not found: {nhts_path}. Please run `just download-nhts` to download the data."
         raise FileNotFoundError(msg)
 
-    # Define the columns we need
+    # Person-file flag ``OUTOFTWN`` is not on the trip CSV; join from the sibling persons file.
+    persons_path = _nhts_persons_path(nhts_path)
+    if not persons_path.exists():
+        msg = (
+            f"NHTS persons file not found: {persons_path}. "
+            "Required for OUTOFTWN (away-entire-day) filtering; place "
+            "NHTS_v2_1_persons.csv next to the trip surveys CSV."
+        )
+        raise FileNotFoundError(msg)
+
+    # Define the columns we need from the trip file.
+    # HOUSEID/PERSONID are join keys for OUTOFTWN only (dropped before return).
     needed_columns = [
         "CENSUS_D",  # census division (needed for filtering)
+        "HOUSEID",  # join to persons for OUTOFTWN
+        "PERSONID",  # join to persons for OUTOFTWN
         "VEHCASEID",  # unique hh/vehicle id
         "VEHID",  # vehicle id
         "VEHTYPE",  # household vehicle type (needed for light-duty filter)
@@ -447,11 +476,15 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         "DRVR_FLG",  # 01=driver (moves the vehicle), 02=passenger
     ]
 
-    # Load only the needed columns
+    # Load only the needed trip columns (HOUSEID/PERSONID as strings for a stable join).
     nhts_df = pl.read_csv(
         nhts_path,
         columns=needed_columns,
-        schema_overrides={"VEHCASEID": pl.Utf8},
+        schema_overrides={
+            "VEHCASEID": pl.Utf8,
+            "HOUSEID": pl.Utf8,
+            "PERSONID": pl.Utf8,
+        },
     )
 
     # Get the census division for this state
@@ -473,8 +506,28 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         pl.col("DRVR_FLG").cast(pl.Int64) == 1,
     )
 
-    # Drop filter-only columns
+    # Drop filter-only columns (keep HOUSEID/PERSONID until after OUTOFTWN join).
     nhts_df = nhts_df.drop("CENSUS_D", "VEHTYPE", "DRVR_FLG")
+
+    # --- OUTOFTWN: drop drivers who were away from home the entire travel day ---
+    # Codebook (person file): 01=Yes (away entire day), 02=No. Home-charging models
+    # assume the vehicle can be at the residence that day, so keep OUTOFTWN=02 only.
+    persons_df = pl.read_csv(
+        persons_path,
+        columns=["HOUSEID", "PERSONID", "OUTOFTWN"],
+        schema_overrides={"HOUSEID": pl.Utf8, "PERSONID": pl.Utf8},
+    ).with_columns(pl.col("OUTOFTWN").cast(pl.Int64))
+    n_before_outoftwn = nhts_df.height
+    nhts_df = (
+        nhts_df.join(persons_df, on=["HOUSEID", "PERSONID"], how="inner")
+        .filter(pl.col("OUTOFTWN") == 2)
+        .drop("HOUSEID", "PERSONID", "OUTOFTWN")
+    )
+    logging.info(
+        "NHTS OUTOFTWN filter (keep 02=not away entire day): %s/%s trip rows retained",
+        nhts_df.height,
+        n_before_outoftwn,
+    )
 
     # Derive the weekday/weekend flag from TRAVDAY (day the trip was taken) rather than
     # NHTS's TDWKND, which reclassifies Friday trips starting at/after 18:00 as weekend.
@@ -505,11 +558,57 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
 
     # NHTS URBRUR is 1=Urban, 2=Rural (may arrive as 01/02 strings from CSV).
     # Purpose / sequence codes arrive as zero-padded strings; cast for tour logic.
+    # Income: collapse HHFAMINC 1–11 → 3 bins; occupants: cap at 3+ (match ResStock load).
     nhts_df = nhts_df.with_columns(
         pl.col("urban").cast(pl.Int64),
         pl.col("why_from").cast(pl.Int64),
         pl.col("why_to").cast(pl.Int64),
         pl.col("seq_trip_id").cast(pl.Int64),
+        pl.col("occupants").cast(pl.Int64),
+        pl.col("income_bucket").cast(pl.Int64),
+    ).with_columns(
+        pl.when(pl.col("income_bucket") <= 5)
+        .then(1)
+        .when(pl.col("income_bucket") <= 9)
+        .then(2)
+        .otherwise(3)
+        .alias("income_bucket"),
+        pl.when(pl.col("occupants") >= 3)
+        .then(3)
+        .otherwise(pl.col("occupants"))
+        .alias("occupants"),
+    )
+
+    # --- Closed home-based vehicle-days only (start and end at home) ---
+    # Home purposes: 01=regular activities at home, 02=work from home (paid).
+    # A vehicle-day is one (hh_vehicle_id, weekday) group. Require the chronologically
+    # first leg to leave home and the last leg to return home so presence/charging
+    # templates are closed leave-home → return-home loops (no open overnight tours).
+    home_purposes = list(NHTS_HOME_PURPOSES)
+    n_before_home = nhts_df.height
+    n_vehicles_before = nhts_df["hh_vehicle_id"].n_unique()
+    closed_home_days = (
+        nhts_df.sort(["hh_vehicle_id", "weekday", "start_time", "seq_trip_id"])
+        .group_by(["hh_vehicle_id", "weekday"])
+        .agg(
+            pl.col("why_from").first().alias("_day_start_why_from"),
+            pl.col("why_to").last().alias("_day_end_why_to"),
+        )
+        .filter(
+            pl.col("_day_start_why_from").is_in(home_purposes),
+            pl.col("_day_end_why_to").is_in(home_purposes),
+        )
+        .select(["hh_vehicle_id", "weekday"])
+    )
+    nhts_df = nhts_df.join(closed_home_days, on=["hh_vehicle_id", "weekday"], how="inner")
+    logging.info(
+        "NHTS closed-home filter (start WHYFROM and end WHYTO in %s): "
+        "%s/%s trip rows, %s/%s vehicles retained",
+        sorted(home_purposes),
+        nhts_df.height,
+        n_before_home,
+        nhts_df["hh_vehicle_id"].n_unique(),
+        n_vehicles_before,
     )
 
     return nhts_df

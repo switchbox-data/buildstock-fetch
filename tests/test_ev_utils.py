@@ -35,13 +35,25 @@ def test_assign_urban_from_metro():
 
 
 def test_assign_nhts_income_bucket():
-    """Test the assign_nhts_income_bucket function with key income values."""
-
+    """Test coarse income bins (≤$50k / $50–150k / $150k+)."""
     # Test 4 key cases covering different buckets
-    assert assign_nhts_income_bucket(5000) == 1  # Low income
-    assert assign_nhts_income_bucket(50000) == 6  # Middle income
-    assert assign_nhts_income_bucket(150000) == 10  # High income
-    assert assign_nhts_income_bucket(250000) == 11  # Very high income
+    assert assign_nhts_income_bucket(5000) == 1
+    assert assign_nhts_income_bucket(49999) == 1
+    assert assign_nhts_income_bucket(50000) == 2
+    assert assign_nhts_income_bucket(149999) == 2
+    assert assign_nhts_income_bucket(150000) == 3
+    assert assign_nhts_income_bucket(250000) == 3
+
+
+def test_coarsen_nhts_hhfaminc():
+    from utils.EVs.ev_utils import coarsen_nhts_hhfaminc
+
+    assert coarsen_nhts_hhfaminc(1) == 1
+    assert coarsen_nhts_hhfaminc(5) == 1
+    assert coarsen_nhts_hhfaminc(6) == 2
+    assert coarsen_nhts_hhfaminc(9) == 2
+    assert coarsen_nhts_hhfaminc(10) == 3
+    assert coarsen_nhts_hhfaminc(11) == 3
 
 
 def test_assign_income_midpoints():
