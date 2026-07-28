@@ -9,7 +9,7 @@ check:
     echo "🚀 Checking lock file consistency with 'pyproject.toml'"
     uv lock --locked
     echo "🚀 Linting, formatting, and type checking code"
-    prek run -a
+    uv run prek run -a
     echo "🚀 Static type checking: Running mypy"
     uv run mypy
 
