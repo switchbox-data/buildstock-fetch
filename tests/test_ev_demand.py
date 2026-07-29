@@ -1769,6 +1769,34 @@ def test_resolve_hourly_prices_flat_and_daily():
     assert tiled[24] == 0.10
 
 
+def test_resolve_hourly_prices_daily_is_clock_hour_aligned():
+    """daily_price_usd_per_kwh[h] prices clock hour h, not the h-th simulation hour."""
+    from utils.EVs.charging import build_hours_base
+    from utils.EVs.ev_demand import EVDemandConfig, resolve_hourly_prices
+
+    peak_hours = (17, 18, 19, 20)
+    daily = tuple(0.20 if h in peak_hours else 0.10 for h in range(24))
+    start_date = datetime(2024, 1, 1, 4)  # window starts at 04:00, not midnight
+    end_date = datetime(2024, 1, 3, 3)
+    config = EVDemandConfig(
+        state="MD",
+        release="res_2024_tmy3_2",
+        start_date=start_date,
+        end_date=end_date,
+        charging_strategy="cost_minimizing",
+        daily_price_usd_per_kwh=daily,
+        shed_load_penalty_usd_per_kwh=1000.0,
+    )
+
+    prices = resolve_hourly_prices(config)
+    assert prices is not None
+    timestamps = build_hours_base(start_date, end_date)["timestamp"].to_list()
+    assert len(prices) == len(timestamps)
+
+    priced_on_peak = {ts.hour for ts, price in zip(timestamps, prices, strict=True) if price == 0.20}
+    assert priced_on_peak == set(peak_hours)
+
+
 def test_cost_minimizing_requires_prices_and_shed_penalty():
     from utils.EVs.ev_demand import EVDemandConfig
 
@@ -1826,7 +1854,7 @@ def test_load_md_2024_config_off_peak():
     assert config.end_date == datetime(2025, 1, 1, 3)
     assert config.num_simulation_hours() == 366 * 24  # 2024 leap year travel-day window
     assert config.charging_strategy == "off_peak_immediate"
-    assert config.peak_clock_hours == (17, 18, 19, 20, 21)
+    assert config.peak_clock_hours == (17, 18, 19, 20)
     assert config.soc_min_fraction is None
     assert config.soc_safety_buffer_fraction is None
     assert config.shed_load_penalty_usd_per_kwh is None

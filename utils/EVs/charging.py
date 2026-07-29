@@ -21,7 +21,7 @@ import polars as pl
 
 ChargingStrategy = Literal["immediate", "cost_minimizing", "off_peak", "off_peak_immediate"]
 
-DEFAULT_PEAK_CLOCK_HOURS: Final[tuple[int, ...]] = (17, 18, 19, 20, 21)  # 5pm-9pm on-peak window
+DEFAULT_PEAK_CLOCK_HOURS: Final[tuple[int, ...]] = (17, 18, 19, 20)  # 5pm–9pm; hour 21 (9–10pm) is off-peak
 DEFAULT_SOC_MIN_FRACTION = 0.2  # minimum comfortable SOC (SOC^min in TOU EV doc)
 DEFAULT_SOC_SAFETY_BUFFER_FRACTION = 0.2  # extra SOC buffer above daily trip energy need
 # Default shed penalty when none is passed: high enough that shedding is avoided unless

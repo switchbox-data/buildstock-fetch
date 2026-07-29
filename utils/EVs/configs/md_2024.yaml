@@ -77,7 +77,8 @@ charging:
   initial_soc_kwh: null
 
   # --- required for off_peak and off_peak_immediate ---
-  peak_clock_hours: [17, 18, 19, 20, 21]
+  # Clock hours 17–20 = 5pm–9pm; hour 21 (9–10pm) is off-peak
+  peak_clock_hours: [17, 18, 19, 20]
 
   # --- required for off_peak only (SOC_req targets) ---
   # soc_min_fraction: 0.2
@@ -91,4 +92,7 @@ charging:
   # Use exactly one price source:
   # hourly_price_path: path/to/prices.parquet  # column usd_per_kwh or price; length = num hours
   # flat_price_usd_per_kwh: 0.12
-  # daily_price_usd_per_kwh: [0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.20, 0.20, 0.20, 0.20, 0.20, 0.10, 0.10, 0.10]
+  # daily_price_usd_per_kwh: indexed by clock hour (element h = price for hour h);
+  # $0.20 on peak hours 17-20 (5pm-9pm), $0.10 otherwise
+  #                          0     1     2     3     4     5     6     7     8     9    10    11    12    13    14    15    16    17    18    19    20    21    22    23
+  # daily_price_usd_per_kwh: [0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.20, 0.20, 0.20, 0.20, 0.10, 0.10, 0.10]

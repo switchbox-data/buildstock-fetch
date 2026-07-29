@@ -161,7 +161,7 @@ class EVDemandConfig:
     # Prices for cost_minimizing (exactly one of these):
     # - hourly_price_path: CSV/parquet/npy with one value per simulation hour
     # - flat_price_usd_per_kwh: constant $/kWh broadcast to all hours
-    # - daily_price_usd_per_kwh: length-24 profile tiled across days
+    # - daily_price_usd_per_kwh: length-24 profile indexed by clock hour (element h = hour h)
     hourly_price_path: str | None = None
     flat_price_usd_per_kwh: float | None = None
     daily_price_usd_per_kwh: tuple[float, ...] | None = None
@@ -543,9 +543,13 @@ def resolve_hourly_prices(config: EVDemandConfig) -> np.ndarray | None:
     if config.flat_price_usd_per_kwh is not None:
         return np.full(num_hours, float(config.flat_price_usd_per_kwh), dtype=np.float64)
     if config.daily_price_usd_per_kwh is not None:
+        # Index by clock hour, not simulation-hour offset: element h is the price for
+        # clock hour h, so a profile stays aligned to midnight even though the
+        # simulation window starts at 04:00.
+        assert config.start_date is not None  # guaranteed by num_simulation_hours() above
         daily = np.asarray(config.daily_price_usd_per_kwh, dtype=np.float64)
-        days = num_hours // 24
-        return np.tile(daily, days)
+        clock_hours = (np.arange(num_hours) + config.start_date.hour) % 24
+        return daily[clock_hours]
     return None
 
 
