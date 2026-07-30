@@ -93,11 +93,11 @@ def test_assigner_rejects_probability_sum_not_one(autonomie_params):
 
 def test_assign_filters_to_feasible_options(option_probabilities, autonomie_params):
     assigner = EVBatteryAssigner(option_probabilities, autonomie_params, random_state=0)
-    # ~180 peak miles: small/ inefficient packs drop out; larger packs remain.
+    # ~180 peak duty miles (raw or temp-scaled): small/inefficient packs drop out.
     duty = _duty(pl.DataFrame({"bldg_id": ["x"], "vehicle_id": [1]}), 180.0)
     result = assigner.assign(duty)
     assert result.height == 1
-    # Feasible <=> capacity >= miles * kwh_per_mile * 1.2
+    # Feasible <=> capacity >= duty_miles * kwh_per_mile * 1.2 (buffer on peak discharge)
     assert float(result["battery_capacity_kwh"][0]) >= 180.0 * float(result["kwh_per_mile"][0]) * 1.2
 
 

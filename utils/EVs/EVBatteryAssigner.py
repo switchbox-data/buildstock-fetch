@@ -6,13 +6,16 @@ usable battery capacity (kWh) and combined fuel economy (kWh/mile).
 
 In this pipeline we apply a **stock-conditional** variant: trip schedules are
 generated first, then each vehicle draws from the national option shares
-restricted to packs that can cover its max daily miles (plus a reserve buffer).
+restricted to packs that can cover its peak daily *discharge duty* (plus a
+reserve buffer). Callers should pass temperature-scaled miles when outdoor-temp
+adjustment is enabled (see
+``ChargingSimulator.build_hourly_temp_scaled_miles``), so
+feasibility matches SOC discharge: ``miles_share * kwh_per_mile * power_mult(T)``.
 If no option is feasible, assignment raises.
 
 Load reference tables with ``utils.EVs.ev_utils.load_ev_battery_lookup`` and
 ``load_ev_autonomie_params``, then pass the DataFrames into ``EVBatteryAssigner``.
-Callers supply ``max_daily_miles`` (e.g. from
-``TripScheduleGenerator.max_daily_miles_from_trip_schedules``).
+Callers supply ``max_daily_miles`` (raw or temperature-scaled duty miles).
 """
 
 from __future__ import annotations
@@ -31,9 +34,12 @@ class EVBatteryAssigner:
     """
     Sample ResStock 2025 EV battery options and attach Autonomie capacity / efficiency.
 
-    Draws from national BEV stock shares, conditioned on each vehicle's max daily
-    miles: only options whose usable capacity covers ``miles * kwh_per_mile * (1 + buffer)``
-    are eligible. Probabilities are renormalized within that feasible set.
+    Draws from national BEV stock shares, conditioned on each vehicle's peak daily
+    duty miles: only options whose usable capacity covers
+    ``duty_miles * kwh_per_mile * (1 + buffer)`` are eligible. When duty miles are
+    temperature-scaled, this is equivalent to requiring a 20% buffer above the
+    peak daily temp-adjusted discharge. Probabilities are renormalized within
+    that feasible set.
     """
 
     # Columns: ev_option_name, probability (must sum to ~1)
@@ -96,15 +102,21 @@ class EVBatteryAssigner:
         self._option_kwh_per_mile = np.asarray(joined["kwh_per_mile"].to_numpy(), dtype=np.float64)
 
     def _feasible_mask(self, max_daily_miles: float, buffer_fraction: float) -> np.ndarray:
-        """Options whose usable pack covers peak-day energy including reserve buffer.
-        
+        """Options whose usable pack covers peak-day discharge including reserve buffer.
+
+        ``max_daily_miles`` may be temperature-scaled duty miles. For each Autonomie
+        option ``i``, required energy is
+        ``duty_miles * kwh_per_mile_i * (1 + buffer)`` — i.e. a 20% buffer on top
+        of the peak daily temp-adjusted discharge that option would see.
+
         Args:
-            max_daily_miles (float): The maximum daily miles driven by the vehicle
-            buffer_fraction (float): The buffer fraction to add to the required energy
+            max_daily_miles (float): Peak daily duty miles (raw or temp-scaled)
+            buffer_fraction (float): Extra fraction of trip energy that capacity must cover
 
         Returns:
-            np.ndarray: A mask of the options that are feasible
+            np.ndarray: Boolean mask over stock options that are feasible
         """
+        # Per-option peak discharge (kWh) × buffer; compare to usable pack size.
         required_kwh = float(max_daily_miles) * self._option_kwh_per_mile * (1.0 + buffer_fraction)
         return self._option_capacity_kwh >= required_kwh
 
@@ -119,8 +131,10 @@ class EVBatteryAssigner:
 
         Args:
             vehicle_duty: DataFrame with ``bldg_id``, ``vehicle_id``, and ``max_daily_miles``
-            buffer_fraction: Extra fraction of trip energy that usable capacity must cover
-                (default 0.2). Option ``i`` is feasible when
+                (peak daily duty miles; pass temperature-scaled miles when outdoor-temp
+                discharge adjustment is enabled so sizing matches SOC draw)
+            buffer_fraction: Extra fraction of peak daily discharge that usable capacity
+                must cover (default 0.2). Option ``i`` is feasible when
                 ``battery_capacity_kwh >= max_daily_miles * kwh_per_mile * (1 + buffer_fraction)``.
 
         Returns:
@@ -159,7 +173,7 @@ class EVBatteryAssigner:
         drawn: list[str] = []
         # Iterate over the vehicles in the vehicle_duty DataFrame
         for bldg_id, vehicle_id, max_daily_miles in zip(bldg_ids, vehicle_ids, miles, strict=True):
-            # identify which vehicle options are feasible
+            # Keep only packs that cover peak daily discharge (temp-scaled miles × η) + buffer.
             mask = self._feasible_mask(float(max_daily_miles), buffer_fraction)
             if not np.any(mask):
                 # Hard failure for QA: duty cycle exceeds every Autonomie pack under the buffer.

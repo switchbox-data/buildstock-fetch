@@ -128,11 +128,13 @@ class EVDemandConfig:
     time_offset_probabilities: tuple[float, ...] = DEFAULT_TIME_OFFSET_PROBABILITIES
     miles_noise_std_fraction: float = DEFAULT_MILES_NOISE_STD_FRACTION
 
-    # Battery assignment
+    # Battery assignment: pack must cover peak daily discharge duty × (1 + buffer).
+    # With temperature_adjustment=resstock, duty miles are Σ(miles_share * power_mult(T)).
     capacity_buffer_fraction: float = DEFAULT_CAPACITY_BUFFER_FRACTION
 
     # Discharge temperature dependence (ResStock curve on Autonomie kWh/mi).
     # none: miles * kwh_per_mile; resstock: × power_mult(T_outdoor) using weather_dir CSVs.
+    # Also used for battery sizing duty miles when enabled.
     temperature_adjustment: TemperatureAdjustmentMode = "none"
 
     # Pipeline
@@ -647,8 +649,9 @@ class EVDemandCalculator:
 
     Public API:
     - ``match_and_generate_trip_schedules()`` — EV assignment → NHTS profiles →
-      daily trip schedules → ResStock battery attrs
+      daily trip schedules → hourly duty miles → ResStock battery attrs
     - ``generate_soc_schedules()`` — hourly SOC / charge / discharge from trips
+      (reuses duty miles when passed)
     """
 
     def __init__(
@@ -676,6 +679,12 @@ class EVDemandCalculator:
         time_offset_probabilities: tuple[float, ...] = DEFAULT_TIME_OFFSET_PROBABILITIES,
         miles_noise_std_fraction: float = DEFAULT_MILES_NOISE_STD_FRACTION,
         capacity_buffer_fraction: float = DEFAULT_CAPACITY_BUFFER_FRACTION,
+        temperature_adjustment: TemperatureAdjustmentMode = "none",
+        weather_dir: str | Path | None = None,
+        weather_map: pl.DataFrame | None = None,
+        station_temps: dict[str, pl.DataFrame] | None = None,
+        state: str | None = None,
+        release: str | None = None,
     ):
         """
         Initialize the EV demand calculator and its pipeline components.
@@ -697,6 +706,12 @@ class EVDemandCalculator:
             max_workers: Maximum number of worker threads for parallel execution (None = use all cores)
             nhts_daily_miles_percentile_low: Lower percentile for NHTS daily-miles filter (0–100)
             nhts_daily_miles_percentile_high: Upper percentile for NHTS daily-miles filter (0–100)
+            temperature_adjustment: When ``resstock``, battery sizing uses temp-scaled duty miles
+            weather_dir: ResStock weather CSV directory (required for ``resstock`` temp adj)
+            weather_map: Building → weather station map from ``load_all_input_data``
+            station_temps: Optional mutable station temp cache shared across batches
+            state: State code for weather lookup (required for ``resstock`` temp adj)
+            release: ResStock release key for weather lookup (required for ``resstock`` temp adj)
         """
         if ev_assignment not in EV_ASSIGNMENT_MODES:
             raise ValueError(
@@ -789,6 +804,13 @@ class EVDemandCalculator:
             end_date=end_date,
         )
         self.capacity_buffer_fraction = capacity_buffer_fraction
+        # Weather / temp-adj fields used when sizing packs against temp-scaled discharge.
+        self.temperature_adjustment = temperature_adjustment
+        self.weather_dir = weather_dir
+        self.weather_map = weather_map
+        self.station_temps = station_temps
+        self.state = state
+        self.release = release
 
     @classmethod
     def from_config(
@@ -802,6 +824,8 @@ class EVDemandCalculator:
         ev_ownership_df: pl.DataFrame | None = None,
         pums_df: pl.DataFrame | None = None,
         vehicle_ownership: VehicleOwnershipModel | None = None,
+        weather_map: pl.DataFrame | None = None,
+        station_temps: dict[str, pl.DataFrame] | None = None,
     ) -> "EVDemandCalculator":
         """Build a calculator from an ``EVDemandConfig`` plus loaded input tables."""
         if config.start_date is None or config.end_date is None:
@@ -829,6 +853,12 @@ class EVDemandCalculator:
             time_offset_probabilities=config.time_offset_probabilities,
             miles_noise_std_fraction=config.miles_noise_std_fraction,
             capacity_buffer_fraction=config.capacity_buffer_fraction,
+            temperature_adjustment=config.temperature_adjustment,
+            weather_dir=config.weather_dir,
+            weather_map=weather_map,
+            station_temps=station_temps,
+            state=config.state,
+            release=config.release,
         )
 
     @staticmethod
@@ -865,18 +895,29 @@ class EVDemandCalculator:
             .select("bldg_id", pl.col("vehicle_id").cast(pl.Int64))
         )
 
-    def match_and_generate_trip_schedules(self) -> tuple[pl.DataFrame, pl.DataFrame]:
+    def match_and_generate_trip_schedules(
+        self,
+        *,
+        hours_base: pl.DataFrame | None = None,
+        hourly_temp_f_by_bldg: pl.DataFrame | None = None,
+    ) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
         """
-        Generate trip schedules for all buildings in the metadata.
+        Generate trip schedules and assign batteries from a single duty-miles build.
 
-        Assigns EV slots via ``ev_assignment`` (PUMS vehicle counts treated as EVs, or
-        ResStock max-1-EV adoption), samples NHTS profiles, generates trip schedules,
-        then assigns ResStock battery attributes conditioned on each vehicle's peak
-        daily miles.
+        Pipeline:
+        1. Assign EV slots → sample NHTS profiles → generate trip schedules
+        2. Build hourly temp-scaled miles **once** (option-independent duty array)
+        3. Size packs from peak daily duty miles × (1 + buffer)
+        4. Return the hourly duty frame so SOC can do ``discharge = miles * kwh_per_mile``
+           without recomputing temperature scaling
+
+        Args:
+            hours_base: Optional shared hourly calendar; built from start/end if omitted
+            hourly_temp_f_by_bldg: Optional preloaded outdoor temps. When omitted and
+                ``temperature_adjustment=resstock``, temps are loaded for EV buildings.
 
         Returns:
-            tuple[pl.DataFrame, pl.DataFrame]: Trip schedules and per-vehicle ResStock
-            battery assignment table (``ev_attributes``).
+            ``(trip_schedules, ev_attributes, hourly_temp_scaled_miles)``
         """
         bldg_veh_df = self._assign_ev_slots()
 
@@ -891,21 +932,62 @@ class EVDemandCalculator:
 
         logging.info("Assigning ResStock EV battery attributes (stock-conditional)")
         vehicle_slots = self._vehicle_slots_from_building_evs(bldg_veh_df)
-        max_miles = TripScheduleGenerator.max_daily_miles_from_trip_schedules(trip_schedules)
+
+        # Always materialize a shared hours calendar so duty miles and SOC align.
+        resolved_hours = hours_base
+        if resolved_hours is None:
+            resolved_hours = build_hours_base(self.start_date, self.end_date)
+
+        # Resolve outdoor temps when ResStock temp adjustment is on.
+        resolved_temps = hourly_temp_f_by_bldg
+        if self.temperature_adjustment == "resstock" and resolved_temps is None:
+            if vehicle_slots.height > 0:
+                if self.weather_dir is None or self.state is None or self.release is None:
+                    raise ValueError(
+                        "temperature_adjustment=resstock requires weather_dir, state, and "
+                        "release on EVDemandCalculator (pass via from_config / constructor)"
+                    )
+                logging.info(
+                    "Loading outdoor temps for battery sizing (%s EV building(s))",
+                    vehicle_slots["bldg_id"].n_unique(),
+                )
+                resolved_temps = ev_utils.load_hourly_temp_f_for_buildings(
+                    vehicle_slots["bldg_id"],
+                    hours_base=resolved_hours,
+                    state=self.state,
+                    release=self.release,
+                    weather_dir=self.weather_dir,
+                    weather_map=self.weather_map,
+                    station_temps=self.station_temps,
+                )
+
+        # One expand + optional temp scale → reused for sizing and later discharge.
+        hourly_temp_scaled_miles = ChargingSimulator.build_hourly_temp_scaled_miles(
+            trip_schedules,
+            resolved_hours,
+            hourly_temp_f_by_bldg=resolved_temps,
+        )
+        max_miles = ChargingSimulator.max_daily_miles_from_hourly_temp_scaled(
+            hourly_temp_scaled_miles
+        )
+
         vehicle_duty = (
             vehicle_slots.join(max_miles, on=["bldg_id", "vehicle_id"], how="left")
             .with_columns(pl.col("max_daily_miles").fill_null(0.0))
         )
+        # Feasible packs: capacity >= duty_miles * kwh_per_mile * (1 + buffer).
         ev_attributes = self.battery_assigner.assign(
             vehicle_duty,
             buffer_fraction=self.capacity_buffer_fraction,
         )
         logging.info(
-            "Assigned battery attributes for %s EV vehicle slot(s)",
+            "Assigned battery attributes for %s EV vehicle slot(s) "
+            "(duty miles %s)",
             ev_attributes.height,
+            "temperature-scaled" if resolved_temps is not None else "unscaled",
         )
 
-        return trip_schedules, ev_attributes
+        return trip_schedules, ev_attributes, hourly_temp_scaled_miles
 
     def _assign_ev_slots(self) -> pl.DataFrame:
         """Assign a ``vehicles`` column (EV slot count) according to ``ev_assignment``."""
@@ -943,8 +1025,13 @@ class EVDemandCalculator:
         soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
         allow_emergency_peak_charging: bool = False,
         hourly_temp_f_by_bldg: pl.DataFrame | None = None,
+        hourly_temp_scaled_miles: pl.DataFrame | None = None,
     ) -> pl.DataFrame:
-        """Generate hourly SOC / charge / discharge schedules from trip schedules."""
+        """Generate hourly SOC / charge / discharge schedules from trip schedules.
+
+        Pass ``hourly_temp_scaled_miles`` from ``match_and_generate_trip_schedules`` to
+        avoid recomputing the expand + temperature scale for discharge.
+        """
         if ev_attributes.is_empty():
             raise ValueError("ev_attributes must contain at least one vehicle row")
         return self.charging_simulator.generate_soc(
@@ -963,6 +1050,7 @@ class EVDemandCalculator:
             soc_safety_buffer_fraction=soc_safety_buffer_fraction,
             allow_emergency_peak_charging=allow_emergency_peak_charging,
             hourly_temp_f_by_bldg=hourly_temp_f_by_bldg,
+            hourly_temp_scaled_miles=hourly_temp_scaled_miles,
         )
 
 
@@ -1132,16 +1220,24 @@ def main():
             ev_battery_df=ev_battery_df,
             ev_autonomie_df=ev_autonomie_df,
             vehicle_ownership=fitted_vehicle_ownership,
+            weather_map=weather_map,
+            station_temps=station_temps,
         )
 
-        batch_trip_schedules, batch_ev_attributes = calculator.match_and_generate_trip_schedules()
+        # Battery sizing builds hourly temp-scaled miles once; reuse for SOC discharge.
+        batch_trip_schedules, batch_ev_attributes, batch_hourly_duty_miles = (
+            calculator.match_and_generate_trip_schedules(hours_base=hours_base)
+        )
         soc_kwargs: dict[str, Any] = {
             "charger_power_kw": config.charger_power_kw,
             "charging_strategy": config.charging_strategy,
             "initial_soc_kwh": config.initial_soc_kwh,
             "hours_base": hours_base,
+            "hourly_temp_scaled_miles": batch_hourly_duty_miles,
         }
-        if config.temperature_adjustment == "resstock":
+        # Temps only needed if duty miles were not precomputed (legacy / ad-hoc callers).
+        # With hourly_temp_scaled_miles set, generate_soc skips the second temp pass.
+        if config.temperature_adjustment == "resstock" and batch_hourly_duty_miles.is_empty():
             if config.weather_dir is None:
                 raise ValueError("weather_dir is required when temperature_adjustment=resstock")
             if batch_ev_attributes.height > 0:

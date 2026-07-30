@@ -115,36 +115,192 @@ class ChargingSimulator:
         return presence_by_vehicle
 
     @staticmethod
-    def _build_hourly_discharge_kwh(
+    def build_hourly_temp_scaled_miles(
         trip_schedules: pl.DataFrame,
         hours_base: pl.DataFrame,
         *,
-        kwh_per_mile_by_vehicle: pl.DataFrame,
         hourly_temp_f_by_bldg: pl.DataFrame | None = None,
     ) -> pl.DataFrame:
-        """Map each vehicle's trip schedule to an hourly schedule of discharge kWh for the instance date range.
+        """Spread trip miles onto drive hours, optionally × ResStock ``power_mult(T)``.
 
-        Spread each **drive leg's** energy uniformly over its driving hours
-        (``departure_*`` → ``arrival_*``), not over the full tour away window.
-        Mid-tour parking therefore has ``discharge_kwh=0`` but can still be
-        ``at_home=False`` via tour presence.
+        This is the shared, option-independent duty array used for both battery
+        sizing and SOC discharge:
 
-        When ``hourly_temp_f_by_bldg`` is provided (``bldg_id``, ``hour_index``, ``temp_f``),
-        each drive-hour discharge share is scaled by the ResStock / OpenStudio-HPXML
-        ``resstock_temp_power_mult(temp_f)``. Charge power is not adjusted here.
+            discharge_kwh[h] = temp_scaled_miles[h] * kwh_per_mile
+
+        so we build temp-scaled miles **once**, assign packs from peak daily
+        totals, then multiply by the drawn ``kwh_per_mile`` (no second temp pass).
+
+        When ``hourly_temp_f_by_bldg`` is ``None``, ``power_mult ≡ 1`` (raw miles).
 
         Args:
-            trip_schedules (pl.DataFrame): DataFrame of trip schedules
-            hours_base (pl.DataFrame): hourly calendar for the instance date range
-            kwh_per_mile_by_vehicle: ``bldg_id``, ``vehicle_id``, ``kwh_per_mile`` frame
-                (from ResStock / Autonomie attributes)
-            hourly_temp_f_by_bldg: Optional per-building outdoor dry-bulb °F by ``hour_index``
+            trip_schedules: Trip legs with miles and trip interval columns
+            hours_base: Calendar from ``build_hours_base`` (``date``, ``hour``, ``hour_index``)
+            hourly_temp_f_by_bldg: Optional ``bldg_id``, ``hour_index``, ``temp_f`` (°F)
 
         Returns:
-            pl.DataFrame: hourly discharge kWh for each trip
+            ``bldg_id``, ``vehicle_id``, ``hour_index``, ``travel_date``,
+            ``temp_scaled_miles`` (one row per vehicle-hour that has driving)
         """
+        # No trips → empty typed frame for downstream joins / peak-duty aggregation.
         if trip_schedules.is_empty():
-            # no trips -> no driving discharge; return typed empty frame for downstream joins
+            return pl.DataFrame(
+                schema={
+                    "bldg_id": trip_schedules.schema.get("bldg_id", pl.Int64),
+                    "vehicle_id": pl.Int64,
+                    "hour_index": pl.UInt32,
+                    "travel_date": pl.Datetime(time_unit="us"),
+                    "temp_scaled_miles": pl.Float64,
+                }
+            )
+
+        required_trip = {
+            "bldg_id",
+            "vehicle_id",
+            "travel_date",
+            "trip_miles_driven",
+            "trip_departure_date",
+            "trip_departure_hour",
+            "trip_arrival_date",
+            "trip_arrival_hour",
+        }
+        missing_trip = required_trip - set(trip_schedules.columns)
+        if missing_trip:
+            raise ValueError(f"trip_schedules missing columns: {sorted(missing_trip)}")
+
+        hours_required = {"date", "hour", "hour_index"}
+        hours_missing = hours_required - set(hours_base.columns)
+        if hours_missing:
+            raise ValueError(f"hours_base missing columns: {sorted(hours_missing)}")
+
+        # Tag each leg so mile shares stay tied to one trip_miles total after explode.
+        trips = trip_schedules.with_row_index("_trip_idx")
+
+        # Expand drive intervals → hour rows; split miles evenly across those hours.
+        away_hour_miles = (
+            expand_trips_to_away_hour_rows(trips, prefix="trip")
+            .with_columns(
+                (pl.col("trip_miles_driven") / pl.col("hour").count().over("_trip_idx")).alias(
+                    "miles_share"
+                )
+            )
+            .join(
+                hours_base.select("date", "hour", "hour_index"),
+                on=["date", "hour"],
+                how="inner",
+            )
+        )
+
+        # Optional outdoor-temp scale (same curve as SOC discharge).
+        if hourly_temp_f_by_bldg is not None:
+            temp_required = {"bldg_id", "hour_index", "temp_f"}
+            temp_missing = temp_required - set(hourly_temp_f_by_bldg.columns)
+            if temp_missing:
+                raise ValueError(f"hourly_temp_f_by_bldg missing columns: {sorted(temp_missing)}")
+            away_hour_miles = away_hour_miles.join(
+                hourly_temp_f_by_bldg.select("bldg_id", "hour_index", "temp_f"),
+                on=["bldg_id", "hour_index"],
+                how="left",
+            )
+            if away_hour_miles["temp_f"].null_count() > 0:
+                missing_temp = (
+                    away_hour_miles.filter(pl.col("temp_f").is_null())
+                    .select("bldg_id", "hour_index")
+                    .unique()
+                    .head(5)
+                    .to_dicts()
+                )
+                raise ValueError(
+                    "hourly_temp_f_by_bldg missing outdoor temp for trip hour(s); "
+                    f"examples: {missing_temp}"
+                )
+            temps = away_hour_miles["temp_f"].to_numpy()
+            power_mult = np.asarray(resstock_temp_power_mult(temps), dtype=np.float64)
+            away_hour_miles = away_hour_miles.with_columns(
+                pl.Series("power_mult", power_mult),
+            ).with_columns(
+                (pl.col("miles_share") * pl.col("power_mult")).alias("temp_scaled_miles_share")
+            )
+        else:
+            # No weather → duty miles equal raw mile shares.
+            away_hour_miles = away_hour_miles.with_columns(
+                pl.col("miles_share").alias("temp_scaled_miles_share")
+            )
+
+        # Collapse overlapping legs on the same vehicle-hour and travel day.
+        return (
+            away_hour_miles.group_by("bldg_id", "vehicle_id", "hour_index", "travel_date")
+            .agg(pl.col("temp_scaled_miles_share").sum().alias("temp_scaled_miles"))
+        )
+
+    @staticmethod
+    def max_daily_miles_from_hourly_temp_scaled(
+        hourly_temp_scaled_miles: pl.DataFrame,
+    ) -> pl.DataFrame:
+        """Peak daily temp-scaled miles from a precomputed hourly duty frame.
+
+        Args:
+            hourly_temp_scaled_miles: Output of ``build_hourly_temp_scaled_miles``
+
+        Returns:
+            One row per vehicle with ``bldg_id``, ``vehicle_id``, ``max_daily_miles``
+        """
+        if hourly_temp_scaled_miles.is_empty():
+            return pl.DataFrame(
+                schema={
+                    "bldg_id": hourly_temp_scaled_miles.schema.get("bldg_id", pl.Int64),
+                    "vehicle_id": pl.Int64,
+                    "max_daily_miles": pl.Float64,
+                }
+            )
+
+        required = {"bldg_id", "vehicle_id", "travel_date", "temp_scaled_miles"}
+        missing = required - set(hourly_temp_scaled_miles.columns)
+        if missing:
+            raise ValueError(f"hourly_temp_scaled_miles missing columns: {sorted(missing)}")
+
+        # Sum within each NHTS travel day, then take the peak day per vehicle.
+        return (
+            hourly_temp_scaled_miles.group_by("bldg_id", "vehicle_id", "travel_date")
+            .agg(pl.col("temp_scaled_miles").sum().alias("daily_temp_scaled_miles"))
+            .group_by("bldg_id", "vehicle_id")
+            .agg(pl.col("daily_temp_scaled_miles").max().alias("max_daily_miles"))
+        )
+
+    @staticmethod
+    def max_daily_temp_scaled_miles_from_trip_schedules(
+        trip_schedules: pl.DataFrame,
+        *,
+        hours_base: pl.DataFrame,
+        hourly_temp_f_by_bldg: pl.DataFrame | None = None,
+    ) -> pl.DataFrame:
+        """Convenience: build hourly duty miles, then take peak daily totals.
+
+        Prefer calling ``build_hourly_temp_scaled_miles`` once and reusing that
+        frame for both sizing and discharge when running the full pipeline.
+        """
+        hourly = ChargingSimulator.build_hourly_temp_scaled_miles(
+            trip_schedules,
+            hours_base,
+            hourly_temp_f_by_bldg=hourly_temp_f_by_bldg,
+        )
+        return ChargingSimulator.max_daily_miles_from_hourly_temp_scaled(hourly)
+
+    @staticmethod
+    def _discharge_kwh_from_temp_scaled_miles(
+        hourly_temp_scaled_miles: pl.DataFrame,
+        kwh_per_mile_by_vehicle: pl.DataFrame,
+    ) -> pl.DataFrame:
+        """``discharge_kwh = temp_scaled_miles * kwh_per_mile`` (no temp recomputation).
+
+        Args:
+            hourly_temp_scaled_miles: From ``build_hourly_temp_scaled_miles``
+            kwh_per_mile_by_vehicle: ``bldg_id``, ``vehicle_id``, ``kwh_per_mile``
+
+        Returns:
+            ``bldg_id``, ``vehicle_id``, ``hour_index``, ``discharge_kwh``
+        """
+        if hourly_temp_scaled_miles.is_empty():
             return pl.DataFrame(
                 schema={
                     "bldg_id": pl.Int64,
@@ -159,14 +315,22 @@ class ChargingSimulator:
         if missing:
             raise ValueError(f"kwh_per_mile_by_vehicle missing columns: {sorted(missing)}")
 
-        trips = trip_schedules.join(
+        # Collapse travel_date if still present (same clock hour from one travel day only).
+        hourly = hourly_temp_scaled_miles
+        if "travel_date" in hourly.columns:
+            hourly = (
+                hourly.group_by("bldg_id", "vehicle_id", "hour_index")
+                .agg(pl.col("temp_scaled_miles").sum())
+            )
+
+        joined = hourly.join(
             kwh_per_mile_by_vehicle.select("bldg_id", "vehicle_id", "kwh_per_mile"),
             on=["bldg_id", "vehicle_id"],
             how="left",
         )
-        if trips["kwh_per_mile"].null_count() > 0:
+        if joined["kwh_per_mile"].null_count() > 0:
             missing_keys = (
-                trips.filter(pl.col("kwh_per_mile").is_null())
+                joined.filter(pl.col("kwh_per_mile").is_null())
                 .select("bldg_id", "vehicle_id")
                 .unique()
                 .to_dicts()
@@ -176,65 +340,48 @@ class ChargingSimulator:
                 + ", ".join(repr((row["bldg_id"], row["vehicle_id"])) for row in missing_keys)
             )
 
-        # Baseline trip energy at Autonomie design-condition efficiency (before temp scale).
-        # Tag each trip so overnight hour rows stay tied to one trip_kwh total.
-        trips = trips.with_row_index("_trip_idx").with_columns(
-            (pl.col("trip_miles_driven") * pl.col("kwh_per_mile")).alias("trip_kwh")
+        return joined.select(
+            "bldg_id",
+            "vehicle_id",
+            "hour_index",
+            (pl.col("temp_scaled_miles") * pl.col("kwh_per_mile")).alias("discharge_kwh"),
         )
 
-        away_hour_discharge = (
-            expand_trips_to_away_hour_rows(trips, prefix="trip")
-            .with_columns(
-                # divide total trip energy evenly across driving hours for that leg
-                (pl.col("trip_kwh") / pl.col("hour").count().over("_trip_idx")).alias(
-                    "discharge_kwh_per_away_hour"
-                )
-            )
-            .join(
-                hours_base.select("date", "hour", "hour_index"),
-                on=["date", "hour"],
-                how="inner",
-            )
-        )
+    @staticmethod
+    def _build_hourly_discharge_kwh(
+        trip_schedules: pl.DataFrame,
+        hours_base: pl.DataFrame,
+        *,
+        kwh_per_mile_by_vehicle: pl.DataFrame,
+        hourly_temp_f_by_bldg: pl.DataFrame | None = None,
+        hourly_temp_scaled_miles: pl.DataFrame | None = None,
+    ) -> pl.DataFrame:
+        """Map trips to hourly discharge kWh for the instance date range.
 
-        # apply temperature scaling to discharge
-        if hourly_temp_f_by_bldg is not None:
-            temp_required = {"bldg_id", "hour_index", "temp_f"}
-            temp_missing = temp_required - set(hourly_temp_f_by_bldg.columns)
-            if temp_missing:
-                raise ValueError(f"hourly_temp_f_by_bldg missing columns: {sorted(temp_missing)}")
-            away_hour_discharge = away_hour_discharge.join(
-                hourly_temp_f_by_bldg.select("bldg_id", "hour_index", "temp_f"),
-                on=["bldg_id", "hour_index"],
-                how="left",
-            )
-            if away_hour_discharge["temp_f"].null_count() > 0:
-                missing_temp = (
-                    away_hour_discharge.filter(pl.col("temp_f").is_null())
-                    .select("bldg_id", "hour_index")
-                    .unique()
-                    .head(5)
-                    .to_dicts()
-                )
-                raise ValueError(
-                    "hourly_temp_f_by_bldg missing outdoor temp for discharge hour(s); "
-                    f"examples: {missing_temp}"
-                )
-            # compute power multiplier for each hour based on temperature and apply to discharge
-            temps = away_hour_discharge["temp_f"].to_numpy()
-            power_mult = np.asarray(resstock_temp_power_mult(temps), dtype=np.float64) 
-            away_hour_discharge = away_hour_discharge.with_columns(
-                pl.Series("power_mult", power_mult),
-            ).with_columns(
-                (pl.col("discharge_kwh_per_away_hour") * pl.col("power_mult")).alias(
-                    "discharge_kwh_per_away_hour"
-                )
-            )
+        Prefers a precomputed ``hourly_temp_scaled_miles`` frame (from battery
+        sizing) so outdoor-temp scaling is not repeated. Otherwise builds that
+        duty array from ``trip_schedules`` then multiplies by ``kwh_per_mile``.
 
-        return (
-            away_hour_discharge.group_by("bldg_id", "vehicle_id", "hour_index")
-            # overlapping trips contributing to the same hour add their discharge shares together
-            .agg(pl.col("discharge_kwh_per_away_hour").sum().alias("discharge_kwh"))
+        Args:
+            trip_schedules: Trip schedules (ignored when ``hourly_temp_scaled_miles`` set)
+            hours_base: Hourly calendar
+            kwh_per_mile_by_vehicle: Autonomie efficiency per vehicle
+            hourly_temp_f_by_bldg: Outdoor temps when building duty miles from scratch
+            hourly_temp_scaled_miles: Optional reusable output of ``build_hourly_temp_scaled_miles``
+
+        Returns:
+            ``bldg_id``, ``vehicle_id``, ``hour_index``, ``discharge_kwh``
+        """
+        # Reuse duty miles from sizing when available; otherwise build them here.
+        if hourly_temp_scaled_miles is None:
+            hourly_temp_scaled_miles = ChargingSimulator.build_hourly_temp_scaled_miles(
+                trip_schedules,
+                hours_base,
+                hourly_temp_f_by_bldg=hourly_temp_f_by_bldg,
+            )
+        return ChargingSimulator._discharge_kwh_from_temp_scaled_miles(
+            hourly_temp_scaled_miles,
+            kwh_per_mile_by_vehicle,
         )
 
     @staticmethod
@@ -296,6 +443,7 @@ class ChargingSimulator:
         soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
         allow_emergency_peak_charging: bool = False,
         hourly_temp_f_by_bldg: pl.DataFrame | None = None,
+        hourly_temp_scaled_miles: pl.DataFrame | None = None,
     ) -> pl.DataFrame:
         """
         Map each vehicle to an hourly SOC, charging, and discharge schedule for the instance date range.
@@ -342,8 +490,9 @@ class ChargingSimulator:
             allow_emergency_peak_charging: For ``off_peak_immediate`` only; allow on-peak home
                 charging when remaining off-peak supply cannot cover the next trip
             hourly_temp_f_by_bldg: Optional ``bldg_id``, ``hour_index``, ``temp_f`` (°F) used to
-                scale discharge kWh via ResStock ``resstock_temp_power_mult``; ``None`` leaves
-                Autonomie ``kwh_per_mile`` unscaled
+                scale discharge when ``hourly_temp_scaled_miles`` is not provided
+            hourly_temp_scaled_miles: Optional reusable duty frame from
+                ``build_hourly_temp_scaled_miles`` (skips a second expand/temp pass)
 
         Returns:
             Long-form DataFrame with one row per vehicle-hour, including presence and SOC columns.
@@ -400,12 +549,14 @@ class ChargingSimulator:
             "kwh_per_mile": [vals[1] for vals in attrs_lookup.values()],
         })
 
-        # Build hourly discharge kWh from per-vehicle Autonomie efficiency (+ optional temp scale).
+        # Discharge = precomputed temp-scaled miles × kwh_per_mile when sizing already
+        # built the duty frame; otherwise expand trips (+ optional temp) here.
         discharge_by_hour = self._build_hourly_discharge_kwh(
             trip_schedules,
             hours_base,
             kwh_per_mile_by_vehicle=kwh_per_mile_by_vehicle,
             hourly_temp_f_by_bldg=hourly_temp_f_by_bldg,
+            hourly_temp_scaled_miles=hourly_temp_scaled_miles,
         )
 
         discharge_lookup: dict[tuple[str | int, int], dict[int, float]] = {}

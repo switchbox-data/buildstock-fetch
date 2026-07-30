@@ -1478,6 +1478,58 @@ def test_max_daily_miles_from_trip_schedules():
     ]
 
 
+def test_max_daily_temp_scaled_miles_matches_unscaled_without_temps():
+    """Without outdoor temps, temp-scaled duty miles equal raw peak daily miles."""
+    from utils.EVs.ChargingSimulator import ChargingSimulator
+
+    trips = pl.DataFrame({
+        "bldg_id": ["a", "a"],
+        "vehicle_id": [1, 1],
+        "travel_date": [datetime(2022, 1, 1, 4, 0, 0), datetime(2022, 1, 2, 4, 0, 0)],
+        "trip_departure_date": [datetime(2022, 1, 1), datetime(2022, 1, 2)],
+        "trip_departure_hour": [9, 10],
+        "trip_arrival_date": [datetime(2022, 1, 1), datetime(2022, 1, 2)],
+        "trip_arrival_hour": [10, 12],
+        "trip_miles_driven": [20.0, 30.0],
+    })
+    hours_base = build_hours_base(datetime(2022, 1, 1, 4, 0, 0), datetime(2022, 1, 3, 3, 0, 0))
+    scaled = ChargingSimulator.max_daily_temp_scaled_miles_from_trip_schedules(
+        trips, hours_base=hours_base, hourly_temp_f_by_bldg=None
+    )
+    raw = TripScheduleGenerator.max_daily_miles_from_trip_schedules(trips)
+    assert scaled.sort("bldg_id").to_dicts() == raw.sort("bldg_id").to_dicts()
+
+
+def test_max_daily_temp_scaled_miles_inflates_on_cold_drive_hours():
+    """Cold outdoor temps raise duty miles via ResStock power_mult(T)."""
+    from utils.EVs.ChargingSimulator import ChargingSimulator
+    from utils.EVs.ev_utils import resstock_temp_power_mult
+
+    trips = pl.DataFrame({
+        "bldg_id": [1],
+        "vehicle_id": [1],
+        "travel_date": [datetime(2022, 1, 1, 4, 0, 0)],
+        "trip_departure_date": [datetime(2022, 1, 1)],
+        "trip_departure_hour": [9],
+        "trip_arrival_date": [datetime(2022, 1, 1)],
+        "trip_arrival_hour": [10],  # single drive hour → full 20 miles on hour 9
+        "trip_miles_driven": [20.0],
+    })
+    hours_base = build_hours_base(datetime(2022, 1, 1, 4, 0, 0), datetime(2022, 1, 2, 3, 0, 0))
+    # Constant 20°F over the window → power_mult ≈ 1.71 on the drive hour.
+    temps = hours_base.select("hour_index").with_columns(
+        pl.lit(1).alias("bldg_id"),
+        pl.lit(20.0).alias("temp_f"),
+    )
+    result = ChargingSimulator.max_daily_temp_scaled_miles_from_trip_schedules(
+        trips, hours_base=hours_base, hourly_temp_f_by_bldg=temps
+    )
+    expected = 20.0 * float(resstock_temp_power_mult(np.array([20.0]))[0])
+    assert result.height == 1
+    assert float(result["max_daily_miles"][0]) == pytest.approx(expected, rel=1e-6)
+    assert float(result["max_daily_miles"][0]) > 20.0
+
+
 @patch("utils.EVs.ev_demand.TripScheduleGenerator.generate")
 @patch("utils.EVs.ev_demand.NHTSProfileSampler.sample")
 @patch("utils.EVs.ev_demand.EVAdoptionSampler.sample")
@@ -1509,11 +1561,12 @@ def test_match_and_generate_trip_schedules(sample_evs, sample_profiles, generate
     generate_schedule.return_value = pl.DataFrame(schedule_data)
 
     # Run the function
-    result, ev_attributes = calculator.match_and_generate_trip_schedules()
+    result, ev_attributes, hourly_duty = calculator.match_and_generate_trip_schedules()
 
     # Verify exact expected output
     assert isinstance(result, pl.DataFrame)
     assert result.shape == (2, 8)  # 2 rows, 8 columns
+    assert {"bldg_id", "vehicle_id", "hour_index", "temp_scaled_miles"} <= set(hourly_duty.columns)
 
     # Check exact values
     assert result["bldg_id"].to_list() == schedule_data["bldg_id"]
