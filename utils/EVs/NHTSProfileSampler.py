@@ -45,10 +45,10 @@ __all__ = [
 
 
 def summarize_nhts_match_catalog(catalog: pl.DataFrame) -> pl.DataFrame:
-    """Summarize NHTS household/vehicle matching gaps from a ``sample(..., return_catalog=True)`` catalog.
+    """Summarize NHTS household/vehicle matching from a ``sample(..., return_catalog=True)`` catalog.
 
-    A number of NHTS vehicle profiles are missing a weekday or weekend trip profile.
-    This function summarizes the number of missing profiles and vehicle slots with any gap.
+    Empty weekday/weekend templates are first-class matches (owned but not driven
+    that survey day), so they are reported separately from true match failures.
 
     Args:
         catalog (pl.DataFrame): Catalog of vehicle profiles and NHTS matches
@@ -62,13 +62,10 @@ def summarize_nhts_match_catalog(catalog: pl.DataFrame) -> pl.DataFrame:
     vehicle_slots = catalog.height
     n_missing_nhts = catalog.filter(~pl.col("nhts_vehicle_matched")).height
     matched = catalog.filter(pl.col("nhts_vehicle_matched"))
-    n_missing_weekday = matched.filter(~pl.col("has_weekday_trips")).height
-    n_missing_weekend = matched.filter(~pl.col("has_weekend_trips")).height
-    n_missing_both = matched.filter(~pl.col("has_weekday_trips") & ~pl.col("has_weekend_trips")).height
-
-    vehicle_slots_with_any_gap = catalog.filter(
-        ~pl.col("nhts_vehicle_matched") | ~pl.col("has_weekday_trips") | ~pl.col("has_weekend_trips")
-    ).height
+    # Intentional empty day templates (idle inventory vehicles), not match failures.
+    n_empty_weekday = matched.filter(~pl.col("has_weekday_trips")).height
+    n_empty_weekend = matched.filter(~pl.col("has_weekend_trips")).height
+    n_empty_both = matched.filter(~pl.col("has_weekday_trips") & ~pl.col("has_weekend_trips")).height
 
     def share(count: int) -> float:
         return count / vehicle_slots if vehicle_slots else 0.0
@@ -77,26 +74,23 @@ def summarize_nhts_match_catalog(catalog: pl.DataFrame) -> pl.DataFrame:
         "metric": [
             "vehicle_slots",
             "missing_nhts_vehicle_match",
-            "missing_weekday_trip_profile",
-            "missing_weekend_trip_profile",
-            "missing_both_trip_profiles",
-            "vehicle_slots_with_any_gap",
+            "empty_weekday_trip_profile",
+            "empty_weekend_trip_profile",
+            "empty_both_trip_profiles",
         ],
         "count": [
             vehicle_slots,
             n_missing_nhts,
-            n_missing_weekday,
-            n_missing_weekend,
-            n_missing_both,
-            vehicle_slots_with_any_gap,
+            n_empty_weekday,
+            n_empty_weekend,
+            n_empty_both,
         ],
         "share_of_vehicle_slots": [
             1.0,
             share(n_missing_nhts),
-            share(n_missing_weekday),
-            share(n_missing_weekend),
-            share(n_missing_both),
-            share(vehicle_slots_with_any_gap),
+            share(n_empty_weekday),
+            share(n_empty_weekend),
+            share(n_empty_both),
         ],
     })
 
@@ -109,96 +103,10 @@ class NHTSProfileSampler:
     max_vehicles: int = 2
     match_on_vehicles: bool = False
     random_state: int = 42
-    # Keep NHTS vehicles whose peak survey-day miles fall in [low, high] percentiles.
-    # Defaults 0–100 keep the full pool; tighten via YAML (e.g. 10–90) to drop outliers.
-    nhts_daily_miles_percentile_low: float = 0.0
-    nhts_daily_miles_percentile_high: float = 100.0
     _cache: dict[str, dict] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         np.random.seed(self.random_state)
-        if self.nhts_df is not None:
-            self.nhts_df = self.filter_by_daily_miles_percentile(
-                self.nhts_df,
-                low=self.nhts_daily_miles_percentile_low,
-                high=self.nhts_daily_miles_percentile_high,
-            )
-
-    @staticmethod
-    def filter_by_daily_miles_percentile(
-        nhts_df: pl.DataFrame,
-        *,
-        low: float = 0.0,
-        high: float = 100.0,
-    ) -> pl.DataFrame:
-        """Keep NHTS vehicles whose max survey-day miles fall in ``[low, high]`` percentiles.
-
-        For each ``hh_vehicle_id``, daily miles are summed within each day type
-        (``weekday``), then the max across day types is used as the vehicle's
-        representative daily miles. Vehicles outside the percentile band are dropped
-        from the match pool.
-
-        Args:
-            nhts_df: NHTS trip rows with ``hh_vehicle_id``, ``weekday``, ``miles_driven``
-            low: Inclusive lower percentile (0–100). ``0`` disables the lower cut.
-            high: Inclusive upper percentile (0–100). ``100`` disables the upper cut.
-
-        Returns:
-            Filtered NHTS DataFrame (unchanged when ``low <= 0`` and ``high >= 100``).
-        """
-        if low <= 0.0 and high >= 100.0:
-            return nhts_df
-        if not (0.0 <= low <= high <= 100.0):
-            raise ValueError(
-                f"Invalid percentile band [{low}, {high}]; require 0 <= low <= high <= 100"
-            )
-        required = {"hh_vehicle_id", "weekday", "miles_driven"}
-        missing = required - set(nhts_df.columns)
-        if missing:
-            raise ValueError(f"nhts_df missing columns for percentile filter: {sorted(missing)}")
-        if nhts_df.is_empty():
-            return nhts_df
-
-        vehicle_miles = (
-            nhts_df.group_by(["hh_vehicle_id", "weekday"])
-            .agg(pl.col("miles_driven").sum().alias("daily_miles"))
-            .group_by("hh_vehicle_id")
-            .agg(pl.col("daily_miles").max().alias("max_daily_miles"))
-        )
-        lo = NHTSProfileSampler._scalar_quantile(vehicle_miles["max_daily_miles"], low / 100.0)
-        hi = NHTSProfileSampler._scalar_quantile(vehicle_miles["max_daily_miles"], high / 100.0)
-        keep_ids = vehicle_miles.filter(
-            (pl.col("max_daily_miles") >= lo) & (pl.col("max_daily_miles") <= hi)
-        )["hh_vehicle_id"]
-        filtered = nhts_df.filter(pl.col("hh_vehicle_id").is_in(keep_ids.to_list()))
-        logging.info(
-            "NHTS daily-miles percentile filter [%.1f, %.1f]: "
-            "kept %s/%s vehicles (miles band [%.1f, %.1f]), %s/%s trip rows",
-            low,
-            high,
-            keep_ids.len(),
-            vehicle_miles.height,
-            lo,
-            hi,
-            filtered.height,
-            nhts_df.height,
-        )
-        if filtered.is_empty():
-            raise ValueError(
-                f"NHTS percentile filter [{low}, {high}] removed all vehicles "
-                f"(miles band would be [{lo:.1f}, {hi:.1f}])"
-            )
-        return filtered
-
-    @staticmethod
-    def _scalar_quantile(series: pl.Series, q: float) -> float:
-        """Return a single quantile as float (Series.quantile is typed as scalar|list|None)."""
-        value = series.quantile(q)
-        if value is None:
-            raise ValueError(f"quantile({q}) returned None for empty or all-null series")
-        if isinstance(value, list):
-            raise TypeError(f"quantile({q}) returned a list; expected a scalar")
-        return float(value)
 
     @staticmethod
     def _log_progress(current: int, total: int, description: str, progress_interval: int = 10000) -> None:
@@ -220,14 +128,19 @@ class NHTSProfileSampler:
         """
         Pre-group NHTS data by household demographics for fast matching lookups.
 
-        Weekday and weekend caches only include vehicles with at least one logged trip
-        on that day type (weekday=2 Mon–Fri, weekend=1 Sat/Sun).
+        Weekday / weekend caches include every inventory vehicle whose household
+        ``TRAVDAY`` falls on that day type — driven trip days and empty (idle)
+        vehicle-days alike.
+
+        Cache contents:
+        - ``houses``: demographic tier → sorted unique ``house_id`` lists
+        - ``vehicles_by_house``: ``house_id`` → sorted ``hh_vehicle_id`` lists
 
         Args:
-            weekday (bool): If True, prepare weekday cache; otherwise prepare weekend cache
+            weekday (bool): If True, prepare weekday cache; otherwise weekend
 
         Returns:
-            Dictionary mapping key tuples to sorted hh_vehicle_id lists for deterministic random sampling
+            Dict with ``houses`` and ``vehicles_by_house`` maps
 
         Raises:
             NHTSDataError: If the NHTS data is not loaded
@@ -244,10 +157,8 @@ class NHTSProfileSampler:
 
         logging.info("Preparing NHTS %s matching cache...", cache_key)
 
-        # Cap household vehicle count to max_vehicles (default 2).
-        # NHTS stores HHVEHCNT on every trip row; some households have 3+ vehicles.
-        # Our pipeline also caps PUMS training data and ResStock predictions at max_vehicles,
-        # so a building with 2 vehicles should match NHTS households bucketed as 2, not 3+.
+        # Cap household vehicle count to max_vehicles (default 2) so PUMS / NHTS
+        # vehicle-count tiers align when match_on_vehicles is enabled.
         nhts_df = self.nhts_df.with_columns(
             pl.when(pl.col("vehicles") > self.max_vehicles)
             .then(self.max_vehicles)
@@ -255,32 +166,40 @@ class NHTSProfileSampler:
             .alias("vehicles")
         )
 
-        # Keep only trips taken on the requested day type (weekday=2 Mon–Fri, weekend=1 Sat/Sun).
-        # This ensures match only returns hh_vehicle_ids that actually drove
-        # on that day type, so sampled profiles have real trip data to copy.
+        # Fixtures without house_id: treat each vehicle as its own household.
+        if "house_id" not in nhts_df.columns:
+            nhts_df = nhts_df.with_columns(pl.col("hh_vehicle_id").alias("house_id"))
+
+        # Keep rows for the requested day type (weekday=2 Mon–Fri, weekend=1 Sat/Sun).
         day_flag = 2 if weekday else 1
         day_df = nhts_df.filter(pl.col("weekday") == day_flag)
 
         self._cache[cache_key] = self._build_matching_cache(day_df)
 
-        logging.info("NHTS %s cache prepared successfully", cache_key)
+        logging.info(
+            "NHTS %s cache prepared: %s households, %s vehicles",
+            cache_key,
+            len(self._cache[cache_key]["vehicles_by_house"]),
+            sum(len(v) for v in self._cache[cache_key]["vehicles_by_house"].values()),
+        )
         return self._cache[cache_key]
 
     def _build_matching_cache(self, df: pl.DataFrame) -> dict:
         """
-        Build a lookup dict for match().
+        Build household-level lookup structures for ``match()``.
 
-        Each key is a tagged tuple ``(tier_name, *column_values)`` mapping to a sorted
-        list of ``hh_vehicle_id``s. The tier name is required because several tiers share
-        the same arity of ints; without a tag, e.g. ``(1, 6, 2)`` could mean either
-        ``(urban, income, occupants)`` or ``(income, occupants, vehicles)``.
+        Matching draws **households** uniformly within a demographic tier, then
+        ``match()`` samples vehicles inside those households. That way multi-car
+        NHTS homes are not overweighted relative to one-car homes.
+
+        Each house-index key is a tagged tuple ``(tier_name, *column_values)``.
 
         Args:
-            df (pl.DataFrame): NHTS rows with ``urban``, ``income_bucket``, ``occupants``,
-                ``vehicles``, and ``hh_vehicle_id``
+            df: NHTS rows for one day type with demographics, ``house_id``,
+                ``hh_vehicle_id``
 
         Returns:
-            Dictionary mapping key tuples to sorted hh_vehicle_id lists
+            Dict with ``houses`` (tier → house_id list) and ``vehicles_by_house``
         """
         if "urban" not in df.columns:
             raise ValueError(
@@ -288,18 +207,39 @@ class NHTSProfileSampler:
                 "Reload with load_nhts_data() or add urban=1/2 to the frame."
             )
 
-        cache: dict[tuple, list[str]] = {}
+        # One row per inventory vehicle (empty markers and trip legs collapse here).
+        vehicle_meta = df.select(
+            "house_id",
+            "hh_vehicle_id",
+            "urban",
+            "income_bucket",
+            "occupants",
+            "vehicles",
+        ).unique()
+
+        vehicles_by_house: dict[str, list[str]] = {}
+        for row in (
+            vehicle_meta.group_by("house_id")
+            .agg(pl.col("hh_vehicle_id").unique())
+            .iter_rows(named=True)
+        ):
+            vehicles_by_house[str(row["house_id"])] = sorted(str(v) for v in row["hh_vehicle_id"])
+
+        # Household demographics: one row per house (all vehicles share HH attrs).
+        house_meta = vehicle_meta.select(
+            "house_id", "urban", "income_bucket", "occupants", "vehicles"
+        ).unique(subset=["house_id"])
+
+        houses: dict[tuple, list[str]] = {}
 
         def _store(tier: str, group_cols: list[str]) -> None:
-            """Index unique vehicle ids under ``(tier, *group_col values)``."""
-            groups = df.group_by(group_cols).agg(pl.col("hh_vehicle_id").unique())
+            """Index unique house ids under ``(tier, *group_col values)``."""
+            groups = house_meta.group_by(group_cols).agg(pl.col("house_id").unique())
             for row in groups.iter_rows(named=True):
                 key = (tier, *(row[c] for c in group_cols))
-                cache[key] = sorted(row["hh_vehicle_id"])
+                houses[key] = sorted(str(h) for h in row["house_id"])
 
-        # --- Urban-aware and unconditional indexes (match() chooses cascade order) ---
-        # Expects coarse bins from load_nhts_data / load_metadata: income 1–3, occupants 1/2/3+.
-        # urban=1/2 from NHTS URBRUR; ResStock maps metro status onto the same codes.
+        # Expects coarse bins from load_nhts_data / load_metadata.
         _store("urban_income_occupants_vehicles", ["urban", "income_bucket", "occupants", "vehicles"])
         _store("urban_income_occupants", ["urban", "income_bucket", "occupants"])
         _store("urban_occupants", ["urban", "occupants"])
@@ -308,7 +248,7 @@ class NHTSProfileSampler:
         _store("income_occupants", ["income_bucket", "occupants"])
         _store("income", ["income_bucket"])
 
-        return cache
+        return {"houses": houses, "vehicles_by_house": vehicles_by_house}
 
     def match(
         self,
@@ -322,53 +262,39 @@ class NHTSProfileSampler:
         match_on_vehicles: bool | None = None,
     ) -> tuple[str, list[str]]:
         """
-        Find the best matching vehicles in NHTS data based on prioritized criteria.
-        Will return num_samples different vehicles, falling back to less exact matches if needed.
+        Match demographically similar NHTS **households**, then sample vehicles.
 
-        Uses pre-built cache to eliminate expensive filtering operations.
-        Only considers NHTS vehicles that have at least one trip on the requested day type.
+        Cascade prefers urban/rural, then occupants over income when dropping
+        dimensions. Vehicle-count tiers are used only when ``match_on_vehicles``
+        is True (``pums_vehicles`` mode). Empty (idle) vehicle-days are eligible.
 
-        Expects ``income_bucket`` (1–3) and ``occupants`` (1 / 2 / 3+) already coarsened by
-        ``load_nhts_data`` / ``load_metadata``. Match order prefers urban/rural, then
-        occupants over income when dropping dimensions. Match-type names are the
-        dimensions held (``exact`` = all four including urban):
-
-        1. ``exact`` — (urban, income, occupants, vehicles) when ``match_on_vehicles``
-        2. ``urban_income_occupants``
-        3. ``urban_occupants`` — drop income; keep urban + HH size
-        4. ``urban_income`` — drop occupants; keep urban + income
-        5. ``income_occupants_vehicles`` — drop urban; when ``match_on_vehicles``
-        6. ``income_occupants``
-        7. ``income``
+        Within a tier, households are shuffled and their vehicles drawn without
+        replacement until ``num_samples`` ``hh_vehicle_id``s are collected — so a
+        two-car NHTS home can supply two EV slots, but one-car homes are not
+        under-weighted relative to three-car homes in the household draw.
 
         Args:
             target_income: Target coarse income bin (1–3)
-            target_urban: Target urbanicity (1=urban, 2=rural), from ResStock metro mapping
+            target_urban: Target urbanicity (1=urban, 2=rural)
             target_occupants: Target household size bin (1 / 2 / 3+)
-            target_vehicles: Target number of vehicles to match (used only when
-                ``match_on_vehicles`` is True)
-            num_samples: Number of different vehicles to sample
-            weekday: If True, match against weekday trip profiles; otherwise weekend
-            match_on_vehicles: If True, try exact vehicle-count tiers before looser ones.
-                Defaults to ``self.match_on_vehicles`` (False for the max-1-EV model).
+            target_vehicles: Target vehicle count (used only when matching on vehicles)
+            num_samples: Number of distinct ``hh_vehicle_id``s to return
+            weekday: Match weekday (True) or weekend (False) day-type pool
+            match_on_vehicles: Override for ``self.match_on_vehicles``
 
         Returns:
-            Tuple of (match_type, list of matched_vehicle_ids)
-
-        Raises:
-            ValueError: If no tier in the cascade contains enough matching profiles
+            Tuple of (match_type, list of matched ``hh_vehicle_id``s)
         """
         if match_on_vehicles is None:
             match_on_vehicles = self.match_on_vehicles
 
         cache = self._prepare_cache(weekday=weekday)
+        houses_index: dict[tuple, list[str]] = cache["houses"]
+        vehicles_by_house: dict[str, list[str]] = cache["vehicles_by_house"]
 
-        # Build the fallback cascade. Each attempt is:
-        #   (match_type returned to caller, cache tier tag, column values for the key)
-        # Vehicle-count tiers are omitted when match_on_vehicles is False (max-1-EV mode).
+        # Fallback cascade: (match_type, cache tier tag, key column values).
         attempts: list[tuple[str, str, tuple[int, ...]]] = []
 
-        # 1–2: keep urban/rural + household structure; optionally require vehicle count.
         if match_on_vehicles:
             attempts.append((
                 "exact",
@@ -380,18 +306,12 @@ class NHTSProfileSampler:
             "urban_income_occupants",
             (target_urban, target_income, target_occupants),
         ))
-
-        # 3: drop income but keep urban + occupants (HH size > income for daily miles).
         attempts.append((
             "urban_occupants",
             "urban_occupants",
             (target_urban, target_occupants),
         ))
-
-        # 4: drop occupants but keep urban + income.
         attempts.append(("urban_income", "urban_income", (target_urban, target_income)))
-
-        # 5–6: drop urbanicity; optionally keep vehicle count with HH structure.
         if match_on_vehicles:
             attempts.append((
                 "income_occupants_vehicles",
@@ -403,18 +323,29 @@ class NHTSProfileSampler:
             "income_occupants",
             (target_income, target_occupants),
         ))
-
-        # 7: income bucket only.
         attempts.append(("income", "income", (target_income,)))
 
         for match_type, tier, parts in attempts:
             key = (tier, *parts)
-            ids = cache.get(key)
-            if ids is not None and len(ids) >= num_samples:
-                return match_type, np.random.choice(ids, size=num_samples, replace=False).tolist()
+            house_ids = houses_index.get(key)
+            if not house_ids:
+                continue
+
+            # How many distinct vehicles sit under these matching households?
+            n_available = sum(len(vehicles_by_house[h]) for h in house_ids)
+            if n_available < num_samples:
+                continue
+
+            # Household-first draw: shuffle houses, then vehicles within each house.
+            picked: list[str] = []
+            for house_id in np.random.permutation(house_ids):
+                for veh_id in np.random.permutation(vehicles_by_house[house_id]):
+                    picked.append(str(veh_id))
+                    if len(picked) == num_samples:
+                        return match_type, picked
 
         day_type = "weekday" if weekday else "weekend"
-        available_incomes = sorted(key[1] for key in cache if key[0] == "income")
+        available_incomes = sorted(key[1] for key in houses_index if key[0] == "income")
         raise ValueError(
             f"No NHTS {day_type} match with at least {num_samples} profile(s) for "
             f"income={target_income}, urban={target_urban}, occupants={target_occupants}, "
@@ -431,28 +362,24 @@ class NHTSProfileSampler:
         """
         Extract trip + tour profile from NHTS for a vehicle id and day type.
 
-        When ``why_from`` / ``why_to`` are present, legs are chained into home-based
-        tours at **minute** resolution first (``build_tours_from_legs``), then snapped
-        to clock hours. Otherwise each leg is treated as its own tour (legacy /
-        unit-test fixtures; already hourly).
+        Empty-day markers (``is_empty_day=True`` or no real trip legs) yield an
+        empty ``TripProfile`` — the vehicle stays home all day with 0 miles.
 
-        Args:
-            nhts_df (pl.DataFrame): NHTS trip data DataFrame
-            matched_vehicle_id (str): Vehicle id to match
-            weekday (bool): If True, extract weekday trip profile; otherwise extract weekend trip profile
-
-        Returns:
-            TripProfile for the matched vehicle and day type
+        When purpose columns are present, legs are chained into home-based tours
+        at minute resolution then snapped to clock hours. Otherwise each leg is
+        its own tour (legacy fixtures).
         """
-        # One NHTS travel day per household: all driver legs for this vehicle + day type.
         day_flag = 2 if weekday else 1
         trip_data = nhts_df.filter(
             (pl.col("hh_vehicle_id") == matched_vehicle_id) & (pl.col("weekday") == day_flag)
         )
+        # Drop empty-day markers; only real driver legs build a non-empty profile.
+        if "is_empty_day" in trip_data.columns:
+            trip_data = trip_data.filter(~pl.col("is_empty_day").fill_null(False))
+        trip_data = trip_data.filter(pl.col("start_time").is_not_null())
         if trip_data.is_empty():
             return TripProfile()
 
-        # Chronological order: prefer SEQ_TRIPID when loaded, else start_time.
         if "seq_trip_id" in trip_data.columns:
             trip_data = trip_data.sort(["start_time", "seq_trip_id"])
         else:
@@ -463,12 +390,16 @@ class NHTSProfileSampler:
         trip_miles_driven = [float(m) for m in trip_data["miles_driven"].to_list()]
         weights = [float(w) for w in trip_data["trip_weight"].to_list()]
 
-        # Purpose columns enable true tour chaining; fixtures without them stay 1:1.
-        has_purposes = "why_from" in trip_data.columns and "why_to" in trip_data.columns
+        # Purpose columns enable tour chaining; require non-null codes on every leg.
+        has_purposes = (
+            "why_from" in trip_data.columns
+            and "why_to" in trip_data.columns
+            and trip_data["why_from"].null_count() == 0
+            and trip_data["why_to"].null_count() == 0
+        )
         if has_purposes:
             why_from = [int(v) for v in trip_data["why_from"].to_list()]
             why_to = [int(v) for v in trip_data["why_to"].to_list()]
-            # Returns a TripProfile: minute-level tours, then hourly snap inside the builder.
             return build_tours_from_legs(
                 start_times=start_times,
                 end_times=end_times,
@@ -478,7 +409,6 @@ class NHTSProfileSampler:
                 why_to=why_to,
             )
 
-        # Fixtures already use clock hours as start_time/end_time stand-ins.
         return trips_as_singleton_tours(
             trip_departure_hours=[nhts_departure_hour(t) for t in start_times],
             trip_arrival_hours=[nhts_arrival_hour(t) for t in end_times],
@@ -515,19 +445,21 @@ class NHTSProfileSampler:
         match_on_vehicles: bool | None = None,
     ) -> dict[tuple[str, int], VehicleProfile] | tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]:
         """
-        For each household and vehicle, select separate weekday and weekend trip profiles from NHTS.
+        For each ResStock EV slot, match NHTS weekday and weekend vehicle-day templates.
 
-        Uses pre-built vehicle trips cache to eliminate expensive per-vehicle filtering.
+        Matching is household-first (see ``match``); each draw may return an empty
+        ``TripProfile`` when the chosen inventory vehicle was idle that survey day.
+        Weekday and weekend draws are independent because each NHTS household has
+        a single ``TRAVDAY`` (one day type only).
 
         Args:
-            bldg_veh_df: DataFrame with household and vehicle info, including a ``vehicles`` column.
-            nhts_df: NHTS trip data DataFrame with trip weights; defaults to ``self.nhts_df``
-            return_catalog: If True, also return a per-vehicle-slot match diagnostics DataFrame.
+            bldg_veh_df: Building frame with ``vehicles`` (EV slot count) + demographics
+            nhts_df: NHTS pool; defaults to ``self.nhts_df``
+            return_catalog: If True, also return per-slot match diagnostics
+            match_on_vehicles: Override for vehicle-count tiers
 
         Returns:
-            Dict mapping (bldg_id, vehicle_id) to sampled trip profile parameters.
-            When return_catalog=True, returns (profiles, catalog) where catalog has one row
-            per predicted vehicle slot with NHTS match and weekday/weekend trip availability.
+            Dict ``(bldg_id, vehicle_id) → VehicleProfile``, optionally with catalog
         """
         df = bldg_veh_df
         if df is None:
@@ -556,7 +488,6 @@ class NHTSProfileSampler:
                     "without lookup join misses before sampling profiles."
                 )
             if num_vehicles == 0:
-                # Log progress for zero-vehicle buildings too
                 self._log_progress(processed_buildings, total_buildings, "Building progress")
                 continue
 
@@ -566,8 +497,7 @@ class NHTSProfileSampler:
                     "derive from ResStock metro via load_metadata() / assign_urban_from_metro()."
                 )
 
-            # Match weekday and weekend profiles independently from NHTS vehicles
-            # that have at least one logged trip on each day type.
+            # Independent weekday / weekend household→vehicle draws (NHTS is one TRAVDAY).
             weekday_match_type, weekday_vehicle_ids = self.match(
                 target_income=row["income_bucket"],
                 target_urban=int(row["urban"]),
@@ -598,15 +528,14 @@ class NHTSProfileSampler:
                     f"profile(s) but {num_vehicles} required (weekend_match_type={weekend_match_type})."
                 )
 
-            # Create profiles for each vehicle
             for vehicle_id in range(1, num_vehicles + 1):
                 weekday_vehicle_id = weekday_vehicle_ids[vehicle_id - 1]
                 weekend_vehicle_id = weekend_vehicle_ids[vehicle_id - 1]
 
+                # Empty TripProfile is valid: idle inventory vehicle that day.
                 weekday_profile = self._trip_profile_from_nhts(nhts_df, weekday_vehicle_id, weekday=True)
                 weekend_profile = self._trip_profile_from_nhts(nhts_df, weekend_vehicle_id, weekday=False)
 
-                # Create VehicleProfile for this specific vehicle
                 profiles[(bldg_id, vehicle_id)] = VehicleProfile(
                     bldg_id=bldg_id,
                     vehicle_id=vehicle_id,
@@ -624,8 +553,9 @@ class NHTSProfileSampler:
                         "weekday_match_type": weekday_match_type,
                         "weekend_match_type": weekend_match_type,
                         "nhts_vehicle_matched": True,
-                        "nhts_weekday_matched": has_weekday_trips,
-                        "nhts_weekend_matched": has_weekend_trips,
+                        # Matched a vehicle-day template (possibly empty), not "has trips".
+                        "nhts_weekday_matched": True,
+                        "nhts_weekend_matched": True,
                         "matched_hh_vehicle_id": weekday_vehicle_id,
                         "matched_weekday_hh_vehicle_id": weekday_vehicle_id,
                         "matched_weekend_hh_vehicle_id": weekend_vehicle_id,
@@ -635,7 +565,6 @@ class NHTSProfileSampler:
                         "weekend_trip_count": len(weekend_profile.trip_miles_driven),
                     })
 
-            # Log progress for buildings with vehicles
             self._log_progress(processed_buildings, total_buildings, "Building progress")
 
         logging.info(f"Generated {len(profiles)} vehicle profiles from {total_buildings} buildings")

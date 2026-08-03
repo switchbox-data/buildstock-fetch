@@ -6,10 +6,11 @@ Fetches:
 - options_lookup.tsv (EV battery option -> HPXML argument mapping)
 - Electric_Vehicle_Ownership.tsv (conditional P(EV) by FPL / type / tenure / PUMA)
 - Electric_Vehicle_Battery.tsv (national BEV class × range option shares)
+- Electric_Vehicle_Charger.tsv (conditional L1/L2/None by ownership / FPL / type / tenure)
 
-Also writes a small summary CSV of Autonomie 2022 vehicle parameters and the
-constant average speed used in ResStock (from NREL/TP-5500-93766 Table 208 and
-ResStock Technical Reference Guide 2025 §8.9.2).
+    Also writes a small summary CSV of Autonomie 2022 vehicle parameters and the
+    constant average speed used in ResStock (from NREL/TP-5500-93766 Table 208 and
+    ResStock Technical Reference Guide 2025 §8.9.2).
 """
 
 from __future__ import annotations
@@ -27,6 +28,11 @@ EV_OWNERSHIP_URL = f"{RESSTOCK_BASE}/project_national/housing_characteristics/El
 # National BEV stock mix used by EVBatteryAssigner.
 EV_BATTERY_URL = (
     f"{RESSTOCK_BASE}/project_national/housing_characteristics/Electric%20Vehicle%20Battery.tsv"
+)
+# Conditional L1/L2 charger shares used by EVChargerAssigner (RECS 2020 EVCHRGTYPE).
+# Same file lives under NatLabRockies/resstock; NREL/resstock develop tracks it.
+EV_CHARGER_URL = (
+    f"{RESSTOCK_BASE}/project_national/housing_characteristics/Electric%20Vehicle%20Charger.tsv"
 )
 # Dependency tables ResStock uses to assign FPL, tenure, and building type to each unit.
 # Not required for predict_num_EVs() (which only needs Electric_Vehicle_Ownership.tsv),
@@ -105,6 +111,8 @@ def download_resstock_ev_reference(output_dir: Path) -> dict[str, str]:
     ev_ownership_text = _fetch_text(EV_OWNERSHIP_URL)
     # Housing-characteristic battery option shares (input for EVBatteryAssigner).
     ev_battery_text = _fetch_text(EV_BATTERY_URL)
+    # Housing-characteristic charger L1/L2 shares (input for EVChargerAssigner).
+    ev_charger_text = _fetch_text(EV_CHARGER_URL)
     # Housing-characteristic dependency tables (for reference / EDA)
     fpl_text = _fetch_text(FPL_URL)
     tenure_text = _fetch_text(TENURE_URL)
@@ -113,12 +121,14 @@ def download_resstock_ev_reference(output_dir: Path) -> dict[str, str]:
     lookup_path = output_dir / "resstock_options_lookup.tsv"
     ev_ownership_path = output_dir / "Electric_Vehicle_Ownership.tsv"
     ev_battery_path = output_dir / "Electric_Vehicle_Battery.tsv"
+    ev_charger_path = output_dir / "Electric_Vehicle_Charger.tsv"
     fpl_path = output_dir / "Federal_Poverty_Level.tsv"
     tenure_path = output_dir / "Tenure.tsv"
     building_type_path = output_dir / "Geometry_Building_Type_RECS.tsv"
     lookup_path.write_text(lookup_text)
     ev_ownership_path.write_text(ev_ownership_text)
     ev_battery_path.write_text(ev_battery_text)
+    ev_charger_path.write_text(ev_charger_text)
     fpl_path.write_text(fpl_text)
     tenure_path.write_text(tenure_text)
     building_type_path.write_text(building_type_text)
@@ -152,6 +162,7 @@ def download_resstock_ev_reference(output_dir: Path) -> dict[str, str]:
         "resstock_options_lookup.tsv": str(lookup_path),
         "Electric_Vehicle_Ownership.tsv": str(ev_ownership_path),
         "Electric_Vehicle_Battery.tsv": str(ev_battery_path),
+        "Electric_Vehicle_Charger.tsv": str(ev_charger_path),
         "Federal_Poverty_Level.tsv": str(fpl_path),
         "Tenure.tsv": str(tenure_path),
         "Geometry_Building_Type_RECS.tsv": str(building_type_path),

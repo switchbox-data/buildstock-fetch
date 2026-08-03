@@ -15,7 +15,7 @@ from utils.EVs.NHTSProfileSampler import (
     NHTSProfileSampler,
 )
 from utils.EVs.nhts_tours import trips_as_singleton_tours
-from utils.EVs.TripScheduleGenerator import TripScheduleGenerator
+from utils.EVs.TripScheduleGenerator import TripScheduleGenerator, trip_schedule_schema
 from utils.EVs.charging import (
     build_hours_base,
     build_is_off_peak,
@@ -488,15 +488,96 @@ def test_sample_match_catalog(calculator):
 
     summary = summarize_nhts_match_catalog(catalog)
     assert summary.filter(pl.col("metric") == "vehicle_slots")["count"][0] == 4
-    assert summary.filter(pl.col("metric") == "missing_weekend_trip_profile")["count"][0] == 0
+    # Fixture vehicles all have weekday and weekend trip legs (no intentional empties).
+    assert summary.filter(pl.col("metric") == "empty_weekend_trip_profile")["count"][0] == 0
+    assert summary.filter(pl.col("metric") == "empty_weekday_trip_profile")["count"][0] == 0
 
-    missing_weekend = catalog.filter(pl.col("nhts_vehicle_matched") & ~pl.col("has_weekend_trips"))
-    assert missing_weekend.height == 0
+    empty_weekend = catalog.filter(pl.col("nhts_vehicle_matched") & ~pl.col("has_weekend_trips"))
+    assert empty_weekend.height == 0
 
-    vehicle_slots_with_any_gap = catalog.filter(
-        ~pl.col("nhts_vehicle_matched") | ~pl.col("has_weekday_trips") | ~pl.col("has_weekend_trips")
-    ).height
-    assert vehicle_slots_with_any_gap == 0
+
+def test_match_allows_empty_vehicle_day():
+    """Idle inventory vehicles (is_empty_day) are eligible match templates."""
+    # Only the empty vehicle is in the weekday pool for this demographic.
+    nhts = pl.DataFrame({
+        "house_id": ["h_empty", "h_drive"],
+        "hh_vehicle_id": ["v_empty", "v_drive"],
+        "income_bucket": [1, 2],
+        "occupants": [2, 2],
+        "vehicles": [1, 1],
+        "urban": [1, 1],
+        "weekday": [2, 1],  # empty on weekday survey day; drive on weekend only
+        "is_empty_day": [True, False],
+        "start_time": [None, 1000],
+        "end_time": [None, 1400],
+        "miles_driven": [0.0, 18.0],
+        "trip_weight": [0.0, 1.0],
+    })
+    sampler = NHTSProfileSampler(nhts_df=nhts, random_state=0)
+    match_type, vehicle_ids = sampler.match(
+        target_income=1,
+        target_urban=1,
+        target_occupants=2,
+        target_vehicles=1,
+        num_samples=1,
+        weekday=True,
+    )
+    assert match_type == "urban_income_occupants"
+    assert vehicle_ids == ["v_empty"]
+    profile = NHTSProfileSampler._trip_profile_from_nhts(nhts, "v_empty", weekday=True)
+    assert not profile.has_trips
+    assert profile.trip_miles_driven == []
+
+
+def test_match_household_first_equal_weight():
+    """Multi-car HH is one household draw; both cars can fill num_samples=2."""
+    nhts = pl.DataFrame({
+        # One 2-car household + one 1-car household, same demographics.
+        "house_id": ["h2", "h2", "h1", "h2", "h2", "h1"],
+        "hh_vehicle_id": ["v2a", "v2b", "v1", "v2a", "v2b", "v1"],
+        "income_bucket": [2, 2, 2, 2, 2, 2],
+        "occupants": [3, 3, 3, 3, 3, 3],
+        "vehicles": [2, 2, 1, 2, 2, 1],
+        "urban": [1, 1, 1, 1, 1, 1],
+        "weekday": [2, 2, 2, 1, 1, 1],
+        "start_time": [800, 900, 1000, 1100, 1200, 1300],
+        "end_time": [1700, 1800, 1900, 1500, 1600, 1700],
+        "miles_driven": [20.0, 30.0, 25.0, 22.0, 28.0, 24.0],
+        "trip_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    })
+    sampler = NHTSProfileSampler(nhts_df=nhts, random_state=42)
+    match_type, vehicle_ids = sampler.match(
+        target_income=2,
+        target_urban=1,
+        target_occupants=3,
+        target_vehicles=2,
+        num_samples=2,
+        weekday=True,
+        match_on_vehicles=True,
+    )
+    assert match_type == "exact"
+    # Exact tier only contains h2 (vehicles=2); both of its cars should be returned.
+    assert set(vehicle_ids) == {"v2a", "v2b"}
+
+
+def test_load_nhts_data_includes_empty_vehicle_days():
+    """Owner-HH inventory vehicles with no driver trips appear as empty markers."""
+    from utils.EVs.ev_utils import load_nhts_data
+
+    nhts = load_nhts_data(
+        "utils/EVs/ev_data/inputs/NHTS_v2_1_trip_surveys.csv",
+        "MD",
+    )
+    assert "house_id" in nhts.columns
+    assert "is_empty_day" in nhts.columns
+    n_empty = nhts.filter(pl.col("is_empty_day")).height
+    n_driven_vehicles = nhts.filter(~pl.col("is_empty_day"))["hh_vehicle_id"].n_unique()
+    n_all_vehicles = nhts["hh_vehicle_id"].n_unique()
+    assert n_empty > 0
+    assert n_all_vehicles > n_driven_vehicles
+    # Empty markers are one row per idle vehicle.
+    empty_ids = nhts.filter(pl.col("is_empty_day"))["hh_vehicle_id"]
+    assert empty_ids.n_unique() == n_empty
 
 
 def test_sample_zero_vehicles(
@@ -1069,6 +1150,27 @@ def test_cost_minimizing_charging_is_feasible_when_trip_exceeds_initial_soc():
     assert charge.sum() == pytest.approx(0.0, abs=0.1)
 
 
+def test_cost_minimizing_charging_handles_never_driven_vehicle():
+    """An EV with no trip draw needs no LP: the shed box is degenerate and CLARABEL fails."""
+    num_hours = 8784
+    at_home = np.ones(num_hours, dtype=bool)
+    discharge = np.zeros(num_hours)
+    prices = np.where(np.arange(num_hours) % 24 >= 17, 0.20, 0.10)
+
+    charge, shed = schedule_cost_minimizing_charging(
+        at_home,
+        discharge,
+        battery_capacity_kwh=40.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=40.0,
+        hourly_price_usd_per_kwh=prices,
+    )
+
+    assert charge.shape == shed.shape == (num_hours,)
+    assert charge.sum() == 0.0
+    assert shed.sum() == 0.0
+
+
 def test_cost_minimizing_charging_sheds_trip_when_cheaper_than_charging():
     prices = np.array([1.00, 1.00, 0.10, 0.10])
     at_home = np.array([False, True, True, True])
@@ -1530,6 +1632,66 @@ def test_max_daily_temp_scaled_miles_inflates_on_cold_drive_hours():
     assert float(result["max_daily_miles"][0]) > 20.0
 
 
+def test_generate_concats_empty_and_driven_profiles(calculator):
+    """A vehicle matched to empty NHTS templates must not break concat with driven ones."""
+    idle = make_vehicle_profile(bldg_id="b_idle")  # both day templates empty
+    driven = make_vehicle_profile(
+        bldg_id="b_driven",
+        weekday=make_trip_profile([8], [17], [20.0]),
+        weekend=make_trip_profile([10], [19], [25.0]),
+    )
+
+    schedules = calculator.trip_schedule_generator.generate(
+        {("b_idle", 1): idle, ("b_driven", 1): driven}
+    )
+
+    # Only the driven vehicle contributes rows; the idle one is simply absent.
+    assert schedules.height > 0
+    assert schedules["bldg_id"].unique().to_list() == ["b_driven"]
+
+
+def test_generate_all_empty_profiles_returns_typed_empty_frame(calculator):
+    """An all-idle fleet yields 0 rows but keeps the trip-schedule schema/dtypes."""
+    schedules = calculator.trip_schedule_generator.generate({
+        ("b1", 1): make_vehicle_profile(bldg_id="b1"),
+        ("b2", 1): make_vehicle_profile(bldg_id="b2"),
+    })
+
+    assert schedules.height == 0
+    assert dict(schedules.schema) == trip_schedule_schema(pl.String)
+    # Downstream duty-miles aggregation must tolerate the empty frame.
+    assert TripScheduleGenerator.max_daily_miles_from_trip_schedules(schedules).height == 0
+
+
+def test_generate_soc_schedules_covers_never_driven_vehicles(calculator):
+    """EV slots absent from trip_schedules still get a full at-home, zero-duty schedule."""
+    num_hours = num_hours_for_range(calculator.start_date, calculator.end_date)
+    trips = pl.DataFrame({
+        "bldg_id": ["b_driven"],
+        "vehicle_id": [1],
+        "travel_date": [datetime(2022, 1, 3, 4)],
+        "trip_departure_date": [datetime(2022, 1, 3)],
+        "trip_departure_hour": [9],
+        "trip_arrival_date": [datetime(2022, 1, 3)],
+        "trip_arrival_hour": [10],
+        "trip_miles_driven": [20.0],
+    })
+    # b_idle has an assigned EV but no trip rows (empty NHTS template on both day types).
+    ev_attributes = make_ev_attributes([("b_driven", 1), ("b_idle", 1)])
+
+    soc = calculator.generate_soc_schedules(trips, ev_attributes)
+
+    assert soc.select("bldg_id", "vehicle_id").unique().height == 2
+    idle = soc.filter(pl.col("bldg_id") == "b_idle")
+    assert idle.height == num_hours
+    assert idle["at_home"].all()
+    assert float(idle["discharge_kwh"].sum()) == 0.0
+    # Starts full and never drives, so there is nothing to charge back.
+    assert float(idle["charge_kwh"].sum()) == 0.0
+    assert idle["soc_kwh"].unique().to_list() == [90.0]
+    assert not idle["soc_underflow"].any()
+
+
 @patch("utils.EVs.ev_demand.TripScheduleGenerator.generate")
 @patch("utils.EVs.ev_demand.NHTSProfileSampler.sample")
 @patch("utils.EVs.ev_demand.EVAdoptionSampler.sample")
@@ -1703,19 +1865,49 @@ charging:
 
 def test_nhts_daily_miles_percentile_filter_noop_by_default(mock_nhts_data):
     """0–100 percentile band leaves the NHTS pool unchanged."""
-    filtered = NHTSProfileSampler.filter_by_daily_miles_percentile(
+    from utils.EVs.ev_utils import filter_nhts_by_daily_miles_percentile
+
+    filtered = filter_nhts_by_daily_miles_percentile(
         mock_nhts_data, low=0.0, high=100.0
     )
     assert filtered.height == mock_nhts_data.height
 
 
 def test_nhts_daily_miles_percentile_filter_drops_extremes():
-    """Middle percentile band drops low- and high-mile vehicles."""
-    # Four vehicles with distinct max daily miles: 10, 20, 30, 1000.
+    """Middle percentile band drops low- and high-mile *trip profiles* (vehicle-days)."""
+    from utils.EVs.ev_utils import filter_nhts_by_daily_miles_percentile
+
+    # Six profiles with daily miles spaced so 25–75 clearly excludes the ends.
     nhts = pl.DataFrame({
-        "hh_vehicle_id": ["v_lo", "v_mid1", "v_mid2", "v_hi", "v_hi"],
+        "hh_vehicle_id": ["v_lo", "v_a", "v_b", "v_c", "v_d", "v_hi"],
+        "weekday": [2, 2, 2, 2, 2, 2],
+        "miles_driven": [1.0, 10.0, 20.0, 30.0, 40.0, 1000.0],
+        "income_bucket": [1, 1, 1, 1, 1, 1],
+        "occupants": [2, 2, 2, 2, 2, 2],
+        "vehicles": [1, 1, 1, 1, 1, 1],
+        "start_time": [800, 800, 800, 800, 800, 800],
+        "end_time": [1700, 1700, 1700, 1700, 1700, 1700],
+        "trip_weight": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    })
+    filtered = filter_nhts_by_daily_miles_percentile(
+        nhts, low=25.0, high=75.0
+    )
+    kept_ids = set(filtered["hh_vehicle_id"].unique().to_list())
+    assert "v_lo" not in kept_ids
+    assert "v_hi" not in kept_ids
+    assert kept_ids <= {"v_a", "v_b", "v_c", "v_d"}
+
+
+def test_nhts_daily_miles_percentile_filter_is_per_profile_not_max():
+    """Weekday and weekend profiles are filtered independently (not by vehicle max)."""
+    from utils.EVs.ev_utils import filter_nhts_by_daily_miles_percentile
+
+    # v_mixed: weekday=15 (mid), weekend=1000 (extreme). A max-based filter would drop the
+    # whole vehicle; profile-based keeps the weekday and drops only the weekend.
+    nhts = pl.DataFrame({
+        "hh_vehicle_id": ["a", "b", "c", "v_mixed", "v_mixed"],
         "weekday": [2, 2, 2, 2, 1],
-        "miles_driven": [10.0, 20.0, 30.0, 500.0, 500.0],
+        "miles_driven": [10.0, 15.0, 20.0, 15.0, 1000.0],
         "income_bucket": [1, 1, 1, 1, 1],
         "occupants": [2, 2, 2, 2, 2],
         "vehicles": [1, 1, 1, 1, 1],
@@ -1723,15 +1915,102 @@ def test_nhts_daily_miles_percentile_filter_drops_extremes():
         "end_time": [1700, 1700, 1700, 1700, 1700],
         "trip_weight": [1.0, 1.0, 1.0, 1.0, 1.0],
     })
-    sampler = NHTSProfileSampler(
-        nhts_df=nhts,
-        nhts_daily_miles_percentile_low=25.0,
-        nhts_daily_miles_percentile_high=75.0,
+    filtered = filter_nhts_by_daily_miles_percentile(
+        nhts, low=20.0, high=80.0
     )
-    kept = set(sampler.nhts_df["hh_vehicle_id"].unique().to_list())
-    assert "v_lo" not in kept
-    assert "v_hi" not in kept
-    assert kept <= {"v_mid1", "v_mid2"}
+    kept = {
+        (r["hh_vehicle_id"], r["weekday"])
+        for r in filtered.select("hh_vehicle_id", "weekday").unique().iter_rows(named=True)
+    }
+    assert ("v_mixed", 2) in kept  # weekday mid-miles kept
+    assert ("v_mixed", 1) not in kept  # weekend extreme dropped
+    assert ("a", 2) not in kept  # lowest profile (10) dropped
+    assert ("b", 2) in kept
+    assert ("c", 2) in kept
+
+
+def test_nhts_daily_miles_percentile_excludes_empties_from_distribution():
+    """Empty days are always kept and never shift the percentile band."""
+    from utils.EVs.ev_utils import filter_nhts_by_daily_miles_percentile
+
+    # 4 driven profiles (10/20/30/1000) + 20 empty markers. If the empties counted,
+    # their zeros would drag p75 down far enough to drop the 30-mile day too.
+    driven = {
+        "hh_vehicle_id": ["d_lo", "d_mid", "d_hi_mid", "d_hi"],
+        "miles_driven": [10.0, 20.0, 30.0, 1000.0],
+        "is_empty_day": [False, False, False, False],
+    }
+    empties = {
+        "hh_vehicle_id": [f"e{i}" for i in range(20)],
+        "miles_driven": [0.0] * 20,
+        "is_empty_day": [True] * 20,
+    }
+    ids = driven["hh_vehicle_id"] + empties["hh_vehicle_id"]
+    nhts = pl.DataFrame({
+        "hh_vehicle_id": ids,
+        "weekday": [2] * len(ids),
+        "miles_driven": driven["miles_driven"] + empties["miles_driven"],
+        "is_empty_day": driven["is_empty_day"] + empties["is_empty_day"],
+        "income_bucket": [1] * len(ids),
+        "occupants": [2] * len(ids),
+        "vehicles": [1] * len(ids),
+        "start_time": [800] * len(ids),
+        "end_time": [1700] * len(ids),
+        "trip_weight": [1.0] * len(ids),
+    })
+    filtered = filter_nhts_by_daily_miles_percentile(nhts, low=25.0, high=75.0)
+    kept = set(filtered["hh_vehicle_id"].unique().to_list())
+
+    # Band comes from the driven distribution [10, 20, 30, 1000] → drops the extremes.
+    assert "d_lo" not in kept
+    assert "d_hi" not in kept
+    assert "d_mid" in kept
+    assert "d_hi_mid" in kept
+    # Every empty marker survives regardless of the band.
+    assert filtered.filter(pl.col("is_empty_day")).height == 20
+
+
+def test_nhts_daily_miles_percentile_keeps_zero_mile_driven_day_in_distribution():
+    """A driven day totaling 0 miles counts as driven, not empty (TRPMILES ~= 0)."""
+    from utils.EVs.ev_utils import filter_nhts_by_daily_miles_percentile
+
+    nhts = pl.DataFrame({
+        "hh_vehicle_id": ["zero_driven", "a", "b", "c"],
+        "weekday": [2, 2, 2, 2],
+        "miles_driven": [0.0, 10.0, 20.0, 30.0],
+        # zero_driven has a real trip leg that reported 0 miles
+        "is_empty_day": [False, False, False, False],
+        "income_bucket": [1, 1, 1, 1],
+        "occupants": [2, 2, 2, 2],
+        "vehicles": [1, 1, 1, 1],
+        "start_time": [800, 800, 800, 800],
+        "end_time": [1700, 1700, 1700, 1700],
+        "trip_weight": [1.0, 1.0, 1.0, 1.0],
+    })
+    # low=25 trims the bottom of the driven distribution, which includes the 0-mile day.
+    filtered = filter_nhts_by_daily_miles_percentile(nhts, low=25.0, high=100.0)
+    assert "zero_driven" not in set(filtered["hh_vehicle_id"].to_list())
+
+
+def test_load_nhts_data_applies_daily_miles_percentile():
+    """load_nhts_data applies the profile daily-miles percentile cut before returning."""
+    from utils.EVs.ev_utils import load_nhts_data
+
+    full = load_nhts_data(
+        "utils/EVs/ev_data/inputs/NHTS_v2_1_trip_surveys.csv",
+        "MD",
+        daily_miles_percentile_low=0.0,
+        daily_miles_percentile_high=100.0,
+    )
+    trimmed = load_nhts_data(
+        "utils/EVs/ev_data/inputs/NHTS_v2_1_trip_surveys.csv",
+        "MD",
+        daily_miles_percentile_low=0.0,
+        daily_miles_percentile_high=95.0,
+    )
+    assert trimmed.height < full.height
+    # Empty days are never part of the band, so all of them survive.
+    assert trimmed.filter(pl.col("is_empty_day")).height == full.filter(pl.col("is_empty_day")).height
 
 
 def test_load_ev_demand_config_from_yaml(tmp_path):
@@ -1772,6 +2051,7 @@ charging:
     assert config.nhts_daily_miles_percentile_high == 90
     assert config.random_state == 7
     assert config.batch_size == 1000
+    assert config.charger_assignment == "fixed"
     assert config.charger_power_kw == 7.2
     assert config.min_trip_away_hours == 1
     assert config.miles_noise_std_fraction == 0.1
@@ -1785,6 +2065,107 @@ charging:
     assert config.pums_path is None
     assert config.weather_dir is None
     assert config.temperature_adjustment == "none"
+
+
+def test_load_ev_demand_config_resstock_chargers_omit_power(tmp_path):
+    """charger_assignment=resstock does not require charger_power_kw; fills L1/L2 defaults."""
+    from utils.EVs.EVChargerAssigner import (
+        RESSTOCK_LEVEL1_CHARGER_KW,
+        RESSTOCK_LEVEL2_CHARGER_KW,
+    )
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "resstock_chargers.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01T04:00:00
+end_date: 2024-01-03T03:00:00
+charging:
+  charging_strategy: immediate
+  charger_assignment: resstock
+"""
+    )
+    config = load_ev_demand_config(path)
+    assert config.charger_assignment == "resstock"
+    assert config.charger_power_kw is None
+    assert config.level1_charger_power_kw == RESSTOCK_LEVEL1_CHARGER_KW
+    assert config.level2_charger_power_kw == RESSTOCK_LEVEL2_CHARGER_KW
+    assert config.ev_charger_path is not None
+    assert config.ev_charger_path.endswith("Electric_Vehicle_Charger.tsv")
+
+
+def test_load_ev_demand_config_resstock_ignores_charger_power_kw(tmp_path):
+    """If someone sets charger_power_kw with resstock, clear it and warn."""
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "resstock_ignore.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01T04:00:00
+end_date: 2024-01-03T03:00:00
+charging:
+  charging_strategy: immediate
+  charger_assignment: resstock
+  charger_power_kw: 7.2
+"""
+    )
+    config = load_ev_demand_config(path)
+    assert config.charger_assignment == "resstock"
+    assert config.charger_power_kw is None
+
+
+def test_load_ev_demand_config_resstock_custom_level_powers(tmp_path):
+    """level1/level2_charger_power_kw override ResStock TRG defaults under resstock."""
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "resstock_custom_kw.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01T04:00:00
+end_date: 2024-01-03T03:00:00
+charging:
+  charging_strategy: immediate
+  charger_assignment: resstock
+  level1_charger_power_kw: 1.4
+  level2_charger_power_kw: 7.2
+"""
+    )
+    config = load_ev_demand_config(path)
+    assert config.level1_charger_power_kw == 1.4
+    assert config.level2_charger_power_kw == 7.2
+    assert config.charger_power_kw is None
+
+
+def test_load_ev_demand_config_fixed_ignores_level_powers(tmp_path):
+    """level1/level2_charger_power_kw are optional and ignored under fixed."""
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "fixed_ignore_levels.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01T04:00:00
+end_date: 2024-01-03T03:00:00
+charging:
+  charging_strategy: immediate
+  charger_assignment: fixed
+  charger_power_kw: 7.2
+  level1_charger_power_kw: 1.6
+  level2_charger_power_kw: 5.69
+"""
+    )
+    config = load_ev_demand_config(path)
+    assert config.charger_assignment == "fixed"
+    assert config.charger_power_kw == 7.2
+    assert config.level1_charger_power_kw is None
+    assert config.level2_charger_power_kw is None
 
 
 def test_resolve_hourly_prices_flat_and_daily():

@@ -27,11 +27,13 @@ __all__ = [
     "load_all_input_data",
     "load_ev_autonomie_params",
     "load_ev_battery_lookup",
+    "load_ev_charger_lookup",
     "load_ev_ownership_lookup",
     "load_hourly_temp_f_for_buildings",
     "load_metadata",
     "load_metro_puma_map",
     "load_nhts_data",
+    "filter_nhts_by_daily_miles_percentile",
     "load_pums_data",
     "load_resstock_weather_station_temps",
     "load_station_temps_for_buildings",
@@ -258,10 +260,10 @@ def load_ev_ownership_lookup(ev_ownership_path: str | Path, state: str) -> pl.Da
         )
         raise FileNotFoundError(msg)
 
-    # Column names follow ResStock's housing_characteristics TSV convention
-    # (Dependency=… / Option=Yes). We rename to short join keys used in metadata.
+    # Read the ResStock TSV while ignoring its trailing provenance/assumption comments.
+    # Column names follow the housing_characteristics Dependency=/Option= convention.
     return (
-        pl.read_csv(path, separator="\t")
+        pl.read_csv(path, separator="\t", comment_prefix="#")
         .rename({
             "Dependency=Federal Poverty Level": "fpl",
             "Dependency=Geometry Building Type RECS": "building_type",
@@ -400,172 +402,48 @@ def load_metadata(metadata_path: str, state: str) -> pl.DataFrame:
     return metadata_df
 
 
+def _nhts_sibling_path(nhts_trip_path: str | Path, filename: str) -> Path:
+    """Resolve a sibling NHTS CSV next to the trip surveys file.
+
+    Trip surveys live at ``NHTS_v2_1_trip_surveys.csv``; households / persons /
+    vehicles files share the same ORNL NextGen release directory.
+
+    Args:
+        nhts_trip_path: Path to the NHTS trip surveys CSV
+        filename: Sibling file name (e.g. ``NHTS_v2_1_persons.csv``)
+
+    Returns:
+        Path to the sibling file
+    """
+    return Path(nhts_trip_path).with_name(filename)
+
+
 def _nhts_persons_path(nhts_trip_path: str | Path) -> Path:
-    """Resolve the sibling NHTS persons CSV used for ``OUTOFTWN``.
+    """Resolve the sibling NHTS persons CSV used for ``OUTOFTWN``."""
+    return _nhts_sibling_path(nhts_trip_path, "NHTS_v2_1_persons.csv")
 
-    Trip surveys live at ``NHTS_v2_1_trip_surveys.csv``; the person file is
-    expected beside it as ``NHTS_v2_1_persons.csv`` (same ORNL NextGen release).
 
-    Args:
-        nhts_trip_path: Path to the NHTS trip data file
+def _nhts_households_path(nhts_trip_path: str | Path) -> Path:
+    """Resolve the sibling NHTS households CSV (vehicle-owner universe)."""
+    return _nhts_sibling_path(nhts_trip_path, "NHTS_v2_1_households.csv")
 
-    Returns:
-        Path to the NHTS persons data file
+
+def _nhts_vehicles_path(nhts_trip_path: str | Path) -> Path:
+    """Resolve the sibling NHTS vehicles CSV (inventory ``VEHCASEID``s)."""
+    return _nhts_sibling_path(nhts_trip_path, "NHTS_v2_1_vehicles.csv")
+
+
+def _nhts_coarsen_demographics(df: pl.DataFrame) -> pl.DataFrame:
+    """Collapse NHTS income / occupants to the ResStock match bins.
+
+    Income: HHFAMINC 1–11 → 1 (≤$50k), 2 ($50–150k), 3 ($150k+).
+    Occupants: cap at 3+.
     """
-    trip_path = Path(nhts_trip_path)
-    return trip_path.with_name("NHTS_v2_1_persons.csv")
-
-
-def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
-    """
-    Load and preprocess the NHTS trip data for a specific state.
-
-    Keeps purpose / sequencing columns so vehicle-day legs can be chained into
-    home-based tours (``why_from`` / ``why_to`` / ``seq_trip_id``). Restricts to
-    household-vehicle *driver* trips (``DRVR_FLG=01``) so passenger duplicates do
-    not double-count vehicle movement.
-
-    Home-charging-only pool: keep vehicle-days that start and end at home
-    (first-leg ``WHYFROM`` and last-leg ``WHYTO`` in ``NHTS_HOME_PURPOSES``) and
-    whose driver was not away for the entire travel day (person-file
-    ``OUTOFTWN=02``).
-
-    Args:
-        nhts_path: Path to the NHTS trip data file
-        state: State abbreviation to filter data for
-
-    Returns:
-        DataFrame with trip records filtered for the specified state's census division
-    """
-    if not Path(nhts_path).exists():
-        msg = f"NHTS file not found: {nhts_path}. Please run `just download-nhts` to download the data."
-        raise FileNotFoundError(msg)
-
-    # Person-file flag ``OUTOFTWN`` is not on the trip CSV; join from the sibling persons file.
-    persons_path = _nhts_persons_path(nhts_path)
-    if not persons_path.exists():
-        msg = (
-            f"NHTS persons file not found: {persons_path}. "
-            "Required for OUTOFTWN (away-entire-day) filtering; place "
-            "NHTS_v2_1_persons.csv next to the trip surveys CSV."
-        )
-        raise FileNotFoundError(msg)
-
-    # Define the columns we need from the trip file.
-    # HOUSEID/PERSONID are join keys for OUTOFTWN only (dropped before return).
-    needed_columns = [
-        "CENSUS_D",  # census division (needed for filtering)
-        "HOUSEID",  # join to persons for OUTOFTWN
-        "PERSONID",  # join to persons for OUTOFTWN
-        "VEHCASEID",  # unique hh/vehicle id
-        "VEHID",  # vehicle id
-        "VEHTYPE",  # household vehicle type (needed for light-duty filter)
-        "STRTTIME",  # start time
-        "ENDTIME",  # end time
-        "TRPMILES",  # miles driven
-        "TRAVDAY",  # day of week the trip was taken (1=Sun ... 7=Sat)
-        "HHSIZE",  # occupants
-        "HHFAMINC",  # household income
-        "HHVEHCNT",  # total number of vehicles
-        "URBRUR",  # urban/rural status urban(1)/rural(2)
-        "WTTRDFIN",  # trip weight
-        # Tour chaining / vehicle timeline
-        "WHYFROM",  # origin purpose (home = 01/02)
-        "WHYTO",  # destination purpose (home = 01/02)
-        "SEQ_TRIPID",  # order within person travel day
-        "DRVR_FLG",  # 01=driver (moves the vehicle), 02=passenger
-    ]
-
-    # Load only the needed trip columns (HOUSEID/PERSONID as strings for a stable join).
-    nhts_df = pl.read_csv(
-        nhts_path,
-        columns=needed_columns,
-        schema_overrides={
-            "VEHCASEID": pl.Utf8,
-            "HOUSEID": pl.Utf8,
-            "PERSONID": pl.Utf8,
-        },
-    )
-
-    # Get the census division for this state
-    state_division = get_census_division_for_state(state)
-
-    # Light-duty passenger vehicles only (NHTS VEHTYPE):
-    # 1=car, 2=van, 3=SUV, 4=pickup. Excludes other truck (5), RV (6), motorcycle/moped (7).
-    light_duty_veh_types = [1, 2, 3, 4]
-
-    # Filter to only keep census division for this state
-    nhts_df = nhts_df.filter(
-        pl.col("CENSUS_D") == state_division,
-        pl.col("HHVEHCNT") > 0,
-        # Household-vehicle trips only (excludes transit, walk, bike, non-HH vehicles, etc.)
-        pl.col("VEHCASEID") != "-1",
-        pl.col("HHFAMINC") > 0,  # -7, -8 are not valid income bucket values
-        pl.col("VEHTYPE").cast(pl.Int64).is_in(light_duty_veh_types),
-        # Driver only: passenger rows share VEHCASEID but do not move the car again.
-        pl.col("DRVR_FLG").cast(pl.Int64) == 1,
-    )
-
-    # Drop filter-only columns (keep HOUSEID/PERSONID until after OUTOFTWN join).
-    nhts_df = nhts_df.drop("CENSUS_D", "VEHTYPE", "DRVR_FLG")
-
-    # --- OUTOFTWN: drop drivers who were away from home the entire travel day ---
-    # Codebook (person file): 01=Yes (away entire day), 02=No. Home-charging models
-    # assume the vehicle can be at the residence that day, so keep OUTOFTWN=02 only.
-    persons_df = pl.read_csv(
-        persons_path,
-        columns=["HOUSEID", "PERSONID", "OUTOFTWN"],
-        schema_overrides={"HOUSEID": pl.Utf8, "PERSONID": pl.Utf8},
-    ).with_columns(pl.col("OUTOFTWN").cast(pl.Int64))
-    n_before_outoftwn = nhts_df.height
-    nhts_df = (
-        nhts_df.join(persons_df, on=["HOUSEID", "PERSONID"], how="inner")
-        .filter(pl.col("OUTOFTWN") == 2)
-        .drop("HOUSEID", "PERSONID", "OUTOFTWN")
-    )
-    logging.info(
-        "NHTS OUTOFTWN filter (keep 02=not away entire day): %s/%s trip rows retained",
-        nhts_df.height,
-        n_before_outoftwn,
-    )
-
-    # Derive the weekday/weekend flag from TRAVDAY (day the trip was taken) rather than
-    # NHTS's TDWKND, which reclassifies Friday trips starting at/after 18:00 as weekend.
-    # Using TRAVDAY keeps a full travel day together (weekday=2 for Mon-Fri, 1 for Sat/Sun).
-    nhts_df = nhts_df.with_columns(
-        pl.when(pl.col("TRAVDAY").is_in([1, 7]))
-        .then(1)  # Sunday(1) or Saturday(7) -> weekend
-        .otherwise(2)  # Monday-Friday -> weekday
-        .alias("TRAVDAY")
-    )
-
-    nhts_df = nhts_df.rename({
-        "HHSIZE": "occupants",
-        "HHFAMINC": "income_bucket",
-        "HHVEHCNT": "vehicles",
-        "URBRUR": "urban",
-        "TRAVDAY": "weekday",
-        "VEHCASEID": "hh_vehicle_id",
-        "VEHID": "vehicle_id",
-        "STRTTIME": "start_time",
-        "ENDTIME": "end_time",
-        "TRPMILES": "miles_driven",
-        "WTTRDFIN": "trip_weight",
-        "WHYFROM": "why_from",
-        "WHYTO": "why_to",
-        "SEQ_TRIPID": "seq_trip_id",
-    })
-
-    # NHTS URBRUR is 1=Urban, 2=Rural (may arrive as 01/02 strings from CSV).
-    # Purpose / sequence codes arrive as zero-padded strings; cast for tour logic.
-    # Income: collapse HHFAMINC 1–11 → 3 bins; occupants: cap at 3+ (match ResStock load).
-    nhts_df = nhts_df.with_columns(
+    return df.with_columns(
         pl.col("urban").cast(pl.Int64),
-        pl.col("why_from").cast(pl.Int64),
-        pl.col("why_to").cast(pl.Int64),
-        pl.col("seq_trip_id").cast(pl.Int64),
         pl.col("occupants").cast(pl.Int64),
         pl.col("income_bucket").cast(pl.Int64),
+        pl.col("vehicles").cast(pl.Int64),
     ).with_columns(
         pl.when(pl.col("income_bucket") <= 5)
         .then(1)
@@ -579,16 +457,324 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         .alias("occupants"),
     )
 
-    # --- Closed home-based vehicle-days only (start and end at home) ---
-    # Home purposes: 01=regular activities at home, 02=work from home (paid).
-    # A vehicle-day is one (hh_vehicle_id, weekday) group. Require the chronologically
-    # first leg to leave home and the last leg to return home so presence/charging
-    # templates are closed leave-home → return-home loops (no open overnight tours).
+
+def _nhts_travday_to_weekday_flag(travday_col: str = "TRAVDAY") -> pl.Expr:
+    """Map NHTS TRAVDAY (1=Sun … 7=Sat) to weekday=2 / weekend=1.
+
+    Uses TRAVDAY rather than TDWKND so Friday evening trips stay with the
+    weekday travel day (TDWKND reclassifies Fri ≥18:00 as weekend).
+    """
+    return (
+        pl.when(pl.col(travday_col).is_in([1, 7]))
+        .then(1)  # Sunday(1) or Saturday(7) → weekend
+        .otherwise(2)  # Monday–Friday → weekday
+        .alias("weekday")
+    )
+
+
+def filter_nhts_by_daily_miles_percentile(
+    nhts_df: pl.DataFrame,
+    *,
+    low: float = 0.0,
+    high: float = 100.0,
+) -> pl.DataFrame:
+    """Keep NHTS trip profiles whose daily miles fall in ``[low, high]`` percentiles.
+
+    A profile is one ``(hh_vehicle_id, weekday)`` survey day: sum ``miles_driven``
+    over that day's trip legs. Weekday and weekend for the same vehicle are judged
+    independently, so one may be kept while the other is dropped.
+
+    Percentiles are computed over **driven** profiles only (``is_empty_day=False``).
+    Empty-day markers are a separate match option (owned but not driven), not part of
+    the miles distribution being trimmed — their 1,000s of zeros would otherwise drag
+    the band down and over-trim real driving days. Empty profiles are always kept.
+
+    Note a driven day can still total 0 miles (NHTS ``TRPMILES`` ≈ 0 on every leg), so
+    ``is_empty_day`` is used rather than ``daily_miles > 0``: such a day is a real trip
+    (the vehicle leaves home) and belongs in the distribution as a low-mile day. When
+    ``is_empty_day`` is absent, every profile is treated as driven.
+
+    Args:
+        nhts_df: NHTS trip/empty rows with ``hh_vehicle_id``, ``weekday``, ``miles_driven``
+            and optionally ``is_empty_day``
+        low: Inclusive lower percentile (0–100). ``0`` disables the lower cut.
+        high: Inclusive upper percentile (0–100). ``100`` disables the upper cut.
+
+    Returns:
+        Filtered NHTS DataFrame (unchanged when ``low <= 0`` and ``high >= 100``).
+    """
+    if low <= 0.0 and high >= 100.0:
+        return nhts_df
+    if not (0.0 <= low <= high <= 100.0):
+        raise ValueError(
+            f"Invalid percentile band [{low}, {high}]; require 0 <= low <= high <= 100"
+        )
+    required = {"hh_vehicle_id", "weekday", "miles_driven"}
+    missing = required - set(nhts_df.columns)
+    if missing:
+        raise ValueError(f"nhts_df missing columns for percentile filter: {sorted(missing)}")
+    if nhts_df.is_empty():
+        return nhts_df
+
+    # Frames without empty markers (legacy trip-only pools) are all-driven.
+    empty_flag = (
+        pl.col("is_empty_day") if "is_empty_day" in nhts_df.columns else pl.lit(False)
+    )
+    # One daily-miles value per trip profile (vehicle × survey day type).
+    profile_miles = (
+        nhts_df.with_columns(pl.col("miles_driven").fill_null(0.0))
+        .group_by(["hh_vehicle_id", "weekday"])
+        .agg(
+            pl.col("miles_driven").sum().alias("daily_miles"),
+            empty_flag.max().alias("is_empty_day"),
+        )
+    )
+    driven_miles = profile_miles.filter(~pl.col("is_empty_day"))["daily_miles"]
+    if driven_miles.is_empty():
+        raise ValueError(
+            "NHTS percentile filter needs at least one driven trip profile; "
+            "pool contains only empty vehicle-days"
+        )
+    lo = _scalar_quantile(driven_miles, low / 100.0)
+    hi = _scalar_quantile(driven_miles, high / 100.0)
+    # Empty days bypass the band; driven days must land inside it.
+    keep_profiles = profile_miles.filter(
+        pl.col("is_empty_day")
+        | ((pl.col("daily_miles") >= lo) & (pl.col("daily_miles") <= hi))
+    ).select("hh_vehicle_id", "weekday")
+    filtered = nhts_df.join(keep_profiles, on=["hh_vehicle_id", "weekday"], how="inner")
+    n_driven_kept = int(keep_profiles.height - profile_miles["is_empty_day"].sum())
+    logging.info(
+        "NHTS daily-miles percentile filter [%.1f, %.1f] over driven profiles: "
+        "kept %s/%s driven (miles band [%.1f, %.1f]) + %s empty = %s/%s profiles, "
+        "%s/%s trip rows",
+        low,
+        high,
+        n_driven_kept,
+        driven_miles.len(),
+        lo,
+        hi,
+        int(profile_miles["is_empty_day"].sum()),
+        keep_profiles.height,
+        profile_miles.height,
+        filtered.height,
+        nhts_df.height,
+    )
+    if filtered.is_empty():
+        raise ValueError(
+            f"NHTS percentile filter [{low}, {high}] removed all trip profiles "
+            f"(miles band would be [{lo:.1f}, {hi:.1f}])"
+        )
+    return filtered
+
+
+def _scalar_quantile(series: pl.Series, q: float) -> float:
+    """Return a single quantile as float (Series.quantile is typed as scalar|list|None)."""
+    value = series.quantile(q)
+    if value is None:
+        raise ValueError(f"quantile({q}) returned None for empty or all-null series")
+    if isinstance(value, list):
+        raise TypeError(f"quantile({q}) returned a list; expected a scalar")
+    return float(value)
+
+
+def load_nhts_data(
+    nhts_path: str,
+    state: str,
+    *,
+    daily_miles_percentile_low: float = 0.0,
+    daily_miles_percentile_high: float = 100.0,
+) -> pl.DataFrame:
+    """
+    Load the NHTS match pool for a state's census division.
+
+    Universe is **vehicle-owning households** (not only vehicles that drove):
+    households file → light-duty vehicles file → optional driver trip legs.
+
+    Each inventory vehicle contributes one survey-day template keyed by the
+    household's ``TRAVDAY``:
+
+    - **Driven day** — household-vehicle driver trips that pass OUTOFTWN and
+      closed-home filters → one row per trip leg (``is_empty_day=False``).
+    - **Empty day** — owned light-duty vehicle with no HH-vehicle driver trips
+      that day → one marker row (``is_empty_day=True``, home all day, 0 miles).
+
+    Driven days that fail OUTOFTWN / closed-home are dropped entirely (not
+    reclassified as empty). Empty days skip those filters.
+
+    After the structural filters, trip profiles whose **daily miles** fall outside
+    ``[daily_miles_percentile_low, daily_miles_percentile_high]`` are dropped
+    (see ``filter_nhts_by_daily_miles_percentile``). Defaults 0–100 keep the full
+    pool; e.g. 0–95 keeps empties and drops the heaviest ~5% of survey days.
+
+    Args:
+        nhts_path: Path to the NHTS trip surveys CSV (siblings resolved beside it)
+        state: State abbreviation → census division filter
+        daily_miles_percentile_low: Lower percentile for profile daily-miles cut (0–100)
+        daily_miles_percentile_high: Upper percentile for profile daily-miles cut (0–100)
+
+    Returns:
+        Long-form DataFrame: trip legs plus empty-day markers, with ``house_id``,
+        ``hh_vehicle_id``, demographics, ``weekday``, and ``is_empty_day``.
+    """
+    trip_path = Path(nhts_path)
+    if not trip_path.exists():
+        msg = f"NHTS file not found: {nhts_path}. Please run `just download-nhts` to download the data."
+        raise FileNotFoundError(msg)
+
+    # Sibling NextGen files (households / vehicles / persons) live next to the trip CSV.
+    households_path = _nhts_households_path(trip_path)
+    vehicles_path = _nhts_vehicles_path(trip_path)
+    persons_path = _nhts_persons_path(trip_path)
+    for label, path in (
+        ("households", households_path),
+        ("vehicles", vehicles_path),
+        ("persons", persons_path),
+    ):
+        if not path.exists():
+            raise FileNotFoundError(
+                f"NHTS {label} file not found: {path}. "
+                "Place NHTS_v2_1_{households,vehicles,persons}.csv next to the trip surveys CSV."
+            )
+
+    state_division = get_census_division_for_state(state)
+    # Light-duty passenger vehicles only (NHTS VEHTYPE):
+    # 1=car, 2=van, 3=SUV, 4=pickup. Excludes other truck (5), RV (6), motorcycle/moped (7).
+    light_duty_veh_types = [1, 2, 3, 4]
+
+    # 1. Vehicle-owning households in this census division
+    # Demographics + TRAVDAY come from the household file so idle vehicles still
+    # enter the match pool with a known weekday/weekend day type.
+    households = (
+        pl.read_csv(
+            households_path,
+            columns=["HOUSEID", "CENSUS_D", "HHSIZE", "HHFAMINC", "HHVEHCNT", "URBRUR", "TRAVDAY"],
+            schema_overrides={"HOUSEID": pl.Utf8},
+        )
+        .filter(
+            pl.col("CENSUS_D") == state_division,
+            pl.col("HHVEHCNT") > 0,
+            pl.col("HHFAMINC") > 0,  # -7/-8 are invalid income codes
+        )
+        .with_columns(_nhts_travday_to_weekday_flag("TRAVDAY"))
+        .rename({
+            "HOUSEID": "house_id",
+            "HHSIZE": "occupants",
+            "HHFAMINC": "income_bucket",
+            "HHVEHCNT": "vehicles",
+            "URBRUR": "urban",
+        })
+        .drop("CENSUS_D", "TRAVDAY")
+    )
+    households = _nhts_coarsen_demographics(households)
+    logging.info(
+        "NHTS households (division %s, HHVEHCNT>0): %s",
+        state_division,
+        households.height,
+    )
+
+    # 2. Light-duty inventory vehicles for those households
+    vehicles = (
+        pl.read_csv(
+            vehicles_path,
+            columns=["HOUSEID", "VEHID", "VEHCASEID", "VEHTYPE"],
+            schema_overrides={
+                "HOUSEID": pl.Utf8,
+                "VEHCASEID": pl.Utf8,
+                "VEHID": pl.Utf8,
+            },
+        )
+        .rename({"HOUSEID": "house_id", "VEHCASEID": "hh_vehicle_id", "VEHID": "vehicle_id"})
+        .filter(pl.col("VEHTYPE").cast(pl.Int64).is_in(light_duty_veh_types))
+        .drop("VEHTYPE")
+    )
+    # One row per inventory vehicle with household demographics + day type.
+    vehicle_days = households.join(vehicles, on="house_id", how="inner")
+    logging.info(
+        "NHTS light-duty vehicle-days (owner HH × inventory): %s vehicles across %s HH",
+        vehicle_days.height,
+        vehicle_days["house_id"].n_unique(),
+    )
+
+    # 3. HH-vehicle driver trip legs (optional; left-joined below)
+    trip_columns = [
+        "HOUSEID",
+        "PERSONID",
+        "VEHCASEID",
+        "STRTTIME",
+        "ENDTIME",
+        "TRPMILES",
+        "WTTRDFIN",
+        "WHYFROM",
+        "WHYTO",
+        "SEQ_TRIPID",
+        "DRVR_FLG",
+    ]
+    trips = pl.read_csv(
+        trip_path,
+        columns=trip_columns,
+        schema_overrides={
+            "HOUSEID": pl.Utf8,
+            "PERSONID": pl.Utf8,
+            "VEHCASEID": pl.Utf8,
+        },
+    ).filter(
+        pl.col("VEHCASEID") != "-1",
+        pl.col("DRVR_FLG").cast(pl.Int64) == 1, # don't doublecount trips that are both driver and passenger
+    ).drop("DRVR_FLG")
+
+    # Restrict to inventory vehicles before quality filters so we can tell
+    # "never driven" (empty) apart from "driven but failed OUTOFTWN/closed-home".
+    trips = trips.rename({"VEHCASEID": "hh_vehicle_id"}).join(
+        vehicle_days.select("hh_vehicle_id", "weekday").unique(),
+        on="hh_vehicle_id",
+        how="inner",
+    )
+    # IDs of inventory vehicles that had any driver trip legs
+    had_any_driver_trip_ids = trips.select("hh_vehicle_id").unique()
+
+    # OUTOFTWN: keep only drivers who were not away the entire travel day (code 02).
+    persons = pl.read_csv(
+        persons_path,
+        columns=["HOUSEID", "PERSONID", "OUTOFTWN"],
+        schema_overrides={"HOUSEID": pl.Utf8, "PERSONID": pl.Utf8},
+    ).with_columns(pl.col("OUTOFTWN").cast(pl.Int64))
+    n_before_outoftwn = trips.height
+    trips = (
+        trips.join(persons, on=["HOUSEID", "PERSONID"], how="inner")
+        .filter(pl.col("OUTOFTWN") == 2)
+        .drop("HOUSEID", "PERSONID", "OUTOFTWN")
+    )
+    logging.info(
+        "NHTS OUTOFTWN filter (keep 02=not away entire day): %s/%s driver trip rows retained",
+        trips.height,
+        n_before_outoftwn,
+    )
+
+    trips = trips.rename({
+        "STRTTIME": "start_time",
+        "ENDTIME": "end_time",
+        "TRPMILES": "miles_driven",
+        "WTTRDFIN": "trip_weight",
+        "WHYFROM": "why_from",
+        "WHYTO": "why_to",
+        "SEQ_TRIPID": "seq_trip_id",
+    }).with_columns(
+        pl.col("why_from").cast(pl.Int64),
+        pl.col("why_to").cast(pl.Int64),
+        pl.col("seq_trip_id").cast(pl.Int64),
+        pl.col("start_time").cast(pl.Int64),
+        pl.col("end_time").cast(pl.Int64),
+        pl.col("miles_driven").cast(pl.Float64),
+        pl.col("trip_weight").cast(pl.Float64),
+    )
+
+    # Closed home-based vehicle-days only (start and end at home).
+    # Failed closed-home days are dropped (not converted to empty).
     home_purposes = list(NHTS_HOME_PURPOSES)
-    n_before_home = nhts_df.height
-    n_vehicles_before = nhts_df["hh_vehicle_id"].n_unique()
+    n_before_home = trips.height
     closed_home_days = (
-        nhts_df.sort(["hh_vehicle_id", "weekday", "start_time", "seq_trip_id"])
+        trips.sort(["hh_vehicle_id", "weekday", "start_time", "seq_trip_id"])
         .group_by(["hh_vehicle_id", "weekday"])
         .agg(
             pl.col("why_from").first().alias("_day_start_why_from"),
@@ -600,18 +786,87 @@ def load_nhts_data(nhts_path: str, state: str) -> pl.DataFrame:
         )
         .select(["hh_vehicle_id", "weekday"])
     )
-    nhts_df = nhts_df.join(closed_home_days, on=["hh_vehicle_id", "weekday"], how="inner")
+    trips = trips.join(closed_home_days, on=["hh_vehicle_id", "weekday"], how="inner")
     logging.info(
         "NHTS closed-home filter (start WHYFROM and end WHYTO in %s): "
-        "%s/%s trip rows, %s/%s vehicles retained",
+        "%s/%s trip rows, %s vehicles with usable driven days",
         sorted(home_purposes),
-        nhts_df.height,
+        trips.height,
         n_before_home,
-        nhts_df["hh_vehicle_id"].n_unique(),
-        n_vehicles_before,
+        trips["hh_vehicle_id"].n_unique(),
     )
 
-    return nhts_df
+    # 4. Split inventory into driven days vs empty days
+    # Empty = owned light-duty vehicle with no HH-vehicle driver trips at all.
+    # Usable driven = passed OUTOFTWN + closed-home.
+    # Had trips but failed filters → excluded from the match pool entirely.
+    driven_ids = trips.select("hh_vehicle_id").unique()
+    empty_vehicle_days = vehicle_days.join(had_any_driver_trip_ids, on="hh_vehicle_id", how="anti")
+    driven_vehicle_days = vehicle_days.join(driven_ids, on="hh_vehicle_id", how="inner")
+    n_excluded = (
+        had_any_driver_trip_ids.join(driven_ids, on="hh_vehicle_id", how="anti").height
+    )
+    logging.info(
+        "NHTS vehicle-day split: %s usable driven, %s empty (idle), %s excluded "
+        "(had driver trips but failed OUTOFTWN/closed-home)",
+        driven_vehicle_days.height,
+        empty_vehicle_days.height,
+        n_excluded,
+    )
+
+    # Driven: demographics × trip legs.
+    driven_rows = driven_vehicle_days.join(trips.drop("weekday"), on="hh_vehicle_id", how="inner").with_columns(
+        pl.lit(False).alias("is_empty_day"),
+    )
+
+    # Empty: one marker row per idle inventory vehicle (home all day, 0 miles).
+    empty_rows = empty_vehicle_days.with_columns(
+        pl.lit(True).alias("is_empty_day"),
+        pl.lit(None, dtype=pl.Int64).alias("start_time"),
+        pl.lit(None, dtype=pl.Int64).alias("end_time"),
+        pl.lit(0.0).alias("miles_driven"),
+        pl.lit(0.0).alias("trip_weight"),
+        pl.lit(None, dtype=pl.Int64).alias("why_from"),
+        pl.lit(None, dtype=pl.Int64).alias("why_to"),
+        pl.lit(None, dtype=pl.Int64).alias("seq_trip_id"),
+    )
+
+    # Return a dataframe with driven days (is_empty_day=False -- one row per usable driver trip leg filtered by OUTOFTWN and closed-home filters) 
+    # and empty days (is_empty_day=True -- one row per idle inventory vehicle with trip fields null/0)
+    nhts_df = pl.concat([driven_rows, empty_rows], how="diagonal_relaxed").select(
+        "house_id",
+        "hh_vehicle_id",
+        "vehicle_id",
+        "occupants",
+        "income_bucket",
+        "vehicles",
+        "urban",
+        "weekday",
+        "is_empty_day",
+        "start_time",
+        "end_time",
+        "miles_driven",
+        "trip_weight",
+        "why_from",
+        "why_to",
+        "seq_trip_id",
+    )
+
+    logging.info(
+        "NHTS match pool: %s rows (%s driven trip legs, %s empty vehicle-days) "
+        "across %s vehicles / %s households",
+        nhts_df.height,
+        driven_rows.height,
+        empty_rows.height,
+        nhts_df["hh_vehicle_id"].n_unique(),
+        nhts_df["house_id"].n_unique(),
+    )
+    # Scenario cut on profile daily miles (empties have 0 mi → stay when low=0).
+    return filter_nhts_by_daily_miles_percentile(
+        nhts_df,
+        low=daily_miles_percentile_low,
+        high=daily_miles_percentile_high,
+    )
 
 
 def load_pums_data(pums_path: str, metadata_path: str) -> pl.DataFrame:
@@ -752,6 +1007,80 @@ def load_ev_battery_lookup(ev_battery_path: str | Path) -> pl.DataFrame:
     return probs
 
 
+def load_ev_charger_lookup(ev_charger_path: str | Path) -> pl.DataFrame:
+    """
+    Load ResStock EV charger L1/L2 probabilities for households that own an EV.
+
+    Source: ``Electric_Vehicle_Charger.tsv`` (RECS 2020 EVCHRGTYPE via Speake et al.
+    2025). Rows with ``Electric Vehicle Ownership = No`` always map to None and are
+    dropped — this pipeline only assigns chargers to simulated EV slots.
+
+    Args:
+        ev_charger_path: Path to the EV charger housing-characteristic TSV
+
+    Returns:
+        DataFrame with ``fpl``, ``building_type``, ``tenure``, ``p_level1``,
+        ``p_level2``, and ``p_void``. Void rows are retained, matching the thin
+        loader behavior of ``load_ev_ownership_lookup``; the assigner validates
+        that sampled EV slots resolve to usable L1/L2 rows.
+    """
+    path = Path(ev_charger_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"EV charger lookup not found: {path}. "
+            "Run `just download-resstock-ev-reference` to download the data."
+        )
+
+    # Read comments consistently with the ownership loader. Explicit probability
+    # dtypes are needed because early No-EV rows contain only integer 0/1 values,
+    # while later Yes-EV rows contain fractional L1/L2 probabilities.
+    charger_lookup = (
+        pl.read_csv(
+            path,
+            separator="\t",
+            comment_prefix="#",
+            schema_overrides={
+                "Option=Level 1 charger": pl.Float64,
+                "Option=Level 2 charger": pl.Float64,
+                "Option=Void": pl.Float64,
+            },
+        )
+        # Rename ResStock Dependency=/Option= headers to assigner-facing keys.
+        .rename({
+            "Dependency=Electric Vehicle Ownership": "ev_ownership",
+            "Dependency=Federal Poverty Level": "fpl",
+            "Dependency=Geometry Building Type RECS": "building_type",
+            "Dependency=Tenure": "tenure",
+            "Option=Level 1 charger": "p_level1",
+            "Option=Level 2 charger": "p_level2",
+            "Option=Void": "p_void",
+        })
+        # Charger assignment is conditional on a simulated slot already owning an EV.
+        # No-ownership rows deterministically map to None and are not needed downstream.
+        .filter(pl.col("ev_ownership") == "Yes")
+        .with_columns(
+            pl.col("p_level1").cast(pl.Float64),
+            pl.col("p_level2").cast(pl.Float64),
+            pl.col("p_void").cast(pl.Float64),
+        )
+        # Keep Void so this loader stays thin like load_ev_ownership_lookup.
+        # EVChargerAssigner rejects any joined row that is Void or lacks L1/L2 mass.
+        .select(
+            "fpl",
+            "building_type",
+            "tenure",
+            "p_level1",
+            "p_level2",
+            "p_void",
+        )
+    )
+
+    # Fail early on an empty/corrupt source while leaving row-level validity to the assigner.
+    if charger_lookup.is_empty():
+        raise ValueError(f"No Yes-ownership charger rows in {path}")
+    return charger_lookup
+
+
 def load_ev_autonomie_params(ev_autonomie_path: str | Path) -> pl.DataFrame:
     """
     Load Autonomie usable capacity and efficiency keyed by EV battery option name.
@@ -811,6 +1140,8 @@ class EVDemandInputs:
     pums_df: pl.DataFrame | None = None
     # Present when ev_assignment=resstock_adoption.
     ev_ownership_df: pl.DataFrame | None = None
+    # Present when charger_assignment=resstock.
+    ev_charger_df: pl.DataFrame | None = None
     # Present when temperature_adjustment=resstock.
     weather_map: pl.DataFrame | None = None
     # Station name → month/day/hour temps; shared across batches when preloaded.
@@ -824,6 +1155,7 @@ def load_all_input_data(ev_demand_config: Any) -> EVDemandInputs:
     Mode-gated loads:
     - ``pums_df`` only when ``ev_assignment=pums_vehicles``
     - ``ev_ownership_df`` only when ``ev_assignment=resstock_adoption``
+    - ``ev_charger_df`` only when ``charger_assignment=resstock``
     - ``weather_map`` / ``station_temps`` only when ``temperature_adjustment=resstock``
       (station CSVs are preloaded for all metadata buildings so batches share the cache)
     """
@@ -848,6 +1180,15 @@ def load_all_input_data(ev_demand_config: Any) -> EVDemandInputs:
             ev_demand_config.ev_ownership_path,
             ev_demand_config.state,
         )
+
+    # L1/L2 conditional probs (Yes-ownership rows only); national, not state-filtered.
+    ev_charger_df: pl.DataFrame | None = None
+    if ev_demand_config.charger_assignment == "resstock":
+        if not ev_demand_config.ev_charger_path:
+            raise ValueError(
+                "ev_charger_path is required when charger_assignment=resstock"
+            )
+        ev_charger_df = load_ev_charger_lookup(ev_demand_config.ev_charger_path)
 
     weather_map: pl.DataFrame | None = None
     station_temps: dict[str, pl.DataFrame] | None = None
@@ -877,6 +1218,7 @@ def load_all_input_data(ev_demand_config: Any) -> EVDemandInputs:
         ev_autonomie_df=ev_autonomie_df,
         pums_df=pums_df,
         ev_ownership_df=ev_ownership_df,
+        ev_charger_df=ev_charger_df,
         weather_map=weather_map,
         station_temps=station_temps,
     )

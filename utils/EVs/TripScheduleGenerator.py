@@ -24,6 +24,32 @@ DEFAULT_TIME_OFFSETS: tuple[int, ...] = (-2, -1, 0, 1, 2)
 DEFAULT_TIME_OFFSET_PROBABILITIES: tuple[float, ...] = (0.05, 0.10, 0.70, 0.10, 0.05)
 DEFAULT_MILES_NOISE_STD_FRACTION = 0.1
 
+# Trip-schedule dtypes, declared explicitly so vehicles matched to an empty NHTS
+# template (owned but not driven on the survey day) still yield a typed 0-row frame
+# that concatenates with driven vehicles instead of coming back all-Null.
+# ``bldg_id`` is resolved per profile since ResStock IDs may be ints or strings.
+PolarsDtype = pl.DataType | type[pl.DataType]
+
+TRIP_SCHEDULE_DTYPES: dict[str, PolarsDtype] = {
+    "vehicle_id": pl.Int64,
+    "travel_date": pl.Datetime("us"),
+    "trip_departure_date": pl.Datetime("us"),
+    "trip_departure_hour": pl.Int64,
+    "trip_arrival_date": pl.Datetime("us"),
+    "trip_arrival_hour": pl.Int64,
+    "trip_miles_driven": pl.Float64,
+    "tour_id": pl.Int64,
+    "tour_departure_date": pl.Datetime("us"),
+    "tour_departure_hour": pl.Int64,
+    "tour_arrival_date": pl.Datetime("us"),
+    "tour_arrival_hour": pl.Int64,
+}
+
+
+def trip_schedule_schema(bldg_id_dtype: PolarsDtype = pl.Int64) -> dict[str, PolarsDtype]:
+    """Full trip-schedule schema with ``bldg_id`` typed to match the caller's IDs."""
+    return {"bldg_id": bldg_id_dtype, **TRIP_SCHEDULE_DTYPES}
+
 
 def sample_truncated_normal_nonnegative(
     rng: np.random.RandomState,
@@ -518,7 +544,12 @@ class TripScheduleGenerator:
             "tour_arrival_hour": tour_arrival_hours,
         }
 
-        return pl.DataFrame(schedule_data).sort(
+        # A profile whose weekday *and* weekend templates are both empty emits no rows;
+        # the explicit schema keeps that 0-row frame concat-compatible in generate().
+        return pl.DataFrame(
+            schedule_data,
+            schema=trip_schedule_schema(pl.String if isinstance(profile.bldg_id, str) else pl.Int64),
+        ).sort(
             [
                 "travel_date",
                 "tour_id",
@@ -584,8 +615,15 @@ class TripScheduleGenerator:
 
         if not all_schedules:
             return pl.DataFrame()
+
+        # Vehicles matched to empty NHTS templates contribute 0-row frames. Drop them so
+        # concat only sees rows, but keep one empty frame's schema if *every* vehicle idled.
+        non_empty = [schedule for schedule in all_schedules if schedule.height > 0]
+        if not non_empty:
+            return all_schedules[0].clear()
+
         # Parallel concat order is nondeterministic; sort for stable, chrono-readable output.
-        return pl.concat(all_schedules).sort(
+        return pl.concat(non_empty).sort(
             [
                 "bldg_id",
                 "vehicle_id",

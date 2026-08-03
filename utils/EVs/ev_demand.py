@@ -21,6 +21,11 @@ from utils.EVs import ev_utils
 from utils.EVs.ChargingSimulator import DEFAULT_LEVEL2_CHARGER_KW, ChargingSimulator
 from utils.EVs.EVAdoptionSampler import EVAdoptionSampler
 from utils.EVs.EVBatteryAssigner import DEFAULT_CAPACITY_BUFFER_FRACTION, EVBatteryAssigner
+from utils.EVs.EVChargerAssigner import (
+    EVChargerAssigner,
+    RESSTOCK_LEVEL1_CHARGER_KW,
+    RESSTOCK_LEVEL2_CHARGER_KW,
+)
 from utils.EVs.NHTSProfileSampler import NHTSProfileSampler, VehicleProfile
 from utils.EVs.TripScheduleGenerator import (
     DEFAULT_MAX_ARRIVAL_HOUR,
@@ -47,6 +52,13 @@ from utils.EVs.charging import (
 # - resstock_adoption: ResStock P(EV) Bernoulli sampler; at most one EV; do not match NHTS on vehicles
 EvAssignmentMode = Literal["pums_vehicles", "resstock_adoption"]
 EV_ASSIGNMENT_MODES: Final[frozenset[str]] = frozenset({"pums_vehicles", "resstock_adoption"})
+
+# How home charger power is assigned to each EV slot.
+# - fixed: every vehicle uses charging.charger_power_kw (legacy / scenario override)
+# - resstock: L1 vs L2 from Electric_Vehicle_Charger.tsv; powers via
+#   level1_charger_power_kw / level2_charger_power_kw (default ResStock 1.6 / 5.69)
+ChargerAssignmentMode = Literal["fixed", "resstock"]
+CHARGER_ASSIGNMENT_MODES: Final[frozenset[str]] = frozenset({"fixed", "resstock"})
 
 # Outdoor-temp adjustment applied to discharge kWh (ResStock / OpenStudio-HPXML curve).
 TemperatureAdjustmentMode = Literal["none", "resstock"]
@@ -105,6 +117,8 @@ class EVDemandConfig:
         / "resstock_ev_reference"
         / "resstock_autonomie_2022_vehicle_params.csv"
     )
+    # Required when charger_assignment=resstock; ignored for fixed.
+    ev_charger_path: str | None = None
     output_dir: Path | None = None
     # ResStock OEDI weather CSVs named ``{station}.csv`` (required when
     # temperature_adjustment=resstock; ignored otherwise).
@@ -116,7 +130,8 @@ class EVDemandConfig:
     random_state: int = 42
     # Required when ev_assignment=pums_vehicles; ignored for resstock_adoption.
     max_vehicles: int | None = None
-    # 0–100 keeps the full NHTS pool; tighten (e.g. 10–90) via YAML to drop outliers.
+    # Applied in load_nhts_data: keep trip profiles whose daily miles fall in [low, high].
+    # 0–100 = full pool; e.g. 0–95 keeps empties and drops the heaviest ~5% of survey days.
     nhts_daily_miles_percentile_low: float = 0.0
     nhts_daily_miles_percentile_high: float = 100.0
 
@@ -143,12 +158,21 @@ class EVDemandConfig:
     upload_s3: bool = False
 
     # Charging — strategy-specific knobs are required only for the strategy that uses them:
-    #   immediate: charger_power_kw (+ optional initial_soc_kwh)
-    #   off_peak: + peak_clock_hours, soc_min_fraction, soc_safety_buffer_fraction
-    #   off_peak_immediate: + peak_clock_hours (+ optional allow_emergency_peak_charging)
-    #   cost_minimizing: + prices (one of the three sources) and shed_load_penalty_usd_per_kwh
+    #   immediate / off_peak / …: see _validate_charging_strategy_inputs
+    # Charger power:
+    #   charger_assignment=fixed → charger_power_kw (defaults to 7.2 if omitted);
+    #     level1/level2_charger_power_kw ignored
+    #   charger_assignment=resstock → sample L1 vs L2 from TSV; powers from
+    #     level1_charger_power_kw / level2_charger_power_kw (default ResStock 1.6 / 5.69);
+    #     charger_power_kw ignored
     charging_strategy: ChargingStrategy = "immediate"
-    charger_power_kw: float = DEFAULT_LEVEL2_CHARGER_KW
+    # fixed: use charger_power_kw for every EV; resstock: sample L1/L2 from TSV.
+    charger_assignment: ChargerAssignmentMode = "fixed"
+    # Global charger kW when charger_assignment=fixed; None when resstock (per-vehicle).
+    charger_power_kw: float | None = None
+    # Per-level rated powers when charger_assignment=resstock (None → ResStock defaults).
+    level1_charger_power_kw: float | None = None
+    level2_charger_power_kw: float | None = None
     # None = each vehicle starts at full battery capacity.
     initial_soc_kwh: float | None = None
     # off_peak only
@@ -176,6 +200,11 @@ class EVDemandConfig:
             raise ValueError(
                 f"ev_assignment must be one of {sorted(EV_ASSIGNMENT_MODES)}; "
                 f"got {self.ev_assignment!r}"
+            )
+        if self.charger_assignment not in CHARGER_ASSIGNMENT_MODES:
+            raise ValueError(
+                f"charger_assignment must be one of {sorted(CHARGER_ASSIGNMENT_MODES)}; "
+                f"got {self.charger_assignment!r}"
             )
         if self.temperature_adjustment not in TEMPERATURE_ADJUSTMENT_MODES:
             raise ValueError(
@@ -229,6 +258,20 @@ class EVDemandConfig:
                     "paths.pums_path is ignored when ev_assignment=resstock_adoption"
                 )
 
+        # Charger path: only required for resstock L1/L2 sampling.
+        if self.charger_assignment == "resstock":
+            if self.ev_charger_path is None:
+                self.ev_charger_path = str(
+                    EV_DATA_DIR
+                    / "inputs"
+                    / "resstock_ev_reference"
+                    / "Electric_Vehicle_Charger.tsv"
+                )
+        elif self.ev_charger_path is not None:
+            logging.warning(
+                "paths.ev_charger_path is ignored when charger_assignment=fixed"
+            )
+
         if self.temperature_adjustment == "resstock":
             if self.weather_dir is None:
                 self.weather_dir = str(
@@ -256,8 +299,45 @@ class EVDemandConfig:
             raise ValueError(
                 f"capacity_buffer_fraction must be >= 0; got {self.capacity_buffer_fraction}"
             )
-        if self.charger_power_kw < 0:
-            raise ValueError(f"charger_power_kw must be >= 0; got {self.charger_power_kw}")
+
+        # Charger power is mode-gated:
+        #   fixed    → scalar charger_power_kw; ignore level1/level2 overrides
+        #   resstock → sample L1/L2; apply level1/level2_charger_power_kw (ResStock defaults)
+        if self.charger_assignment == "fixed":
+            if self.charger_power_kw is None:
+                # Preserve historical default for fixed-rate scenarios / unit tests.
+                self.charger_power_kw = DEFAULT_LEVEL2_CHARGER_KW
+            if self.charger_power_kw < 0:
+                raise ValueError(
+                    f"charger_power_kw must be >= 0; got {self.charger_power_kw}"
+                )
+            if self.level1_charger_power_kw is not None or self.level2_charger_power_kw is not None:
+                logging.warning(
+                    "level1_charger_power_kw / level2_charger_power_kw are ignored when "
+                    "charger_assignment=fixed (use charger_power_kw for the global rate)"
+                )
+                self.level1_charger_power_kw = None
+                self.level2_charger_power_kw = None
+        else:
+            if self.charger_power_kw is not None:
+                logging.warning(
+                    "charging.charger_power_kw=%s is ignored when charger_assignment=resstock "
+                    "(use level1_charger_power_kw / level2_charger_power_kw instead)",
+                    self.charger_power_kw,
+                )
+                self.charger_power_kw = None
+            if self.level1_charger_power_kw is None:
+                self.level1_charger_power_kw = RESSTOCK_LEVEL1_CHARGER_KW
+            if self.level2_charger_power_kw is None:
+                self.level2_charger_power_kw = RESSTOCK_LEVEL2_CHARGER_KW
+            if self.level1_charger_power_kw < 0:
+                raise ValueError(
+                    f"level1_charger_power_kw must be >= 0; got {self.level1_charger_power_kw}"
+                )
+            if self.level2_charger_power_kw < 0:
+                raise ValueError(
+                    f"level2_charger_power_kw must be >= 0; got {self.level2_charger_power_kw}"
+                )
 
         self._validate_charging_strategy_inputs()
 
@@ -596,6 +676,8 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
     # Coerce numeric scalars (YAML may leave scientific notation as strings).
     for key in (
         "charger_power_kw",
+        "level1_charger_power_kw",
+        "level2_charger_power_kw",
         "soc_min_fraction",
         "soc_safety_buffer_fraction",
         "shed_load_penalty_usd_per_kwh",
@@ -645,11 +727,12 @@ class EVDemandCalculator:
     Orchestrator for the EV demand pipeline.
 
     Constructs ``VehicleOwnershipModel``, ``EVAdoptionSampler``, ``EVBatteryAssigner``,
-    ``NHTSProfileSampler``, ``TripScheduleGenerator``, and ``ChargingSimulator``.
+    ``EVChargerAssigner``, ``NHTSProfileSampler``, ``TripScheduleGenerator``, and
+    ``ChargingSimulator``.
 
     Public API:
     - ``match_and_generate_trip_schedules()`` — EV assignment → NHTS profiles →
-      daily trip schedules → hourly duty miles → ResStock battery attrs
+      daily trip schedules → hourly duty miles → ResStock battery + charger attrs
     - ``generate_soc_schedules()`` — hourly SOC / charge / discharge from trips
       (reuses duty miles when passed)
     """
@@ -664,14 +747,13 @@ class EVDemandCalculator:
         end_date: datetime,
         ev_ownership_df: pl.DataFrame | None = None,
         pums_df: pl.DataFrame | None = None,
+        ev_charger_df: pl.DataFrame | None = None,
         *,
         ev_assignment: EvAssignmentMode = "resstock_adoption",
         max_vehicles: int | None = None,
         vehicle_ownership: VehicleOwnershipModel | None = None,
         random_state: int = 42,
         max_workers: int | None = None,
-        nhts_daily_miles_percentile_low: float = 0.0,
-        nhts_daily_miles_percentile_high: float = 100.0,
         min_trip_away_hours: int = DEFAULT_MIN_TRIP_AWAY_HOURS,
         max_departure_hour: int = DEFAULT_MAX_DEPARTURE_HOUR,
         max_arrival_hour: int = DEFAULT_MAX_ARRIVAL_HOUR,
@@ -679,6 +761,10 @@ class EVDemandCalculator:
         time_offset_probabilities: tuple[float, ...] = DEFAULT_TIME_OFFSET_PROBABILITIES,
         miles_noise_std_fraction: float = DEFAULT_MILES_NOISE_STD_FRACTION,
         capacity_buffer_fraction: float = DEFAULT_CAPACITY_BUFFER_FRACTION,
+        charger_assignment: ChargerAssignmentMode = "fixed",
+        charger_power_kw: float | None = None,
+        level1_charger_power_kw: float | None = None,
+        level2_charger_power_kw: float | None = None,
         temperature_adjustment: TemperatureAdjustmentMode = "none",
         weather_dir: str | Path | None = None,
         weather_map: pl.DataFrame | None = None,
@@ -699,13 +785,19 @@ class EVDemandCalculator:
             ev_ownership_df: NREL EV ownership lookup (required for ``resstock_adoption``)
             pums_df: PUMS data DataFrame (required when ``ev_assignment=pums_vehicles``
                 unless a fitted ``vehicle_ownership`` is passed)
+            ev_charger_df: ResStock charger L1/L2 lookup (required for ``charger_assignment=resstock``)
             ev_assignment: How to assign EV slots — ``pums_vehicles`` or ``resstock_adoption``
             max_vehicles: Cap for the PUMS vehicle-count model (required for ``pums_vehicles``)
             vehicle_ownership: Optional pre-fitted PUMS model (avoids refitting each batch)
             random_state: Random seed for reproducible results
             max_workers: Maximum number of worker threads for parallel execution (None = use all cores)
-            nhts_daily_miles_percentile_low: Lower percentile for NHTS daily-miles filter (0–100)
-            nhts_daily_miles_percentile_high: Upper percentile for NHTS daily-miles filter (0–100)
+            charger_assignment: ``fixed`` (global ``charger_power_kw``) or ``resstock`` (L1/L2 TSV)
+            charger_power_kw: Global charger kW when ``charger_assignment=fixed``; unused for
+                ``resstock`` (defaults to 7.2 when fixed and omitted)
+            level1_charger_power_kw: Level 1 kW when ``charger_assignment=resstock``
+                (default ResStock 1.6); unused for ``fixed``
+            level2_charger_power_kw: Level 2 kW when ``charger_assignment=resstock``
+                (default ResStock 5.69); unused for ``fixed``
             temperature_adjustment: When ``resstock``, battery sizing uses temp-scaled duty miles
             weather_dir: ResStock weather CSV directory (required for ``resstock`` temp adj)
             weather_map: Building → weather station map from ``load_all_input_data``
@@ -716,6 +808,11 @@ class EVDemandCalculator:
         if ev_assignment not in EV_ASSIGNMENT_MODES:
             raise ValueError(
                 f"ev_assignment must be one of {sorted(EV_ASSIGNMENT_MODES)}; got {ev_assignment!r}"
+            )
+        if charger_assignment not in CHARGER_ASSIGNMENT_MODES:
+            raise ValueError(
+                f"charger_assignment must be one of {sorted(CHARGER_ASSIGNMENT_MODES)}; "
+                f"got {charger_assignment!r}"
             )
         if ev_assignment == "pums_vehicles":
             if max_vehicles is None:
@@ -729,6 +826,42 @@ class EVDemandCalculator:
             raise ValueError(
                 "ev_ownership_df is required when ev_assignment=resstock_adoption"
             )
+        if charger_assignment == "resstock" and ev_charger_df is None:
+            raise ValueError(
+                "ev_charger_df is required when charger_assignment=resstock"
+            )
+        # Resolve fixed-rate power once; resstock leaves this None (per-vehicle attrs).
+        if charger_assignment == "fixed":
+            if charger_power_kw is None:
+                charger_power_kw = DEFAULT_LEVEL2_CHARGER_KW
+            if charger_power_kw < 0:
+                raise ValueError(f"charger_power_kw must be non-negative, got {charger_power_kw}")
+            if level1_charger_power_kw is not None or level2_charger_power_kw is not None:
+                logging.warning(
+                    "level1_charger_power_kw / level2_charger_power_kw are ignored when "
+                    "charger_assignment=fixed"
+                )
+                level1_charger_power_kw = None
+                level2_charger_power_kw = None
+        else:
+            if charger_power_kw is not None:
+                logging.warning(
+                    "charger_power_kw=%s is ignored when charger_assignment=resstock",
+                    charger_power_kw,
+                )
+                charger_power_kw = None
+            if level1_charger_power_kw is None:
+                level1_charger_power_kw = RESSTOCK_LEVEL1_CHARGER_KW
+            if level2_charger_power_kw is None:
+                level2_charger_power_kw = RESSTOCK_LEVEL2_CHARGER_KW
+            if level1_charger_power_kw < 0:
+                raise ValueError(
+                    f"level1_charger_power_kw must be non-negative, got {level1_charger_power_kw}"
+                )
+            if level2_charger_power_kw < 0:
+                raise ValueError(
+                    f"level2_charger_power_kw must be non-negative, got {level2_charger_power_kw}"
+                )
         match_on_vehicles = ev_assignment == "pums_vehicles"
         # Cap used only for NHTS household-fleet bucketing (tier-1 keys). Adoption mode
         # does not match on vehicles, so the default of 2 is unused for matching but
@@ -743,6 +876,7 @@ class EVDemandCalculator:
         self.ev_ownership_df = ev_ownership_df
         self.ev_battery_df = ev_battery_df
         self.ev_autonomie_df = ev_autonomie_df
+        self.ev_charger_df = ev_charger_df
         self.start_date = start_date
         self.end_date = end_date
         self.ev_assignment = ev_assignment
@@ -750,6 +884,10 @@ class EVDemandCalculator:
         self.match_on_vehicles = match_on_vehicles
         self.random_state = random_state
         self.max_workers = max_workers
+        self.charger_assignment = charger_assignment
+        self.charger_power_kw = charger_power_kw
+        self.level1_charger_power_kw = level1_charger_power_kw
+        self.level2_charger_power_kw = level2_charger_power_kw
 
         # Pipeline components.
         if vehicle_ownership is not None:
@@ -779,13 +917,23 @@ class EVDemandCalculator:
             autonomie_params=ev_autonomie_df,
             random_state=random_state,
         )
+        # Optional ResStock L1/L2 sampler; None when charger_assignment=fixed.
+        self.charger_assigner: EVChargerAssigner | None = None
+        if charger_assignment == "resstock":
+            assert ev_charger_df is not None  # validated above
+            assert level1_charger_power_kw is not None  # resolved above
+            assert level2_charger_power_kw is not None
+            self.charger_assigner = EVChargerAssigner(
+                charger_lookup=ev_charger_df,
+                random_state=random_state,
+                level1_power_kw=level1_charger_power_kw,
+                level2_power_kw=level2_charger_power_kw,
+            )
         self.nhts_sampler = NHTSProfileSampler(
             nhts_df=nhts_df,
             max_vehicles=nhts_max_vehicles,
             match_on_vehicles=match_on_vehicles,
             random_state=random_state,
-            nhts_daily_miles_percentile_low=nhts_daily_miles_percentile_low,
-            nhts_daily_miles_percentile_high=nhts_daily_miles_percentile_high,
         )
         self.trip_schedule_generator = TripScheduleGenerator(
             start_date=start_date,
@@ -823,6 +971,7 @@ class EVDemandCalculator:
         ev_autonomie_df: pl.DataFrame,
         ev_ownership_df: pl.DataFrame | None = None,
         pums_df: pl.DataFrame | None = None,
+        ev_charger_df: pl.DataFrame | None = None,
         vehicle_ownership: VehicleOwnershipModel | None = None,
         weather_map: pl.DataFrame | None = None,
         station_temps: dict[str, pl.DataFrame] | None = None,
@@ -839,13 +988,12 @@ class EVDemandCalculator:
             end_date=config.end_date,
             ev_ownership_df=ev_ownership_df,
             pums_df=pums_df,
+            ev_charger_df=ev_charger_df,
             ev_assignment=config.ev_assignment,
             max_vehicles=config.max_vehicles,
             vehicle_ownership=vehicle_ownership,
             random_state=config.random_state,
             max_workers=config.max_workers,
-            nhts_daily_miles_percentile_low=config.nhts_daily_miles_percentile_low,
-            nhts_daily_miles_percentile_high=config.nhts_daily_miles_percentile_high,
             min_trip_away_hours=config.min_trip_away_hours,
             max_departure_hour=config.max_departure_hour,
             max_arrival_hour=config.max_arrival_hour,
@@ -853,6 +1001,10 @@ class EVDemandCalculator:
             time_offset_probabilities=config.time_offset_probabilities,
             miles_noise_std_fraction=config.miles_noise_std_fraction,
             capacity_buffer_fraction=config.capacity_buffer_fraction,
+            charger_assignment=config.charger_assignment,
+            charger_power_kw=config.charger_power_kw,
+            level1_charger_power_kw=config.level1_charger_power_kw,
+            level2_charger_power_kw=config.level2_charger_power_kw,
             temperature_adjustment=config.temperature_adjustment,
             weather_dir=config.weather_dir,
             weather_map=weather_map,
@@ -987,7 +1139,79 @@ class EVDemandCalculator:
             "temperature-scaled" if resolved_temps is not None else "unscaled",
         )
 
+        # Attach per-vehicle charger level / kW onto the same attribute frame.
+        ev_attributes = self._assign_chargers(ev_attributes)
+
         return trip_schedules, ev_attributes, hourly_temp_scaled_miles
+
+    def _assign_chargers(self, ev_attributes: pl.DataFrame) -> pl.DataFrame:
+        """Attach ``charger_level`` and ``charger_power_kw`` to each EV attribute row.
+
+        - ``fixed``: broadcast ``self.charger_power_kw`` (legacy single-rate path).
+        - ``resstock``: join metadata FPL / building type / tenure and sample L1 vs L2
+          from ``Electric_Vehicle_Charger.tsv``; powers from ``level1/level2_charger_power_kw``.
+
+        Args:
+            ev_attributes: DataFrame with ``bldg_id`` and ``vehicle_id`` columns.
+
+        Returns:
+            DataFrame with ``charger_level`` and ``charger_power_kw`` columns.
+        """
+        if ev_attributes.is_empty():
+            return ev_attributes.with_columns(
+                pl.lit(None, dtype=pl.Utf8).alias("charger_level"),
+                pl.lit(None, dtype=pl.Float64).alias("charger_power_kw"),
+            )
+
+        if self.charger_assignment == "fixed":
+            # Scenario override: every EV uses the config scalar (e.g. 7.2 kW).
+            assert self.charger_power_kw is not None  # validated in __init__ / config
+            logging.info(
+                "Assigning fixed charger power %.3f kW to %s EV(s)",
+                self.charger_power_kw,
+                ev_attributes.height,
+            )
+            return ev_attributes.with_columns(
+                pl.lit("fixed").alias("charger_level"),
+                pl.lit(self.charger_power_kw).alias("charger_power_kw"),
+            )
+
+        # ResStock path: need demographic join keys from building metadata.
+        assert self.charger_assigner is not None
+        meta_keys = {"bldg_id", "fpl", "building_type", "tenure"}
+        missing_meta = meta_keys - set(self.metadata_df.columns)
+        if missing_meta:
+            raise ValueError(
+                "metadata_df missing columns required for charger assignment: "
+                + ", ".join(sorted(missing_meta))
+            )
+
+        vehicles_with_meta = ev_attributes.select("bldg_id", "vehicle_id").join(
+            self.metadata_df.select("bldg_id", "fpl", "building_type", "tenure"),
+            on="bldg_id",
+            how="left",
+        )
+        # Fail if any EV building is missing demographics (should not happen post load_metadata).
+        null_meta = vehicles_with_meta.filter(
+            pl.col("fpl").is_null()
+            | pl.col("building_type").is_null()
+            | pl.col("tenure").is_null()
+        )
+        if null_meta.height > 0:
+            sample_ids = null_meta.get_column("bldg_id").head(5).to_list()
+            raise ValueError(
+                f"Missing fpl/building_type/tenure for {null_meta.height} EV building(s) "
+                f"(e.g. bldg_id={sample_ids})"
+            )
+
+        charger_attrs = self.charger_assigner.assign(vehicles_with_meta)
+        logging.info(
+            "Assigned ResStock L1/L2 chargers for %s EV(s): Level 1=%s, Level 2=%s",
+            charger_attrs.height,
+            (charger_attrs["charger_level"] == "Level 1").sum(),
+            (charger_attrs["charger_level"] == "Level 2").sum(),
+        )
+        return ev_attributes.join(charger_attrs, on=["bldg_id", "vehicle_id"], how="left")
 
     def _assign_ev_slots(self) -> pl.DataFrame:
         """Assign a ``vehicles`` column (EV slot count) according to ``ev_assignment``."""
@@ -1015,7 +1239,7 @@ class EVDemandCalculator:
         vehicle_keys: Iterable[tuple[str | int, int]] | None = None,
         hours_base: pl.DataFrame | None = None,
         presence_by_vehicle: dict[tuple[str | int, int], pl.DataFrame] | None = None,
-        charger_power_kw: float = DEFAULT_LEVEL2_CHARGER_KW,
+        charger_power_kw: float | None = DEFAULT_LEVEL2_CHARGER_KW,
         initial_soc_kwh: float | None = None,
         charging_strategy: ChargingStrategy = "immediate",
         hourly_price_usd_per_kwh: np.ndarray | None = None,
@@ -1031,15 +1255,27 @@ class EVDemandCalculator:
 
         Pass ``hourly_temp_scaled_miles`` from ``match_and_generate_trip_schedules`` to
         avoid recomputing the expand + temperature scale for discharge.
+
+        ``charger_power_kw`` is a fallback when ``ev_attributes`` lacks a per-vehicle
+        ``charger_power_kw`` column. Pipeline runs with ``charger_assignment=resstock``
+        attach that column and may omit this argument (or pass ``None``).
         """
         if ev_attributes.is_empty():
             raise ValueError("ev_attributes must contain at least one vehicle row")
+        # ev_attributes is the authoritative EV slot list; trip_schedules omits vehicles
+        # matched to empty NHTS templates. Default to the slot list so a never-driven EV
+        # still gets a full-year at-home, zero-discharge schedule instead of vanishing.
+        if vehicle_keys is None:
+            vehicle_keys = list(
+                ev_attributes.select("bldg_id", "vehicle_id").unique().iter_rows()
+            )
         return self.charging_simulator.generate_soc(
             trip_schedules,
             vehicle_keys=vehicle_keys,
             hours_base=hours_base,
             presence_by_vehicle=presence_by_vehicle,
             ev_attributes=ev_attributes,
+            # None when attrs already carry per-vehicle charger_power_kw (resstock).
             charger_power_kw=charger_power_kw,
             initial_soc_kwh=initial_soc_kwh,
             charging_strategy=charging_strategy,
@@ -1137,6 +1373,7 @@ def main():
     ev_ownership_df = inputs.ev_ownership_df
     ev_battery_df = inputs.ev_battery_df
     ev_autonomie_df = inputs.ev_autonomie_df
+    ev_charger_df = inputs.ev_charger_df
     weather_map = inputs.weather_map
     station_temps = inputs.station_temps
 
@@ -1148,7 +1385,17 @@ def main():
         print(f"Loaded EV ownership lookup: {ev_ownership_df.height:,} rows")
     print(f"Loaded EV battery options: {ev_battery_df.height:,} rows")
     print(f"Loaded Autonomie vehicle params: {ev_autonomie_df.height:,} rows")
+    if ev_charger_df is not None:
+        print(f"Loaded EV charger lookup (Yes-ownership rows): {ev_charger_df.height:,} rows")
     print(f"EV assignment mode: {config.ev_assignment}")
+    print(f"Charger assignment mode: {config.charger_assignment}")
+    if config.charger_assignment == "fixed":
+        print(f"Fixed charger power: {config.charger_power_kw} kW")
+    else:
+        print(
+            f"ResStock chargers: Level 1 = {config.level1_charger_power_kw} kW, "
+            f"Level 2 = {config.level2_charger_power_kw} kW"
+        )
     if config.ev_assignment == "pums_vehicles":
         print(f"PUMS max_vehicles: {config.max_vehicles} (NHTS match_on_vehicles=True)")
     else:
@@ -1219,6 +1466,7 @@ def main():
             ev_ownership_df=ev_ownership_df,
             ev_battery_df=ev_battery_df,
             ev_autonomie_df=ev_autonomie_df,
+            ev_charger_df=ev_charger_df,
             vehicle_ownership=fitted_vehicle_ownership,
             weather_map=weather_map,
             station_temps=station_temps,
@@ -1229,12 +1477,15 @@ def main():
             calculator.match_and_generate_trip_schedules(hours_base=hours_base)
         )
         soc_kwargs: dict[str, Any] = {
-            "charger_power_kw": config.charger_power_kw,
             "charging_strategy": config.charging_strategy,
             "initial_soc_kwh": config.initial_soc_kwh,
             "hours_base": hours_base,
             "hourly_temp_scaled_miles": batch_hourly_duty_miles,
         }
+        # Fixed mode: pass global kW. Resstock mode: omit — ev_attributes already has
+        # per-vehicle charger_power_kw from EVChargerAssigner.
+        if config.charger_power_kw is not None:
+            soc_kwargs["charger_power_kw"] = config.charger_power_kw
         # Temps only needed if duty miles were not precomputed (legacy / ad-hoc callers).
         # With hourly_temp_scaled_miles set, generate_soc skips the second temp pass.
         if config.temperature_adjustment == "resstock" and batch_hourly_duty_miles.is_empty():

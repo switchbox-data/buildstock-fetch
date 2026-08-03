@@ -18,6 +18,7 @@ from typing import Final, Literal
 import cvxpy as cp
 import numpy as np
 import polars as pl
+from cvxpy.error import SolverError
 
 ChargingStrategy = Literal["immediate", "cost_minimizing", "off_peak", "off_peak_immediate"]
 
@@ -27,6 +28,10 @@ DEFAULT_SOC_SAFETY_BUFFER_FRACTION = 0.2  # extra SOC buffer above daily trip en
 # Default shed penalty when none is passed: high enough that shedding is avoided unless
 # required for LP feasibility (e.g. trip draw exceeds available SOC with no home charging).
 DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH = 1e6
+# Solvers tried in order for the cost-minimizing LP. CLARABEL (interior point) is cvxpy's
+# default and fastest here, but struggles on near-degenerate schedules (few or no drive
+# hours pin the shed variables to a zero-width box); HIGHS/SCS pick up those cases.
+COST_MIN_LP_SOLVERS: Final[tuple[str, ...]] = ("CLARABEL", "HIGHS", "SCS")
 # How home charging is scheduled before SOC is derived from discharge + charge.
 
 def build_hourly_timestamps(start_date: datetime, end_date: datetime) -> pl.DataFrame:
@@ -488,6 +493,10 @@ def schedule_cost_minimizing_charging(
     ``shed_load_penalty_usd_per_kwh`` is ``None``, a very large default penalty is
     used so shedding only occurs when the LP would otherwise be infeasible.
 
+    Vehicles with no trip draw at all skip the LP and return all-zero schedules. Because
+    the LP is always feasible, a solver error signals numerical trouble rather than an
+    infeasible model, so solvers in ``COST_MIN_LP_SOLVERS`` are tried in order.
+
     Discharging and charging are mutually exclusive in this model: trip draw is
     assigned to away hours where ``x_t^CB = 0``, so ``s_t >= x_t^DB - x_t^SL`` follows from
     ``s_{t+1} >= 0`` and the transition equalities without an extra constraint.
@@ -529,6 +538,14 @@ def schedule_cost_minimizing_charging(
     max_charge = np.where(at_home, charger_power_kw, 0.0)  # cannot charge while away
     s_0 = float(initial_soc_kwh)
 
+    # A vehicle that never draws energy (idle inventory vehicle matched to empty NHTS
+    # templates, or a template whose legs all report 0 miles) needs no charge: prices are
+    # non-negative and there is no terminal SOC requirement, so charge = shed = 0 is
+    # optimal. Short-circuit instead of handing the solver an all-degenerate LP where
+    # every shed variable is pinned to a zero-width box.
+    if not np.any(discharge > 0.0):
+        return np.zeros(num_hours, dtype=np.float64), np.zeros(num_hours, dtype=np.float64)
+
     # Shed penalty: huge default ⇒ shed only when the LP would otherwise be infeasible.
     if shed_load_penalty_usd_per_kwh is None:
         shed_penalties = np.full(num_hours, DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH, dtype=np.float64)
@@ -565,13 +582,29 @@ def schedule_cost_minimizing_charging(
     # Minimize energy cost + shed penalties (perfect foresight).
     objective = prices @ charge + shed_penalties @ shed
     problem = cp.Problem(cp.Minimize(objective), constraints)
-    problem.solve()
 
-    if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
-        raise RuntimeError(f"Cost-minimizing charging LP failed: {problem.status}")
+    # The LP is always feasible (shedding covers any trip draw), so a solver error means
+    # numerical trouble rather than an infeasible model — retry with a different solver.
+    failures: list[str] = []
+    for solver in COST_MIN_LP_SOLVERS:
+        if solver not in cp.installed_solvers():
+            continue
+        try:
+            problem.solve(solver=solver)
+        except SolverError as exc:
+            failures.append(f"{solver}: {exc}")
+            continue
+        if problem.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
+            break
+        failures.append(f"{solver}: {problem.status}")
+    else:
+        raise RuntimeError(
+            "Cost-minimizing charging LP failed on all solvers: " + "; ".join(failures)
+        )
 
-    charge_kwh = np.asarray(charge.value, dtype=np.float64).reshape(-1)
-    shed_load_kwh = np.asarray(shed.value, dtype=np.float64).reshape(-1)
+    # Clip solver round-off (e.g. -1e-12) so downstream sums stay physical.
+    charge_kwh = np.clip(np.asarray(charge.value, dtype=np.float64).reshape(-1), 0.0, None)
+    shed_load_kwh = np.clip(np.asarray(shed.value, dtype=np.float64).reshape(-1), 0.0, None)
     return charge_kwh, shed_load_kwh
 
 

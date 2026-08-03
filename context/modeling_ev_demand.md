@@ -43,7 +43,16 @@ We plan to develop methods to assign these attributes with more granularity, but
 
 In this step, we use data from the 2022 National Household Travel Survey. Participants were asked to keep track of all trips over a 24 hour period from 4am one day to 3:59am the next day (see the User Guide: https://nhts.ornl.gov/media/2022/doc/2022%20NextGen%20NHTS%20User's%20Guide%20V201_PubUse.pdf). For each trip, they catalog start time, end time, and miles traveled. We currently assume that all trips start and end at home, though future work should also categorize start and end destinations and whether the vehicle is at home, work, school, etc. This data (or at least some of it) should also be logged with the rest of the NHTS dataset.
 
-We first filter the NHTS data for the state in our chosen ResStock sample. Then, for each household with an EV, we match one NHTS weekday daily trip profile and one NHTS weekend daily trip profile based on income buckets, the number of household occupants, and the number of vehicles. When an exact match is not available across all three categories, we match based on just income and the number of occupants or just based on income.
+We first filter the NHTS data for the state's census division, starting from
+**vehicle-owning households** and their light-duty inventory vehicles (not only
+vehicles that drove on the survey day). Idle vehicles become empty day templates
+(home all day, 0 miles). For each household with an EV, we match one NHTS
+weekday template and one weekend template based on income buckets, household
+occupants, and urban/rural status: draw a demographically similar NHTS
+**household**, then pick one of its inventory vehicles (which may be empty).
+When an exact match is not available across all categories, we fall back through
+urban + occupants, urban + income, then income alone. Vehicle-count matching is
+used only under ``ev_assignment=pums_vehicles``.
 
 We model trips with an hourly level of granularity, so we map the start and end times (in minutes) of each logged trip in the NHTS dataset as follows:
 - the departure hour is the hour of the trip start time (e.g., 9:15am gets departure hour = 9am, 10:50am gets departure hour 10am)
@@ -56,7 +65,11 @@ These clock hours are then placed on an NHTS **travel day** (4am → 3:59am next
 Notes:
 - If we assume that all households have at most one EV, then we should not be matching trip profiles based on the number of vehicles (this is fixed, now there is the match_on_vehicles flag)
 - Right now code assumes if multiple vehicles, they are matched in the same 'tier'
-- as a pre-processing step (or should this be done in load_nhts_data?), we recommend removing the bottom and top 10% (or 5%?) trip profiles in terms of daily miles traveled
+- as a pre-processing step in ``load_nhts_data``, we drop trip profiles whose
+  **daily miles** fall outside a configurable percentile band (e.g. 0–95). The
+  unit is one survey vehicle-day (weekday or weekend template), not the max
+  across day types for a vehicle. Empty (0-mi) profiles stay when the lower
+  cut is 0.
 
 ## 4. Simulating hourly travel for a given period of time
 
