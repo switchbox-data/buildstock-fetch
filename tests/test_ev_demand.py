@@ -1747,7 +1747,16 @@ def test_match_and_generate_trip_schedules(sample_evs, sample_profiles, generate
     # Battery attributes assigned for the EV slots present after sample
     # (mock sets evs=1 on all 3 metadata buildings → 3 attribute rows).
     assert ev_attributes.height == 3
-    assert {"battery_capacity_kwh", "kwh_per_mile", "ev_option_name"} <= set(ev_attributes.columns)
+    assert {
+        "battery_capacity_kwh",
+        "kwh_per_mile",
+        "ev_option_name",
+        "charge_at_home_bin",
+        "fraction_charged_home",
+    } <= set(ev_attributes.columns)
+    # Default home_charging_fraction_assignment=none → 100% home.
+    assert ev_attributes["fraction_charged_home"].to_list() == [1.0, 1.0, 1.0]
+    assert ev_attributes["charge_at_home_bin"].to_list() == ["100%", "100%", "100%"]
 
     # Verify mock calls
     sample_evs.assert_called_once()
@@ -2056,6 +2065,7 @@ charging:
     assert config.min_trip_away_hours == 1
     assert config.miles_noise_std_fraction == 0.1
     assert config.capacity_buffer_fraction == 0.2
+    assert config.charger_buffer_fraction == 0.2
     assert config.soc_min_fraction is None
     assert config.peak_clock_hours is None
     assert config.flat_price_usd_per_kwh is None
@@ -2065,6 +2075,31 @@ charging:
     assert config.pums_path is None
     assert config.weather_dir is None
     assert config.temperature_adjustment == "none"
+    assert config.home_charging_fraction_assignment == "none"
+    assert config.ev_charge_at_home_path is None
+
+
+def test_load_ev_demand_config_resstock_home_charging_fraction(tmp_path):
+    """home_charging_fraction_assignment=resstock fills the Charge At Home TSV path."""
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "resstock_home_charging.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01T04:00:00
+end_date: 2024-01-03T03:00:00
+charging:
+  charging_strategy: immediate
+home_charging:
+  home_charging_fraction_assignment: resstock
+"""
+    )
+    config = load_ev_demand_config(path)
+    assert config.home_charging_fraction_assignment == "resstock"
+    assert config.ev_charge_at_home_path is not None
+    assert config.ev_charge_at_home_path.endswith("Electric_Vehicle_Charge_At_Home.tsv")
 
 
 def test_load_ev_demand_config_resstock_chargers_omit_power(tmp_path):
@@ -2092,8 +2127,50 @@ charging:
     assert config.charger_power_kw is None
     assert config.level1_charger_power_kw == RESSTOCK_LEVEL1_CHARGER_KW
     assert config.level2_charger_power_kw == RESSTOCK_LEVEL2_CHARGER_KW
+    assert config.charger_buffer_fraction == 0.2
     assert config.ev_charger_path is not None
     assert config.ev_charger_path.endswith("Electric_Vehicle_Charger.tsv")
+
+
+def test_load_ev_demand_config_resstock_custom_charger_buffer(tmp_path):
+    """charger_buffer_fraction is configurable under charging: for resstock."""
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "resstock_charger_buffer.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01T04:00:00
+end_date: 2024-01-03T03:00:00
+charging:
+  charging_strategy: immediate
+  charger_assignment: resstock
+  charger_buffer_fraction: 0.15
+"""
+    )
+    config = load_ev_demand_config(path)
+    assert config.charger_buffer_fraction == 0.15
+
+
+def test_load_ev_demand_config_rejects_negative_charger_buffer(tmp_path):
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "bad_charger_buffer.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01T04:00:00
+end_date: 2024-01-03T03:00:00
+charging:
+  charging_strategy: immediate
+  charger_assignment: resstock
+  charger_buffer_fraction: -0.1
+"""
+    )
+    with pytest.raises(ValueError, match="charger_buffer_fraction"):
+        load_ev_demand_config(path)
 
 
 def test_load_ev_demand_config_resstock_ignores_charger_power_kw(tmp_path):

@@ -27,6 +27,7 @@ __all__ = [
     "load_all_input_data",
     "load_ev_autonomie_params",
     "load_ev_battery_lookup",
+    "load_ev_charge_at_home_lookup",
     "load_ev_charger_lookup",
     "load_ev_ownership_lookup",
     "load_hourly_temp_f_for_buildings",
@@ -1081,6 +1082,79 @@ def load_ev_charger_lookup(ev_charger_path: str | Path) -> pl.DataFrame:
     return charger_lookup
 
 
+def load_ev_charge_at_home_lookup(ev_charge_at_home_path: str | Path) -> pl.DataFrame:
+    """
+    Load ResStock home-charging fraction bin probabilities by FPL × building type.
+
+    Source: ``Electric_Vehicle_Charge_At_Home.tsv`` (RECS 2020 via Speake et al. 2025
+    §3.5). Six bins map to ``ev_fraction_charged_home`` midpoints in
+    ``EVHomeChargingFractionAssigner``.
+
+    Args:
+        ev_charge_at_home_path: Path to the charge-at-home housing-characteristic TSV
+
+    Returns:
+        DataFrame with ``fpl``, ``building_type``, and ``p_0_19`` … ``p_100``.
+    """
+    path = Path(ev_charge_at_home_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"EV charge-at-home lookup not found: {path}. "
+            "Run `just download-resstock-ev-reference` to download the data."
+        )
+
+    # Explicit Float64 overrides: early rows often store 0/1 as ints while later
+    # cells are fractional probabilities (same pitfall as the charger TSV).
+    charge_at_home_lookup = (
+        pl.read_csv(
+            path,
+            separator="\t",
+            comment_prefix="#",
+            schema_overrides={
+                "Option=0-19%": pl.Float64,
+                "Option=20-39%": pl.Float64,
+                "Option=40-59%": pl.Float64,
+                "Option=60-79%": pl.Float64,
+                "Option=80-99%": pl.Float64,
+                "Option=100%": pl.Float64,
+            },
+        )
+        # Rename ResStock Dependency=/Option= headers to assigner-facing keys.
+        .rename({
+            "Dependency=Federal Poverty Level": "fpl",
+            "Dependency=Geometry Building Type RECS": "building_type",
+            "Option=0-19%": "p_0_19",
+            "Option=20-39%": "p_20_39",
+            "Option=40-59%": "p_40_59",
+            "Option=60-79%": "p_60_79",
+            "Option=80-99%": "p_80_99",
+            "Option=100%": "p_100",
+        })
+        .with_columns(
+            pl.col("p_0_19").cast(pl.Float64),
+            pl.col("p_20_39").cast(pl.Float64),
+            pl.col("p_40_59").cast(pl.Float64),
+            pl.col("p_60_79").cast(pl.Float64),
+            pl.col("p_80_99").cast(pl.Float64),
+            pl.col("p_100").cast(pl.Float64),
+        )
+        .select(
+            "fpl",
+            "building_type",
+            "p_0_19",
+            "p_20_39",
+            "p_40_59",
+            "p_60_79",
+            "p_80_99",
+            "p_100",
+        )
+    )
+
+    if charge_at_home_lookup.is_empty():
+        raise ValueError(f"No charge-at-home rows in {path}")
+    return charge_at_home_lookup
+
+
 def load_ev_autonomie_params(ev_autonomie_path: str | Path) -> pl.DataFrame:
     """
     Load Autonomie usable capacity and efficiency keyed by EV battery option name.
@@ -1142,6 +1216,8 @@ class EVDemandInputs:
     ev_ownership_df: pl.DataFrame | None = None
     # Present when charger_assignment=resstock.
     ev_charger_df: pl.DataFrame | None = None
+    # Present when home_charging_fraction_assignment=resstock.
+    ev_charge_at_home_df: pl.DataFrame | None = None
     # Present when temperature_adjustment=resstock.
     weather_map: pl.DataFrame | None = None
     # Station name → month/day/hour temps; shared across batches when preloaded.
@@ -1156,6 +1232,7 @@ def load_all_input_data(ev_demand_config: Any) -> EVDemandInputs:
     - ``pums_df`` only when ``ev_assignment=pums_vehicles``
     - ``ev_ownership_df`` only when ``ev_assignment=resstock_adoption``
     - ``ev_charger_df`` only when ``charger_assignment=resstock``
+    - ``ev_charge_at_home_df`` only when ``home_charging_fraction_assignment=resstock``
     - ``weather_map`` / ``station_temps`` only when ``temperature_adjustment=resstock``
       (station CSVs are preloaded for all metadata buildings so batches share the cache)
     """
@@ -1190,6 +1267,18 @@ def load_all_input_data(ev_demand_config: Any) -> EVDemandInputs:
             )
         ev_charger_df = load_ev_charger_lookup(ev_demand_config.ev_charger_path)
 
+    # Home-charging energy-share bins (FPL × building type); national.
+    ev_charge_at_home_df: pl.DataFrame | None = None
+    if ev_demand_config.home_charging_fraction_assignment == "resstock":
+        if not ev_demand_config.ev_charge_at_home_path:
+            raise ValueError(
+                "ev_charge_at_home_path is required when "
+                "home_charging_fraction_assignment=resstock"
+            )
+        ev_charge_at_home_df = load_ev_charge_at_home_lookup(
+            ev_demand_config.ev_charge_at_home_path
+        )
+
     weather_map: pl.DataFrame | None = None
     station_temps: dict[str, pl.DataFrame] | None = None
     if ev_demand_config.temperature_adjustment == "resstock":
@@ -1219,6 +1308,7 @@ def load_all_input_data(ev_demand_config: Any) -> EVDemandInputs:
         pums_df=pums_df,
         ev_ownership_df=ev_ownership_df,
         ev_charger_df=ev_charger_df,
+        ev_charge_at_home_df=ev_charge_at_home_df,
         weather_map=weather_map,
         station_temps=station_temps,
     )

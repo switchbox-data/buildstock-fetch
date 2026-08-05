@@ -908,3 +908,69 @@ def compute_hourly_soc(
 
     return soc_kwh, soc_underflow
 
+
+def is_home_charging_soc_feasible(
+    at_home: np.ndarray,
+    discharge_kwh: np.ndarray,
+    *,
+    battery_capacity_kwh: float,
+    charger_power_kw: float,
+    initial_soc_kwh: float | None = None,
+    buffer_fraction: float = 0.0,
+) -> bool:
+    """
+    Return whether home charging at ``charger_power_kw`` can cover the trip schedule.
+
+    Uses perfect foresight of the full presence / discharge path. Immediate charging
+    maximizes SOC at every hour among home-only policies with the same power cap, so
+    underflow under immediate charging is necessary and sufficient for infeasibility
+    of *any* home charging schedule at that power.
+
+    ``buffer_fraction`` inflates every hour's discharge by ``(1 + buffer)`` for the
+    check (charger headroom analogous to battery ``capacity_buffer_fraction``).
+
+    Args:
+        at_home: Hourly home/away mask
+        discharge_kwh: Hourly trip draw (kWh)
+        battery_capacity_kwh: Pack size ``K^B`` (kWh)
+        charger_power_kw: Max home charge rate ``C^B`` (kW)
+        initial_soc_kwh: Start SOC; ``None`` → start full at ``battery_capacity_kwh``
+        buffer_fraction: Extra fraction of discharge the charger must cover
+
+    Returns:
+        True when immediate charging has no SOC underflow under buffered discharge
+    """
+    if buffer_fraction < 0:
+        raise ValueError(f"buffer_fraction must be >= 0, got {buffer_fraction}")
+    if charger_power_kw < 0:
+        raise ValueError(f"charger_power_kw must be >= 0, got {charger_power_kw}")
+    if battery_capacity_kwh < 0:
+        raise ValueError(f"battery_capacity_kwh must be >= 0, got {battery_capacity_kwh}")
+
+    start_soc = battery_capacity_kwh if initial_soc_kwh is None else float(initial_soc_kwh)
+    if not 0.0 <= start_soc <= battery_capacity_kwh + 1e-9:
+        raise ValueError(
+            f"initial_soc_kwh must be within [0, {battery_capacity_kwh}], got {start_soc}"
+        )
+
+    # Inflate trip energy by (1+buffer) so the charger must cover headroom, not just
+    # the raw discharge (same role as capacity_buffer_fraction for packs).
+    buffered_discharge = np.asarray(discharge_kwh, dtype=np.float64) * (1.0 + buffer_fraction)
+
+    # Immediate charging is SOC-maximal among home-only policies at this power, so
+    # underflow here ⇒ no feasible home schedule exists (perfect-foresight oracle).
+    charge_kwh = schedule_immediate_charging(
+        np.asarray(at_home, dtype=bool),
+        buffered_discharge,
+        battery_capacity_kwh=float(battery_capacity_kwh),
+        charger_power_kw=float(charger_power_kw),
+        initial_soc_kwh=start_soc,
+    )
+    # Recompute SOC to get per-hour underflow flags (schedule_* returns charge only).
+    _, soc_underflow = compute_hourly_soc(
+        buffered_discharge,
+        charge_kwh,
+        initial_soc_kwh=start_soc,
+    )
+    return not bool(np.any(soc_underflow))
+

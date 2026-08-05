@@ -22,6 +22,8 @@ paths:
   # ev_ownership_path: utils/EVs/ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Ownership.tsv
   # Only needed for charging.charger_assignment=resstock (default path if omitted):
   # ev_charger_path: utils/EVs/ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Charger.tsv
+  # Only needed for home_charging.home_charging_fraction_assignment=resstock:
+  # ev_charge_at_home_path: utils/EVs/ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Charge_At_Home.tsv
   # Only needed for temperature.temperature_adjustment=resstock:
   # weather_dir: utils/EVs/ev_data/inputs/res_2024_tmy3_2/weather/MD
 
@@ -67,6 +69,14 @@ temperature:
   temperature_adjustment: resstock
   # weather_dir: utils/EVs/ev_data/inputs/res_2024_tmy3_2/weather/MD
 
+home_charging:
+  # none — fraction_charged_home = 1.0 (all trip energy on the residential meter)
+  # resstock — sample RECS bins from Electric_Vehicle_Charge_At_Home.tsv (FPL ×
+  #            building type; Speake et al. 2025 §3.5). Scales home discharge /
+  #            charger SOC feasibility only; battery sizing stays on full duty.
+  home_charging_fraction_assignment: resstock
+  # ev_charge_at_home_path: utils/EVs/ev_data/inputs/resstock_ev_reference/Electric_Vehicle_Charge_At_Home.tsv
+
 pipeline:
   max_workers: 8
   batch_size: 20000
@@ -83,12 +93,16 @@ charging:
   #   fixed    — every EV uses charger_power_kw (defaults to 7.2 if omitted);
   #              level1/level2_charger_power_kw are ignored if set
   #   resstock — sample Level 1 vs Level 2 from Electric_Vehicle_Charger.tsv
-  #              (RECS 2020; Speake et al. 2025); rated powers from
-  #              level1_charger_power_kw / level2_charger_power_kw
+  #              (RECS 2020; Speake et al. 2025) among levels that cover the
+  #              trip schedule under perfect SOC foresight (immediate home
+  #              charging); rated powers from level1/level2_charger_power_kw
   #              (defaults: ResStock TRG 1.6 / 5.69 kW — L2 is ResStock's
   #              average observed 240 V draw, not a typical 32 A EVSE nameplate);
   #              charger_power_kw is ignored if set
   charger_assignment: resstock
+  # Feasible level must cover trip discharge × (1 + buffer) under perfect SOC
+  # foresight (ignored when charger_assignment=fixed).
+  charger_buffer_fraction: 0.2
   # Required only when charger_assignment=fixed (omit for resstock):
   # charger_power_kw: 7.2
   # Optional when charger_assignment=resstock (omit → ResStock defaults):

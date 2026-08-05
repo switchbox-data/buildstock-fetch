@@ -7,6 +7,7 @@ Fetches:
 - Electric_Vehicle_Ownership.tsv (conditional P(EV) by FPL / type / tenure / PUMA)
 - Electric_Vehicle_Battery.tsv (national BEV class × range option shares)
 - Electric_Vehicle_Charger.tsv (conditional L1/L2/None by ownership / FPL / type / tenure)
+- Electric_Vehicle_Charge_At_Home.tsv (conditional home-charging fraction by FPL / type)
 
     Also writes a small summary CSV of Autonomie 2022 vehicle parameters and the
     constant average speed used in ResStock (from NREL/TP-5500-93766 Table 208 and
@@ -22,17 +23,24 @@ from pathlib import Path
 
 import requests
 
-RESSTOCK_BASE = "https://raw.githubusercontent.com/NREL/resstock/develop"
-LOOKUP_URL = f"{RESSTOCK_BASE}/resources/options_lookup.tsv"
+# Housing-characteristic TSVs: NatLabRockies/resstock develop (canonical for this pipeline).
+# options_lookup still comes from NREL/resstock (same content on the fork).
+RESSTOCK_BASE = "https://raw.githubusercontent.com/NatLabRockies/resstock/develop"
+NREL_RESSTOCK_BASE = "https://raw.githubusercontent.com/NREL/resstock/develop"
+LOOKUP_URL = f"{NREL_RESSTOCK_BASE}/resources/options_lookup.tsv"
 EV_OWNERSHIP_URL = f"{RESSTOCK_BASE}/project_national/housing_characteristics/Electric%20Vehicle%20Ownership.tsv"
 # National BEV stock mix used by EVBatteryAssigner.
 EV_BATTERY_URL = (
     f"{RESSTOCK_BASE}/project_national/housing_characteristics/Electric%20Vehicle%20Battery.tsv"
 )
 # Conditional L1/L2 charger shares used by EVChargerAssigner (RECS 2020 EVCHRGTYPE).
-# Same file lives under NatLabRockies/resstock; NREL/resstock develop tracks it.
 EV_CHARGER_URL = (
     f"{RESSTOCK_BASE}/project_national/housing_characteristics/Electric%20Vehicle%20Charger.tsv"
+)
+# Home-charging energy share bins used by EVHomeChargingFractionAssigner (RECS 2020).
+EV_CHARGE_AT_HOME_URL = (
+    f"{RESSTOCK_BASE}/project_national/housing_characteristics/"
+    "Electric%20Vehicle%20Charge%20At%20Home.tsv"
 )
 # Dependency tables ResStock uses to assign FPL, tenure, and building type to each unit.
 # Not required for predict_num_EVs() (which only needs Electric_Vehicle_Ownership.tsv),
@@ -113,6 +121,8 @@ def download_resstock_ev_reference(output_dir: Path) -> dict[str, str]:
     ev_battery_text = _fetch_text(EV_BATTERY_URL)
     # Housing-characteristic charger L1/L2 shares (input for EVChargerAssigner).
     ev_charger_text = _fetch_text(EV_CHARGER_URL)
+    # Home-charging fraction bins by FPL × building type (Speake et al. 2025 §3.5).
+    ev_charge_at_home_text = _fetch_text(EV_CHARGE_AT_HOME_URL)
     # Housing-characteristic dependency tables (for reference / EDA)
     fpl_text = _fetch_text(FPL_URL)
     tenure_text = _fetch_text(TENURE_URL)
@@ -122,6 +132,7 @@ def download_resstock_ev_reference(output_dir: Path) -> dict[str, str]:
     ev_ownership_path = output_dir / "Electric_Vehicle_Ownership.tsv"
     ev_battery_path = output_dir / "Electric_Vehicle_Battery.tsv"
     ev_charger_path = output_dir / "Electric_Vehicle_Charger.tsv"
+    ev_charge_at_home_path = output_dir / "Electric_Vehicle_Charge_At_Home.tsv"
     fpl_path = output_dir / "Federal_Poverty_Level.tsv"
     tenure_path = output_dir / "Tenure.tsv"
     building_type_path = output_dir / "Geometry_Building_Type_RECS.tsv"
@@ -129,6 +140,7 @@ def download_resstock_ev_reference(output_dir: Path) -> dict[str, str]:
     ev_ownership_path.write_text(ev_ownership_text)
     ev_battery_path.write_text(ev_battery_text)
     ev_charger_path.write_text(ev_charger_text)
+    ev_charge_at_home_path.write_text(ev_charge_at_home_text)
     fpl_path.write_text(fpl_text)
     tenure_path.write_text(tenure_text)
     building_type_path.write_text(building_type_text)
@@ -163,6 +175,7 @@ def download_resstock_ev_reference(output_dir: Path) -> dict[str, str]:
         "Electric_Vehicle_Ownership.tsv": str(ev_ownership_path),
         "Electric_Vehicle_Battery.tsv": str(ev_battery_path),
         "Electric_Vehicle_Charger.tsv": str(ev_charger_path),
+        "Electric_Vehicle_Charge_At_Home.tsv": str(ev_charge_at_home_path),
         "Federal_Poverty_Level.tsv": str(fpl_path),
         "Tenure.tsv": str(tenure_path),
         "Geometry_Building_Type_RECS.tsv": str(building_type_path),

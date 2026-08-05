@@ -127,9 +127,11 @@ class ChargingSimulator:
         sizing and SOC discharge:
 
             discharge_kwh[h] = temp_scaled_miles[h] * kwh_per_mile
+                [* optional fraction_charged_home for residential-meter SOC]
 
         so we build temp-scaled miles **once**, assign packs from peak daily
-        totals, then multiply by the drawn ``kwh_per_mile`` (no second temp pass).
+        totals (full duty, unscaled by home fraction), then multiply by the
+        drawn ``kwh_per_mile`` and home-charging share (no second temp pass).
 
         When ``hourly_temp_f_by_bldg`` is ``None``, ``power_mult ≡ 1`` (raw miles).
 
@@ -291,11 +293,17 @@ class ChargingSimulator:
         hourly_temp_scaled_miles: pl.DataFrame,
         kwh_per_mile_by_vehicle: pl.DataFrame,
     ) -> pl.DataFrame:
-        """``discharge_kwh = temp_scaled_miles * kwh_per_mile`` (no temp recomputation).
+        """``discharge_kwh = temp_scaled_miles * kwh_per_mile * fraction_charged_home``.
+
+        ``fraction_charged_home`` is optional on ``kwh_per_mile_by_vehicle``; when
+        absent every vehicle defaults to 1.0 (all trip energy attributed to home).
+        Battery sizing should keep using unscaled duty miles — this scale is only
+        for residential-meter discharge / home SOC (Speake et al. 2025 §3.5).
 
         Args:
             hourly_temp_scaled_miles: From ``build_hourly_temp_scaled_miles``
-            kwh_per_mile_by_vehicle: ``bldg_id``, ``vehicle_id``, ``kwh_per_mile``
+            kwh_per_mile_by_vehicle: ``bldg_id``, ``vehicle_id``, ``kwh_per_mile``,
+                and optionally ``fraction_charged_home``
 
         Returns:
             ``bldg_id``, ``vehicle_id``, ``hour_index``, ``discharge_kwh``
@@ -323,8 +331,14 @@ class ChargingSimulator:
                 .agg(pl.col("temp_scaled_miles").sum())
             )
 
+        # Optional home-charging share; default 1.0 preserves legacy full-home behavior.
+        efficiency_cols = ["bldg_id", "vehicle_id", "kwh_per_mile"]
+        has_home_fraction = "fraction_charged_home" in kwh_per_mile_by_vehicle.columns
+        if has_home_fraction:
+            efficiency_cols.append("fraction_charged_home")
+
         joined = hourly.join(
-            kwh_per_mile_by_vehicle.select("bldg_id", "vehicle_id", "kwh_per_mile"),
+            kwh_per_mile_by_vehicle.select(efficiency_cols),
             on=["bldg_id", "vehicle_id"],
             how="left",
         )
@@ -339,12 +353,29 @@ class ChargingSimulator:
                 "ev_attributes missing kwh_per_mile for trip vehicle(s): "
                 + ", ".join(repr((row["bldg_id"], row["vehicle_id"])) for row in missing_keys)
             )
+        if has_home_fraction and joined["fraction_charged_home"].null_count() > 0:
+            missing_frac = (
+                joined.filter(pl.col("fraction_charged_home").is_null())
+                .select("bldg_id", "vehicle_id")
+                .unique()
+                .to_dicts()
+            )
+            raise ValueError(
+                "ev_attributes missing fraction_charged_home for trip vehicle(s): "
+                + ", ".join(repr((row["bldg_id"], row["vehicle_id"])) for row in missing_frac)
+            )
 
+        # Home-attributed discharge only; charger power is unchanged.
+        home_fraction = (
+            pl.col("fraction_charged_home") if has_home_fraction else pl.lit(1.0)
+        )
         return joined.select(
             "bldg_id",
             "vehicle_id",
             "hour_index",
-            (pl.col("temp_scaled_miles") * pl.col("kwh_per_mile")).alias("discharge_kwh"),
+            (
+                pl.col("temp_scaled_miles") * pl.col("kwh_per_mile") * home_fraction
+            ).alias("discharge_kwh"),
         )
 
     @staticmethod
@@ -588,9 +619,17 @@ class ChargingSimulator:
             "vehicle_id": [key[1] for key in attrs_lookup],
             "kwh_per_mile": [vals[1] for vals in attrs_lookup.values()],
         })
+        # Propagate home-charging share when present so residential discharge is scaled.
+        if "fraction_charged_home" in ev_attributes.columns:
+            kwh_per_mile_by_vehicle = kwh_per_mile_by_vehicle.join(
+                ev_attributes.select("bldg_id", "vehicle_id", "fraction_charged_home"),
+                on=["bldg_id", "vehicle_id"],
+                how="left",
+            )
 
-        # Discharge = precomputed temp-scaled miles × kwh_per_mile when sizing already
-        # built the duty frame; otherwise expand trips (+ optional temp) here.
+        # Discharge = precomputed temp-scaled miles × kwh_per_mile × home fraction
+        # when sizing already built the duty frame; otherwise expand trips (+ optional
+        # temp) here. Home fraction defaults to 1.0 when the column is absent.
         discharge_by_hour = self._build_hourly_discharge_kwh(
             trip_schedules,
             hours_base,

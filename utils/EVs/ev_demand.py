@@ -22,10 +22,12 @@ from utils.EVs.ChargingSimulator import DEFAULT_LEVEL2_CHARGER_KW, ChargingSimul
 from utils.EVs.EVAdoptionSampler import EVAdoptionSampler
 from utils.EVs.EVBatteryAssigner import DEFAULT_CAPACITY_BUFFER_FRACTION, EVBatteryAssigner
 from utils.EVs.EVChargerAssigner import (
+    DEFAULT_CHARGER_BUFFER_FRACTION,
     EVChargerAssigner,
     RESSTOCK_LEVEL1_CHARGER_KW,
     RESSTOCK_LEVEL2_CHARGER_KW,
 )
+from utils.EVs.EVHomeChargingFractionAssigner import EVHomeChargingFractionAssigner
 from utils.EVs.NHTSProfileSampler import NHTSProfileSampler, VehicleProfile
 from utils.EVs.TripScheduleGenerator import (
     DEFAULT_MAX_ARRIVAL_HOUR,
@@ -59,6 +61,15 @@ EV_ASSIGNMENT_MODES: Final[frozenset[str]] = frozenset({"pums_vehicles", "ressto
 #   level1_charger_power_kw / level2_charger_power_kw (default ResStock 1.6 / 5.69)
 ChargerAssignmentMode = Literal["fixed", "resstock"]
 CHARGER_ASSIGNMENT_MODES: Final[frozenset[str]] = frozenset({"fixed", "resstock"})
+
+# How the home-charging energy fraction is assigned (Speake et al. 2025 §3.5).
+# - none: fraction_charged_home = 1.0 (all trip energy attributed to the residential meter)
+# - resstock: sample from Electric_Vehicle_Charge_At_Home.tsv (RECS FPL × building type)
+# Scales residential discharge / charger feasibility only — not battery sizing duty.
+HomeChargingFractionAssignmentMode = Literal["none", "resstock"]
+HOME_CHARGING_FRACTION_ASSIGNMENT_MODES: Final[frozenset[str]] = frozenset(
+    {"none", "resstock"}
+)
 
 # Outdoor-temp adjustment applied to discharge kWh (ResStock / OpenStudio-HPXML curve).
 TemperatureAdjustmentMode = Literal["none", "resstock"]
@@ -119,6 +130,8 @@ class EVDemandConfig:
     )
     # Required when charger_assignment=resstock; ignored for fixed.
     ev_charger_path: str | None = None
+    # Required when home_charging_fraction_assignment=resstock; ignored for none.
+    ev_charge_at_home_path: str | None = None
     output_dir: Path | None = None
     # ResStock OEDI weather CSVs named ``{station}.csv`` (required when
     # temperature_adjustment=resstock; ignored otherwise).
@@ -162,9 +175,9 @@ class EVDemandConfig:
     # Charger power:
     #   charger_assignment=fixed → charger_power_kw (defaults to 7.2 if omitted);
     #     level1/level2_charger_power_kw ignored
-    #   charger_assignment=resstock → sample L1 vs L2 from TSV; powers from
-    #     level1_charger_power_kw / level2_charger_power_kw (default ResStock 1.6 / 5.69);
-    #     charger_power_kw ignored
+    #   charger_assignment=resstock → sample L1 vs L2 from TSV among SOC-feasible
+    #     levels (perfect foresight); powers from level1/level2_charger_power_kw
+    #     (default ResStock 1.6 / 5.69); charger_power_kw ignored
     charging_strategy: ChargingStrategy = "immediate"
     # fixed: use charger_power_kw for every EV; resstock: sample L1/L2 from TSV.
     charger_assignment: ChargerAssignmentMode = "fixed"
@@ -173,6 +186,11 @@ class EVDemandConfig:
     # Per-level rated powers when charger_assignment=resstock (None → ResStock defaults).
     level1_charger_power_kw: float | None = None
     level2_charger_power_kw: float | None = None
+    # resstock only: inflate trip discharge by (1+buffer) when testing L1/L2 SOC feasibility.
+    charger_buffer_fraction: float = DEFAULT_CHARGER_BUFFER_FRACTION
+    # Home-charging energy share (residential meter): none → 1.0; resstock → RECS TSV sample.
+    # Scales home discharge / charger feasibility only; battery sizing stays on full duty.
+    home_charging_fraction_assignment: HomeChargingFractionAssignmentMode = "none"
     # None = each vehicle starts at full battery capacity.
     initial_soc_kwh: float | None = None
     # off_peak only
@@ -205,6 +223,12 @@ class EVDemandConfig:
             raise ValueError(
                 f"charger_assignment must be one of {sorted(CHARGER_ASSIGNMENT_MODES)}; "
                 f"got {self.charger_assignment!r}"
+            )
+        if self.home_charging_fraction_assignment not in HOME_CHARGING_FRACTION_ASSIGNMENT_MODES:
+            raise ValueError(
+                "home_charging_fraction_assignment must be one of "
+                f"{sorted(HOME_CHARGING_FRACTION_ASSIGNMENT_MODES)}; "
+                f"got {self.home_charging_fraction_assignment!r}"
             )
         if self.temperature_adjustment not in TEMPERATURE_ADJUSTMENT_MODES:
             raise ValueError(
@@ -272,6 +296,21 @@ class EVDemandConfig:
                 "paths.ev_charger_path is ignored when charger_assignment=fixed"
             )
 
+        # Charge-at-home path: only required for resstock home-fraction sampling.
+        if self.home_charging_fraction_assignment == "resstock":
+            if self.ev_charge_at_home_path is None:
+                self.ev_charge_at_home_path = str(
+                    EV_DATA_DIR
+                    / "inputs"
+                    / "resstock_ev_reference"
+                    / "Electric_Vehicle_Charge_At_Home.tsv"
+                )
+        elif self.ev_charge_at_home_path is not None:
+            logging.warning(
+                "paths.ev_charge_at_home_path is ignored when "
+                "home_charging_fraction_assignment=none"
+            )
+
         if self.temperature_adjustment == "resstock":
             if self.weather_dir is None:
                 self.weather_dir = str(
@@ -299,6 +338,10 @@ class EVDemandConfig:
             raise ValueError(
                 f"capacity_buffer_fraction must be >= 0; got {self.capacity_buffer_fraction}"
             )
+        if self.charger_buffer_fraction < 0:
+            raise ValueError(
+                f"charger_buffer_fraction must be >= 0; got {self.charger_buffer_fraction}"
+            )
 
         # Charger power is mode-gated:
         #   fixed    → scalar charger_power_kw; ignore level1/level2 overrides
@@ -318,6 +361,10 @@ class EVDemandConfig:
                 )
                 self.level1_charger_power_kw = None
                 self.level2_charger_power_kw = None
+            if self.charger_buffer_fraction != DEFAULT_CHARGER_BUFFER_FRACTION:
+                logging.warning(
+                    "charging.charger_buffer_fraction is ignored when charger_assignment=fixed"
+                )
         else:
             if self.charger_power_kw is not None:
                 logging.warning(
@@ -639,9 +686,10 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
     """Load an ``EVDemandConfig`` from a YAML scenario file.
 
     Nested sections ``paths``, ``sampling``, ``trips``, ``battery``, ``temperature``,
-    ``pipeline``, and ``charging`` are flattened into dataclass fields. Dates must be
-    ISO datetimes with clock hour (e.g. ``2024-01-01T04:00:00``); date-only values are
-    rejected. ``start_date`` must be at 04:00 and ``end_date`` at 03:00 (NHTS travel day).
+    ``pipeline``, ``charging``, and ``home_charging`` are flattened into dataclass fields.
+    Dates must be ISO datetimes with clock hour (e.g. ``2024-01-01T04:00:00``); date-only
+    values are rejected. ``start_date`` must be at 04:00 and ``end_date`` at 03:00
+    (NHTS travel day).
     """
     config_path = Path(path)
     with config_path.open() as f:
@@ -652,7 +700,16 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
         if key in raw:
             flat[key] = raw[key]
 
-    for section in ("paths", "sampling", "trips", "battery", "temperature", "pipeline", "charging"):
+    for section in (
+        "paths",
+        "sampling",
+        "trips",
+        "battery",
+        "temperature",
+        "pipeline",
+        "charging",
+        "home_charging",
+    ):
         section_data = raw.get(section) or {}
         if not isinstance(section_data, dict):
             raise ValueError(f"YAML section '{section}' must be a mapping, got {type(section_data)}")
@@ -684,6 +741,7 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
         "flat_price_usd_per_kwh",
         "initial_soc_kwh",
         "capacity_buffer_fraction",
+        "charger_buffer_fraction",
         "miles_noise_std_fraction",
         "nhts_daily_miles_percentile_low",
         "nhts_daily_miles_percentile_high",
@@ -727,14 +785,15 @@ class EVDemandCalculator:
     Orchestrator for the EV demand pipeline.
 
     Constructs ``VehicleOwnershipModel``, ``EVAdoptionSampler``, ``EVBatteryAssigner``,
-    ``EVChargerAssigner``, ``NHTSProfileSampler``, ``TripScheduleGenerator``, and
-    ``ChargingSimulator``.
+    ``EVHomeChargingFractionAssigner``, ``EVChargerAssigner``, ``NHTSProfileSampler``,
+    ``TripScheduleGenerator``, and ``ChargingSimulator``.
 
     Public API:
     - ``match_and_generate_trip_schedules()`` — EV assignment → NHTS profiles →
-      daily trip schedules → hourly duty miles → ResStock battery + charger attrs
+      daily trip schedules → hourly duty miles → ResStock battery + home-charging
+      fraction + charger attrs
     - ``generate_soc_schedules()`` — hourly SOC / charge / discharge from trips
-      (reuses duty miles when passed)
+      (reuses duty miles when passed; home discharge scaled by fraction_charged_home)
     """
 
     def __init__(
@@ -748,6 +807,7 @@ class EVDemandCalculator:
         ev_ownership_df: pl.DataFrame | None = None,
         pums_df: pl.DataFrame | None = None,
         ev_charger_df: pl.DataFrame | None = None,
+        ev_charge_at_home_df: pl.DataFrame | None = None,
         *,
         ev_assignment: EvAssignmentMode = "resstock_adoption",
         max_vehicles: int | None = None,
@@ -765,6 +825,8 @@ class EVDemandCalculator:
         charger_power_kw: float | None = None,
         level1_charger_power_kw: float | None = None,
         level2_charger_power_kw: float | None = None,
+        charger_buffer_fraction: float = DEFAULT_CHARGER_BUFFER_FRACTION,
+        home_charging_fraction_assignment: HomeChargingFractionAssignmentMode = "none",
         temperature_adjustment: TemperatureAdjustmentMode = "none",
         weather_dir: str | Path | None = None,
         weather_map: pl.DataFrame | None = None,
@@ -786,6 +848,8 @@ class EVDemandCalculator:
             pums_df: PUMS data DataFrame (required when ``ev_assignment=pums_vehicles``
                 unless a fitted ``vehicle_ownership`` is passed)
             ev_charger_df: ResStock charger L1/L2 lookup (required for ``charger_assignment=resstock``)
+            ev_charge_at_home_df: ResStock home-charging fraction lookup (required for
+                ``home_charging_fraction_assignment=resstock``)
             ev_assignment: How to assign EV slots — ``pums_vehicles`` or ``resstock_adoption``
             max_vehicles: Cap for the PUMS vehicle-count model (required for ``pums_vehicles``)
             vehicle_ownership: Optional pre-fitted PUMS model (avoids refitting each batch)
@@ -798,6 +862,9 @@ class EVDemandCalculator:
                 (default ResStock 1.6); unused for ``fixed``
             level2_charger_power_kw: Level 2 kW when ``charger_assignment=resstock``
                 (default ResStock 5.69); unused for ``fixed``
+            charger_buffer_fraction: Extra discharge fraction for resstock L1/L2 SOC
+                feasibility (default 0.2); unused for ``fixed``
+            home_charging_fraction_assignment: ``none`` (100% home) or ``resstock`` (RECS TSV)
             temperature_adjustment: When ``resstock``, battery sizing uses temp-scaled duty miles
             weather_dir: ResStock weather CSV directory (required for ``resstock`` temp adj)
             weather_map: Building → weather station map from ``load_all_input_data``
@@ -814,6 +881,12 @@ class EVDemandCalculator:
                 f"charger_assignment must be one of {sorted(CHARGER_ASSIGNMENT_MODES)}; "
                 f"got {charger_assignment!r}"
             )
+        if home_charging_fraction_assignment not in HOME_CHARGING_FRACTION_ASSIGNMENT_MODES:
+            raise ValueError(
+                "home_charging_fraction_assignment must be one of "
+                f"{sorted(HOME_CHARGING_FRACTION_ASSIGNMENT_MODES)}; "
+                f"got {home_charging_fraction_assignment!r}"
+            )
         if ev_assignment == "pums_vehicles":
             if max_vehicles is None:
                 raise ValueError("max_vehicles is required when ev_assignment=pums_vehicles")
@@ -829,6 +902,14 @@ class EVDemandCalculator:
         if charger_assignment == "resstock" and ev_charger_df is None:
             raise ValueError(
                 "ev_charger_df is required when charger_assignment=resstock"
+            )
+        if (
+            home_charging_fraction_assignment == "resstock"
+            and ev_charge_at_home_df is None
+        ):
+            raise ValueError(
+                "ev_charge_at_home_df is required when "
+                "home_charging_fraction_assignment=resstock"
             )
         # Resolve fixed-rate power once; resstock leaves this None (per-vehicle attrs).
         if charger_assignment == "fixed":
@@ -877,6 +958,7 @@ class EVDemandCalculator:
         self.ev_battery_df = ev_battery_df
         self.ev_autonomie_df = ev_autonomie_df
         self.ev_charger_df = ev_charger_df
+        self.ev_charge_at_home_df = ev_charge_at_home_df
         self.start_date = start_date
         self.end_date = end_date
         self.ev_assignment = ev_assignment
@@ -888,6 +970,12 @@ class EVDemandCalculator:
         self.charger_power_kw = charger_power_kw
         self.level1_charger_power_kw = level1_charger_power_kw
         self.level2_charger_power_kw = level2_charger_power_kw
+        if charger_buffer_fraction < 0:
+            raise ValueError(
+                f"charger_buffer_fraction must be >= 0; got {charger_buffer_fraction}"
+            )
+        self.charger_buffer_fraction = charger_buffer_fraction
+        self.home_charging_fraction_assignment = home_charging_fraction_assignment
 
         # Pipeline components.
         if vehicle_ownership is not None:
@@ -917,6 +1005,14 @@ class EVDemandCalculator:
             autonomie_params=ev_autonomie_df,
             random_state=random_state,
         )
+        # Optional ResStock home-fraction sampler; None when assignment=none (fill 1.0).
+        self.home_charging_fraction_assigner: EVHomeChargingFractionAssigner | None = None
+        if home_charging_fraction_assignment == "resstock":
+            assert ev_charge_at_home_df is not None  # validated above
+            self.home_charging_fraction_assigner = EVHomeChargingFractionAssigner(
+                charge_at_home_lookup=ev_charge_at_home_df,
+                random_state=random_state,
+            )
         # Optional ResStock L1/L2 sampler; None when charger_assignment=fixed.
         self.charger_assigner: EVChargerAssigner | None = None
         if charger_assignment == "resstock":
@@ -972,6 +1068,7 @@ class EVDemandCalculator:
         ev_ownership_df: pl.DataFrame | None = None,
         pums_df: pl.DataFrame | None = None,
         ev_charger_df: pl.DataFrame | None = None,
+        ev_charge_at_home_df: pl.DataFrame | None = None,
         vehicle_ownership: VehicleOwnershipModel | None = None,
         weather_map: pl.DataFrame | None = None,
         station_temps: dict[str, pl.DataFrame] | None = None,
@@ -989,6 +1086,7 @@ class EVDemandCalculator:
             ev_ownership_df=ev_ownership_df,
             pums_df=pums_df,
             ev_charger_df=ev_charger_df,
+            ev_charge_at_home_df=ev_charge_at_home_df,
             ev_assignment=config.ev_assignment,
             max_vehicles=config.max_vehicles,
             vehicle_ownership=vehicle_ownership,
@@ -1005,6 +1103,8 @@ class EVDemandCalculator:
             charger_power_kw=config.charger_power_kw,
             level1_charger_power_kw=config.level1_charger_power_kw,
             level2_charger_power_kw=config.level2_charger_power_kw,
+            charger_buffer_fraction=config.charger_buffer_fraction,
+            home_charging_fraction_assignment=config.home_charging_fraction_assignment,
             temperature_adjustment=config.temperature_adjustment,
             weather_dir=config.weather_dir,
             weather_map=weather_map,
@@ -1128,6 +1228,7 @@ class EVDemandCalculator:
             .with_columns(pl.col("max_daily_miles").fill_null(0.0))
         )
         # Feasible packs: capacity >= duty_miles * kwh_per_mile * (1 + buffer).
+        # Duty miles are full trip energy (unscaled by home-charging fraction).
         ev_attributes = self.battery_assigner.assign(
             vehicle_duty,
             buffer_fraction=self.capacity_buffer_fraction,
@@ -1139,20 +1240,111 @@ class EVDemandCalculator:
             "temperature-scaled" if resolved_temps is not None else "unscaled",
         )
 
-        # Attach per-vehicle charger level / kW onto the same attribute frame.
-        ev_attributes = self._assign_chargers(ev_attributes)
+        # Home-charging energy share (RECS bins → midpoint); scales residential
+        # discharge only — packs above already sized on full duty.
+        ev_attributes = self._assign_home_charging_fractions(ev_attributes)
+
+        # Attach per-vehicle charger level / kW onto the same attribute frame
+        # (SOC feasibility uses home-attributed / scaled discharge).
+        ev_attributes = self._assign_chargers(
+            ev_attributes,
+            trip_schedules=trip_schedules,
+            hourly_temp_scaled_miles=hourly_temp_scaled_miles,
+            hours_base=resolved_hours,
+        )
 
         return trip_schedules, ev_attributes, hourly_temp_scaled_miles
 
-    def _assign_chargers(self, ev_attributes: pl.DataFrame) -> pl.DataFrame:
+    def _assign_home_charging_fractions(
+        self,
+        ev_attributes: pl.DataFrame,
+    ) -> pl.DataFrame:
+        """Attach ``charge_at_home_bin`` and ``fraction_charged_home`` to each EV row.
+
+        - ``none``: every vehicle gets ``100%`` / ``1.0`` (legacy full-home attribution).
+        - ``resstock``: sample from ``Electric_Vehicle_Charge_At_Home.tsv`` by FPL ×
+          building type (Speake et al. 2025 §3.5).
+
+        Battery sizing must already be complete: this fraction does not shrink packs.
+        """
+        if ev_attributes.is_empty():
+            return ev_attributes.with_columns(
+                pl.lit(None, dtype=pl.Utf8).alias("charge_at_home_bin"),
+                pl.lit(None, dtype=pl.Float64).alias("fraction_charged_home"),
+            )
+
+        if self.home_charging_fraction_assignment == "none":
+            # Explicit 100% home so downstream discharge always finds the column.
+            logging.info(
+                "Assigning fraction_charged_home=1.0 to %s EV(s) "
+                "(home_charging_fraction_assignment=none)",
+                ev_attributes.height,
+            )
+            return ev_attributes.with_columns(
+                pl.lit("100%").alias("charge_at_home_bin"),
+                pl.lit(1.0).alias("fraction_charged_home"),
+            )
+
+        # ResStock path: join FPL / building type and multinomial-sample RECS bins.
+        assert self.home_charging_fraction_assigner is not None
+        meta_keys = {"bldg_id", "fpl", "building_type"}
+        missing_meta = meta_keys - set(self.metadata_df.columns)
+        if missing_meta:
+            raise ValueError(
+                "metadata_df missing columns required for home-charging fraction "
+                f"assignment: {', '.join(sorted(missing_meta))}"
+            )
+
+        vehicles_with_meta = ev_attributes.select("bldg_id", "vehicle_id").join(
+            self.metadata_df.select("bldg_id", "fpl", "building_type"),
+            on="bldg_id",
+            how="left",
+        )
+        null_meta = vehicles_with_meta.filter(
+            pl.col("fpl").is_null() | pl.col("building_type").is_null()
+        )
+        if null_meta.height > 0:
+            sample_ids = null_meta.get_column("bldg_id").head(5).to_list()
+            raise ValueError(
+                f"Missing fpl/building_type for {null_meta.height} EV building(s) "
+                f"(e.g. bldg_id={sample_ids})"
+            )
+
+        fraction_attrs = self.home_charging_fraction_assigner.assign(vehicles_with_meta)
+        logging.info(
+            "Assigned ResStock home-charging fractions for %s EV(s) "
+            "(mean fraction_charged_home=%.3f)",
+            fraction_attrs.height,
+            float(fraction_attrs["fraction_charged_home"].mean()),
+        )
+        return ev_attributes.join(
+            fraction_attrs,
+            on=["bldg_id", "vehicle_id"],
+            how="left",
+        )
+
+    def _assign_chargers(
+        self,
+        ev_attributes: pl.DataFrame,
+        *,
+        trip_schedules: pl.DataFrame,
+        hourly_temp_scaled_miles: pl.DataFrame,
+        hours_base: pl.DataFrame,
+    ) -> pl.DataFrame:
         """Attach ``charger_level`` and ``charger_power_kw`` to each EV attribute row.
 
         - ``fixed``: broadcast ``self.charger_power_kw`` (legacy single-rate path).
         - ``resstock``: join metadata FPL / building type / tenure and sample L1 vs L2
-          from ``Electric_Vehicle_Charger.tsv``; powers from ``level1/level2_charger_power_kw``.
+          from ``Electric_Vehicle_Charger.tsv`` among levels that cover the trip
+          schedule under perfect SOC foresight (discharge × (1 + charger_buffer));
+          powers from ``level1/level2_charger_power_kw``.
 
         Args:
-            ev_attributes: DataFrame with ``bldg_id`` and ``vehicle_id`` columns.
+            ev_attributes: DataFrame with ``bldg_id``, ``vehicle_id``,
+                ``battery_capacity_kwh``, and ``kwh_per_mile``.
+            trip_schedules: Generated trips (for hourly presence).
+            hourly_temp_scaled_miles: Duty frame from battery sizing (for discharge).
+            hours_base: Shared hourly calendar.
 
         Returns:
             DataFrame with ``charger_level`` and ``charger_power_kw`` columns.
@@ -1185,8 +1377,17 @@ class EVDemandCalculator:
                 "metadata_df missing columns required for charger assignment: "
                 + ", ".join(sorted(missing_meta))
             )
+        attr_keys = {"bldg_id", "vehicle_id", "battery_capacity_kwh", "kwh_per_mile"}
+        missing_attrs = attr_keys - set(ev_attributes.columns)
+        if missing_attrs:
+            raise ValueError(
+                "ev_attributes missing columns required for charger assignment: "
+                + ", ".join(sorted(missing_attrs))
+            )
 
-        vehicles_with_meta = ev_attributes.select("bldg_id", "vehicle_id").join(
+        vehicles_with_meta = ev_attributes.select(
+            "bldg_id", "vehicle_id", "battery_capacity_kwh"
+        ).join(
             self.metadata_df.select("bldg_id", "fpl", "building_type", "tenure"),
             on="bldg_id",
             how="left",
@@ -1204,10 +1405,62 @@ class EVDemandCalculator:
                 f"(e.g. bldg_id={sample_ids})"
             )
 
-        charger_attrs = self.charger_assigner.assign(vehicles_with_meta)
+        # --- Build perfect-foresight inputs for SOC feasibility ---
+        # Presence: tour-based at_home mask over the shared hours calendar.
+        vehicle_keys = [
+            (row["bldg_id"], int(row["vehicle_id"]))
+            for row in ev_attributes.select("bldg_id", "vehicle_id").iter_rows(named=True)
+        ]
+        presence_by_vehicle = self.charging_simulator.generate_presence(
+            trip_schedules,
+            hours_base=hours_base,
+            vehicle_keys=vehicle_keys,
+        )
+        # Discharge: reuse the battery-sizing duty frame × assigned kwh_per_mile ×
+        # fraction_charged_home (home-attributed energy only; no second temp pass).
+        # Sparse hour rows → dense length-num_hours arrays for SOC feasibility.
+        if "fraction_charged_home" not in ev_attributes.columns:
+            raise ValueError(
+                "ev_attributes missing fraction_charged_home; call "
+                "_assign_home_charging_fractions before _assign_chargers"
+            )
+        discharge_by_hour = ChargingSimulator._discharge_kwh_from_temp_scaled_miles(
+            hourly_temp_scaled_miles,
+            ev_attributes.select(
+                "bldg_id", "vehicle_id", "kwh_per_mile", "fraction_charged_home"
+            ),
+        )
+        num_hours = hours_base.height
+        discharge_kwh_by_vehicle: dict[tuple[str | int, int], np.ndarray] = {
+            key: np.zeros(num_hours, dtype=np.float64) for key in vehicle_keys
+        }
+        if not discharge_by_hour.is_empty():
+            for discharge_frame in discharge_by_hour.partition_by(
+                ["bldg_id", "vehicle_id"], as_dict=False
+            ):
+                key = (discharge_frame["bldg_id"][0], int(discharge_frame["vehicle_id"][0]))
+                if key not in discharge_kwh_by_vehicle:
+                    continue
+                arr = discharge_kwh_by_vehicle[key]
+                for hour_index, discharge in zip(
+                    discharge_frame["hour_index"].to_list(),
+                    discharge_frame["discharge_kwh"].to_list(),
+                    strict=True,
+                ):
+                    arr[int(hour_index)] = float(discharge)
+
+        # Sample L1/L2 only from levels that pass the SOC foresight + buffer check.
+        charger_attrs = self.charger_assigner.assign(
+            vehicles_with_meta,
+            presence_by_vehicle=presence_by_vehicle,
+            discharge_kwh_by_vehicle=discharge_kwh_by_vehicle,
+            buffer_fraction=self.charger_buffer_fraction,
+        )
         logging.info(
-            "Assigned ResStock L1/L2 chargers for %s EV(s): Level 1=%s, Level 2=%s",
+            "Assigned ResStock L1/L2 chargers for %s EV(s) "
+            "(SOC-feasible, buffer=%.2f): Level 1=%s, Level 2=%s",
             charger_attrs.height,
+            self.charger_buffer_fraction,
             (charger_attrs["charger_level"] == "Level 1").sum(),
             (charger_attrs["charger_level"] == "Level 2").sum(),
         )
@@ -1374,6 +1627,7 @@ def main():
     ev_battery_df = inputs.ev_battery_df
     ev_autonomie_df = inputs.ev_autonomie_df
     ev_charger_df = inputs.ev_charger_df
+    ev_charge_at_home_df = inputs.ev_charge_at_home_df
     weather_map = inputs.weather_map
     station_temps = inputs.station_temps
 
@@ -1387,6 +1641,10 @@ def main():
     print(f"Loaded Autonomie vehicle params: {ev_autonomie_df.height:,} rows")
     if ev_charger_df is not None:
         print(f"Loaded EV charger lookup (Yes-ownership rows): {ev_charger_df.height:,} rows")
+    if ev_charge_at_home_df is not None:
+        print(
+            f"Loaded EV charge-at-home lookup: {ev_charge_at_home_df.height:,} rows"
+        )
     print(f"EV assignment mode: {config.ev_assignment}")
     print(f"Charger assignment mode: {config.charger_assignment}")
     if config.charger_assignment == "fixed":
@@ -1394,8 +1652,12 @@ def main():
     else:
         print(
             f"ResStock chargers: Level 1 = {config.level1_charger_power_kw} kW, "
-            f"Level 2 = {config.level2_charger_power_kw} kW"
+            f"Level 2 = {config.level2_charger_power_kw} kW "
+            f"(SOC-feasible, buffer={config.charger_buffer_fraction})"
         )
+    print(
+        f"Home-charging fraction assignment: {config.home_charging_fraction_assignment}"
+    )
     if config.ev_assignment == "pums_vehicles":
         print(f"PUMS max_vehicles: {config.max_vehicles} (NHTS match_on_vehicles=True)")
     else:
@@ -1467,6 +1729,7 @@ def main():
             ev_battery_df=ev_battery_df,
             ev_autonomie_df=ev_autonomie_df,
             ev_charger_df=ev_charger_df,
+            ev_charge_at_home_df=ev_charge_at_home_df,
             vehicle_ownership=fitted_vehicle_ownership,
             weather_map=weather_map,
             station_temps=station_temps,
