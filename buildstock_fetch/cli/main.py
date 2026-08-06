@@ -204,7 +204,7 @@ def main(  # noqa: C901
     if sample is not None:
         buildings: set[Building] = set()
         for group in building_groups:
-            buildings |= set(group.buildings[: -1 if sample == "all" else sample])
+            buildings |= set(select_buildings_for_sample(group.buildings, sample))
     else:
         buildings = get_buildings_sample(building_groups)
     callee = download_and_process_all(
@@ -423,8 +423,10 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[Building]
             str | None,
             questionary.text(
                 f"Enter the number of files to download for State {group.state}, Upgrade {group.upgrade_id} (0-{total_for_state_upgrade}):",
-                validate=lambda text, max_val=total_for_state_upgrade: (text.isdigit() and 0 <= int(text) <= max_val)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
-                or f"Please enter a number between 0 and {max_val}",
+                validate=lambda text, max_val=total_for_state_upgrade: (
+                    (text.isdigit() and 0 <= int(text) <= max_val)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+                    or f"Please enter a number between 0 and {max_val}"
+                ),
             ).ask(),
         )
 
@@ -499,6 +501,13 @@ def fetch_building_groups(inputs: InputsFinal) -> list[BuildingsGroup]:
         for state in sorted(inputs.states)
         for upgrade in sorted(inputs.upgrade_ids)
     ]
+
+
+def select_buildings_for_sample(buildings: list[Building], sample: Sample) -> list[Building]:
+    # --sample 0 is validated to "all"; that must mean the full list, not all-but-last.
+    if sample == "all":
+        return buildings
+    return buildings[:sample]
 
 
 def _category_choice(name: str) -> questionary.Choice:
