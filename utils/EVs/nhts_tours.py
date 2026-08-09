@@ -102,6 +102,12 @@ class TripProfile:
     tour_departure_hours: list[int] = field(default_factory=list)
     tour_arrival_hours: list[int] = field(default_factory=list)
     tour_ends_away: list[bool] = field(default_factory=list)
+    # Day-boundary home flags used to impute missing cross-day seam legs.
+    # Empty/legacy fixtures default True (closed home day). Real NHTS profiles
+    # set these from the first WHYFROM and final WHYTO purpose codes so schedule
+    # generation knows whether adjacent travel days need a home↔away flip.
+    starts_home: bool = True
+    ends_home: bool = True
 
     @property
     def has_trips(self) -> bool:
@@ -141,6 +147,9 @@ def trips_as_singleton_tours(
         tour_departure_hours=list(trip_departure_hours),
         tour_arrival_hours=list(trip_arrival_hours),
         tour_ends_away=[False] * n,
+        # Fixtures treat every leg as a closed home-based tour.
+        starts_home=True,
+        ends_home=True,
     )
 
 
@@ -238,4 +247,7 @@ def build_tours_from_legs(
         tour_departure_hours=[nhts_departure_hour(t) for t in tour_start_hhmm],
         tour_arrival_hours=[nhts_arrival_hour(t) for t in tour_end_hhmm],
         tour_ends_away=tour_ends_away,
+        # Boundary state for cross-day presence: first origin / last destination.
+        starts_home=is_nhts_home_purpose(why_from[order[0]]),
+        ends_home=is_nhts_home_purpose(why_to[order[-1]]),
     )

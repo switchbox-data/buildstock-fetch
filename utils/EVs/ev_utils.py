@@ -585,6 +585,7 @@ def load_nhts_data(
     *,
     daily_miles_percentile_low: float = 0.0,
     daily_miles_percentile_high: float = 100.0,
+    include_zero_driving_days_in_match_pool: bool = True,
 ) -> pl.DataFrame:
     """
     Load the NHTS match pool for a state's census division.
@@ -596,12 +597,16 @@ def load_nhts_data(
     household's ``TRAVDAY``:
 
     - **Driven day** — household-vehicle driver trips that pass OUTOFTWN and
-      closed-home filters → one row per trip leg (``is_empty_day=False``).
+      touch home at least once → one row per trip leg (``is_empty_day=False``).
+      Open days (start and/or end away, e.g. night-shift patterns) are kept;
+      vehicles whose annual schedule turns out to be un-chargeable at home are
+      excluded downstream by the charger feasibility check, not here.
     - **Empty day** — owned light-duty vehicle with no HH-vehicle driver trips
       that day → one marker row (``is_empty_day=True``, home all day, 0 miles).
 
-    Driven days that fail OUTOFTWN / closed-home are dropped entirely (not
-    reclassified as empty). Empty days skip those filters.
+    Driven days that fail OUTOFTWN / home-touch are dropped entirely (not
+    reclassified as empty). Empty days skip those filters and are included only
+    when ``include_zero_driving_days_in_match_pool=True``.
 
     After the structural filters, trip profiles whose **daily miles** fall outside
     ``[daily_miles_percentile_low, daily_miles_percentile_high]`` are dropped
@@ -613,6 +618,9 @@ def load_nhts_data(
         state: State abbreviation → census division filter
         daily_miles_percentile_low: Lower percentile for profile daily-miles cut (0–100)
         daily_miles_percentile_high: Upper percentile for profile daily-miles cut (0–100)
+        include_zero_driving_days_in_match_pool: Whether owned-but-idle vehicle-day
+            markers are eligible for matching. Real trip profiles that total 0 reported
+            miles are still retained as driven days.
 
     Returns:
         Long-form DataFrame: trip legs plus empty-day markers, with ``house_id``,
@@ -725,7 +733,7 @@ def load_nhts_data(
     ).drop("DRVR_FLG")
 
     # Restrict to inventory vehicles before quality filters so we can tell
-    # "never driven" (empty) apart from "driven but failed OUTOFTWN/closed-home".
+    # "never driven" (empty) apart from "driven but failed OUTOFTWN/home-touch".
     trips = trips.rename({"VEHCASEID": "hh_vehicle_id"}).join(
         vehicle_days.select("hh_vehicle_id", "weekday").unique(),
         on="hh_vehicle_id",
@@ -770,26 +778,34 @@ def load_nhts_data(
         pl.col("trip_weight").cast(pl.Float64),
     )
 
-    # Closed home-based vehicle-days only (start and end at home).
-    # Failed closed-home days are dropped (not converted to empty).
+    # Home-touch filter (replaces the old closed-home filter).
+    # Old rule: keep only days whose first WHYFROM and last WHYTO were both home.
+    # New rule: keep any day that visits home at least once on any leg.
+    # Open days (start away and/or end away) stay in the match pool; schedule
+    # generation later imputes mirrored-mile/duration drive legs across 4am seams.
+    # Never-home days are still dropped — no residential charging opportunity.
+    # Vehicles whose resulting annual schedule cannot be covered by any home
+    # charger level are excluded later (feasibility check in EVChargerAssigner),
+    # not here — so legitimate night-shift / away-heavy patterns stay eligible.
     home_purposes = list(NHTS_HOME_PURPOSES)
     n_before_home = trips.height
-    closed_home_days = (
-        trips.sort(["hh_vehicle_id", "weekday", "start_time", "seq_trip_id"])
+    home_touch_days = (
+        trips
         .group_by(["hh_vehicle_id", "weekday"])
         .agg(
-            pl.col("why_from").first().alias("_day_start_why_from"),
-            pl.col("why_to").last().alias("_day_end_why_to"),
+            # True if any origin or destination on this vehicle-day is home {1,2}.
+            (
+                pl.col("why_from").is_in(home_purposes).any()
+                | pl.col("why_to").is_in(home_purposes).any()
+            ).alias("_touches_home"),
         )
-        .filter(
-            pl.col("_day_start_why_from").is_in(home_purposes),
-            pl.col("_day_end_why_to").is_in(home_purposes),
-        )
+        .filter(pl.col("_touches_home"))
         .select(["hh_vehicle_id", "weekday"])
     )
-    trips = trips.join(closed_home_days, on=["hh_vehicle_id", "weekday"], how="inner")
+    # Inner join drops never-home vehicle-days entirely (not reclassified as empty).
+    trips = trips.join(home_touch_days, on=["hh_vehicle_id", "weekday"], how="inner")
     logging.info(
-        "NHTS closed-home filter (start WHYFROM and end WHYTO in %s): "
+        "NHTS home-touch filter (any WHYFROM or WHYTO in %s): "
         "%s/%s trip rows, %s vehicles with usable driven days",
         sorted(home_purposes),
         trips.height,
@@ -799,7 +815,7 @@ def load_nhts_data(
 
     # 4. Split inventory into driven days vs empty days
     # Empty = owned light-duty vehicle with no HH-vehicle driver trips at all.
-    # Usable driven = passed OUTOFTWN + closed-home.
+    # Usable driven = passed OUTOFTWN + touched home at least once.
     # Had trips but failed filters → excluded from the match pool entirely.
     driven_ids = trips.select("hh_vehicle_id").unique()
     empty_vehicle_days = vehicle_days.join(had_any_driver_trip_ids, on="hh_vehicle_id", how="anti")
@@ -809,7 +825,7 @@ def load_nhts_data(
     )
     logging.info(
         "NHTS vehicle-day split: %s usable driven, %s empty (idle), %s excluded "
-        "(had driver trips but failed OUTOFTWN/closed-home)",
+        "(had driver trips but failed OUTOFTWN/home-touch)",
         driven_vehicle_days.height,
         empty_vehicle_days.height,
         n_excluded,
@@ -832,7 +848,8 @@ def load_nhts_data(
         pl.lit(None, dtype=pl.Int64).alias("seq_trip_id"),
     )
 
-    # Return a dataframe with driven days (is_empty_day=False -- one row per usable driver trip leg filtered by OUTOFTWN and closed-home filters) 
+    # Return driven days (one row per usable driver trip leg after OUTOFTWN
+    # and home-touch filters) plus optional empty-day markers.
     # and empty days (is_empty_day=True -- one row per idle inventory vehicle with trip fields null/0)
     nhts_df = pl.concat([driven_rows, empty_rows], how="diagonal_relaxed").select(
         "house_id",
@@ -852,17 +869,19 @@ def load_nhts_data(
         "why_to",
         "seq_trip_id",
     )
+    if not include_zero_driving_days_in_match_pool:
+        nhts_df = nhts_df.filter(~pl.col("is_empty_day"))
 
     logging.info(
         "NHTS match pool: %s rows (%s driven trip legs, %s empty vehicle-days) "
         "across %s vehicles / %s households",
         nhts_df.height,
         driven_rows.height,
-        empty_rows.height,
+        nhts_df.filter(pl.col("is_empty_day")).height,
         nhts_df["hh_vehicle_id"].n_unique(),
         nhts_df["house_id"].n_unique(),
     )
-    # Scenario cut on profile daily miles (empties have 0 mi → stay when low=0).
+    # Scenario cut on profile daily miles (included empties bypass the percentile band).
     return filter_nhts_by_daily_miles_percentile(
         nhts_df,
         low=daily_miles_percentile_low,
@@ -1237,7 +1256,13 @@ def load_all_input_data(ev_demand_config: Any) -> EVDemandInputs:
       (station CSVs are preloaded for all metadata buildings so batches share the cache)
     """
     metadata_df = load_metadata(ev_demand_config.metadata_path, ev_demand_config.state)
-    nhts_df = load_nhts_data(ev_demand_config.nhts_path, ev_demand_config.state)
+    nhts_df = load_nhts_data(
+        ev_demand_config.nhts_path,
+        ev_demand_config.state,
+        include_zero_driving_days_in_match_pool=(
+            ev_demand_config.include_zero_driving_days_in_match_pool
+        ),
+    )
     ev_battery_df = load_ev_battery_lookup(ev_demand_config.ev_battery_path)
     ev_autonomie_df = load_ev_autonomie_params(ev_demand_config.ev_autonomie_path)
 

@@ -13,16 +13,16 @@ eligible, with discharge inflated by ``charger_buffer_fraction``. When both
 levels are feasible we use the ResStock L1/L2 probabilities; when only one is,
 we assign that level. If neither is feasible, assignment raises.
 
-Default rated powers follow the ResStock 2025 TRG / options_lookup mapping
-(Level 1 = 1.6 kW, Level 2 = 5.69 kW — the latter is ResStock's *average*
-observed 240 V draw, not a typical dedicated EVSE nameplate). Override via
-``level1_power_kw`` / ``level2_power_kw`` (or the matching YAML keys).
+Default rated powers: Level 1 = 1.6 kW, Level 2 = 7.2 kW (typical 32 A / 240 V
+EVSE nameplate). ResStock's TRG / options_lookup maps Level 2 to 5.69 kW (average
+observed 240 V draw); pass that via ``level2_power_kw`` / YAML if desired.
 
 Load the lookup with ``utils.EVs.ev_utils.load_ev_charger_lookup``.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -30,10 +30,11 @@ import polars as pl
 
 from utils.EVs.charging import is_home_charging_soc_feasible
 
-# ResStock TRG / measure docs: ev_charger_power in watts → kW for the charging simulator.
-# L2 = 5.69 kW is ResStock's average 240 V outlet draw, not a 32 A EVSE nameplate (~7.2 kW).
+# L1 matches ResStock TRG. L2 defaults to a typical 32 A @ 240 V EVSE nameplate.
+# ResStock TRG / options_lookup uses 5.69 kW (average observed 240 V draw).
 RESSTOCK_LEVEL1_CHARGER_KW = 1.6
-RESSTOCK_LEVEL2_CHARGER_KW = 5.69
+RESSTOCK_LEVEL2_CHARGER_KW = 7.2
+RESSTOCK_TRG_LEVEL2_CHARGER_KW = 5.69  # historical TRG avg-draw rating
 
 # Headroom on trip discharge when testing whether a charger level is SOC-feasible.
 # Mirrors battery ``capacity_buffer_fraction`` (pack must cover peak discharge × (1+buffer)).
@@ -47,7 +48,7 @@ class EVChargerAssigner:
     # Yes-ownership rows from the thin loader, including ResStock's p_void marker.
     charger_lookup: pl.DataFrame
     random_state: int = 42
-    # Rated powers applied after the L1/L2 draw (defaults = ResStock TRG values).
+    # Rated powers applied after the L1/L2 draw (defaults = 1.6 / 7.2 kW).
     level1_power_kw: float = RESSTOCK_LEVEL1_CHARGER_KW
     level2_power_kw: float = RESSTOCK_LEVEL2_CHARGER_KW
     _rng: np.random.Generator = field(init=False, repr=False)
@@ -91,6 +92,7 @@ class EVChargerAssigner:
         presence_by_vehicle: dict[tuple[str | int, int], pl.DataFrame],
         discharge_kwh_by_vehicle: dict[tuple[str | int, int], np.ndarray],
         buffer_fraction: float = DEFAULT_CHARGER_BUFFER_FRACTION,
+        drop_infeasible: bool = False,
     ) -> pl.DataFrame:
         """
         Draw a charger level for each EV from the SOC-feasible L1/L2 subset.
@@ -110,15 +112,21 @@ class EVChargerAssigner:
                 same length as the matching presence schedule.
             buffer_fraction: Extra fraction of discharge the charger must cover
                 (default 0.2).
+            drop_infeasible: When ``True``, a vehicle that no charger level can
+                cover is omitted from the result (logged as excluded) instead of
+                raising. Its schedule (e.g. multi-day away, no home plug) is not a
+                feasible home-charged EV, so it is dropped from the EV fleet.
 
         Returns:
             ``bldg_id``, ``vehicle_id``, ``charger_level`` (``Level 1`` / ``Level 2``),
-            and ``charger_power_kw``.
+            and ``charger_power_kw``. When ``drop_infeasible`` is ``True`` the frame
+            may have fewer rows than ``vehicles``.
 
         Raises:
             ValueError: If required columns are missing, the lookup join misses a row,
                 a matched cell is Void / None for an EV owner, presence/discharge are
-                missing or misaligned, or neither charger level is SOC-feasible.
+                missing or misaligned, or (when ``drop_infeasible`` is ``False``)
+                neither charger level is SOC-feasible.
         """
         required = {
             "bldg_id",
@@ -191,8 +199,11 @@ class EVChargerAssigner:
                 f"(e.g. bldg_id={sample_ids})"
             )
 
+        kept_bldg_ids: list[object] = []
+        kept_vehicle_ids: list[int] = []
         levels: list[str] = []
         powers: list[float] = []
+        dropped_ids: list[object] = []
         # When L2 is at least as fast as L1, L1-feasible ⇒ L2-feasible (skip a second sim).
         l2_dominates_l1 = self.level2_power_kw >= self.level1_power_kw - 1e-12
 
@@ -244,8 +255,12 @@ class EVChargerAssigner:
                     buffer_fraction=buffer_fraction,
                 )
 
-            # Hard fail (same spirit as EVBatteryAssigner when no pack fits).
+            # Neither level feasible: drop the vehicle (not a home-chargeable EV)
+            # or hard-fail, matching the caller's policy.
             if not l1_ok and not l2_ok:
+                if drop_infeasible:
+                    dropped_ids.append(row["bldg_id"])
+                    continue
                 raise ValueError(
                     f"No ResStock EV charger level can cover bldg_id={row['bldg_id']!r} "
                     f"vehicle_id={row['vehicle_id']} under perfect SOC foresight "
@@ -260,6 +275,8 @@ class EVChargerAssigner:
             else:
                 choose_l2 = l2_ok
 
+            kept_bldg_ids.append(row["bldg_id"])
+            kept_vehicle_ids.append(int(row["vehicle_id"]))
             if choose_l2:
                 levels.append("Level 2")
                 powers.append(self.level2_power_kw)
@@ -267,7 +284,25 @@ class EVChargerAssigner:
                 levels.append("Level 1")
                 powers.append(self.level1_power_kw)
 
-        return joined.select("bldg_id", "vehicle_id").with_columns(
-            pl.Series("charger_level", levels),
-            pl.Series("charger_power_kw", powers, dtype=pl.Float64),
+        if dropped_ids:
+            logging.warning(
+                "Excluded %s EV(s) with no SOC-feasible home charger level "
+                "(buffer_fraction=%s, L1=%s kW, L2=%s kW; e.g. bldg_id=%s). "
+                "These driving schedules cannot be home-charged and are dropped "
+                "from the EV fleet.",
+                len(dropped_ids),
+                buffer_fraction,
+                self.level1_power_kw,
+                self.level2_power_kw,
+                dropped_ids[:5],
+            )
+
+        bldg_dtype = joined.schema.get("bldg_id", pl.Int64)
+        return pl.DataFrame(
+            {
+                "bldg_id": pl.Series(kept_bldg_ids, dtype=bldg_dtype),
+                "vehicle_id": pl.Series(kept_vehicle_ids, dtype=pl.Int64),
+                "charger_level": pl.Series(levels, dtype=pl.Utf8),
+                "charger_power_kw": pl.Series(powers, dtype=pl.Float64),
+            }
         )

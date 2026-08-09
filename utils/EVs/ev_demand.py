@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import sys
+import zlib
 from collections.abc import Iterable
 from dataclasses import dataclass, fields
 from datetime import date, datetime
@@ -58,7 +59,7 @@ EV_ASSIGNMENT_MODES: Final[frozenset[str]] = frozenset({"pums_vehicles", "ressto
 # How home charger power is assigned to each EV slot.
 # - fixed: every vehicle uses charging.charger_power_kw (legacy / scenario override)
 # - resstock: L1 vs L2 from Electric_Vehicle_Charger.tsv; powers via
-#   level1_charger_power_kw / level2_charger_power_kw (default ResStock 1.6 / 5.69)
+#   level1_charger_power_kw / level2_charger_power_kw (default 1.6 / 7.2)
 ChargerAssignmentMode = Literal["fixed", "resstock"]
 CHARGER_ASSIGNMENT_MODES: Final[frozenset[str]] = frozenset({"fixed", "resstock"})
 
@@ -147,6 +148,8 @@ class EVDemandConfig:
     # 0–100 = full pool; e.g. 0–95 keeps empties and drops the heaviest ~5% of survey days.
     nhts_daily_miles_percentile_low: float = 0.0
     nhts_daily_miles_percentile_high: float = 100.0
+    # Include owned-but-idle NHTS vehicle-days as zero-driving match templates.
+    include_zero_driving_days_in_match_pool: bool = True
 
     # Trip schedule perturbation / packing
     min_trip_away_hours: int = DEFAULT_MIN_TRIP_AWAY_HOURS
@@ -177,7 +180,7 @@ class EVDemandConfig:
     #     level1/level2_charger_power_kw ignored
     #   charger_assignment=resstock → sample L1 vs L2 from TSV among SOC-feasible
     #     levels (perfect foresight); powers from level1/level2_charger_power_kw
-    #     (default ResStock 1.6 / 5.69); charger_power_kw ignored
+    #     (default 1.6 / 7.2); charger_power_kw ignored
     charging_strategy: ChargingStrategy = "immediate"
     # fixed: use charger_power_kw for every EV; resstock: sample L1/L2 from TSV.
     charger_assignment: ChargerAssignmentMode = "fixed"
@@ -188,6 +191,14 @@ class EVDemandConfig:
     level2_charger_power_kw: float | None = None
     # resstock only: inflate trip discharge by (1+buffer) when testing L1/L2 SOC feasibility.
     charger_buffer_fraction: float = DEFAULT_CHARGER_BUFFER_FRACTION
+    # resstock only: when a vehicle's schedule cannot be covered by any home charger
+    # level (e.g. multi-day away, no home plug), drop it from the EV fleet instead of
+    # raising. True treats such profiles as non-EV; False hard-fails on infeasibility.
+    exclude_infeasible_charger_profiles: bool = True
+    # When exclude_infeasible_charger_profiles is True, redraw NHTS weekday/weekend
+    # templates up to this many times per infeasible slot before dropping it.
+    # 0 = drop immediately (no redraw). Ignored when exclude is False.
+    infeasible_profile_redraw_attempts: int = 20
     # Home-charging energy share (residential meter): none → 1.0; resstock → RECS TSV sample.
     # Scales home discharge / charger feasibility only; battery sizing stays on full duty.
     home_charging_fraction_assignment: HomeChargingFractionAssignmentMode = "none"
@@ -341,6 +352,11 @@ class EVDemandConfig:
         if self.charger_buffer_fraction < 0:
             raise ValueError(
                 f"charger_buffer_fraction must be >= 0; got {self.charger_buffer_fraction}"
+            )
+        if self.infeasible_profile_redraw_attempts < 0:
+            raise ValueError(
+                "infeasible_profile_redraw_attempts must be >= 0; "
+                f"got {self.infeasible_profile_redraw_attempts}"
             )
 
         # Charger power is mode-gated:
@@ -729,6 +745,20 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
         flat["daily_price_usd_per_kwh"] = tuple(float(x) for x in flat["daily_price_usd_per_kwh"])
     if "allow_emergency_peak_charging" in flat and flat["allow_emergency_peak_charging"] is not None:
         flat["allow_emergency_peak_charging"] = bool(flat["allow_emergency_peak_charging"])
+    if (
+        "exclude_infeasible_charger_profiles" in flat
+        and flat["exclude_infeasible_charger_profiles"] is not None
+    ):
+        flat["exclude_infeasible_charger_profiles"] = bool(
+            flat["exclude_infeasible_charger_profiles"]
+        )
+    if (
+        "include_zero_driving_days_in_match_pool" in flat
+        and flat["include_zero_driving_days_in_match_pool"] is not None
+    ):
+        flat["include_zero_driving_days_in_match_pool"] = bool(
+            flat["include_zero_driving_days_in_match_pool"]
+        )
 
     # Coerce numeric scalars (YAML may leave scientific notation as strings).
     for key in (
@@ -756,6 +786,7 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
         "batch_size",
         "max_vehicles",
         "max_workers",
+        "infeasible_profile_redraw_attempts",
     ):
         if key in flat and flat[key] is not None:
             flat[key] = int(flat[key])
@@ -826,6 +857,8 @@ class EVDemandCalculator:
         level1_charger_power_kw: float | None = None,
         level2_charger_power_kw: float | None = None,
         charger_buffer_fraction: float = DEFAULT_CHARGER_BUFFER_FRACTION,
+        exclude_infeasible_charger_profiles: bool = True,
+        infeasible_profile_redraw_attempts: int = 20,
         home_charging_fraction_assignment: HomeChargingFractionAssignmentMode = "none",
         temperature_adjustment: TemperatureAdjustmentMode = "none",
         weather_dir: str | Path | None = None,
@@ -861,9 +894,11 @@ class EVDemandCalculator:
             level1_charger_power_kw: Level 1 kW when ``charger_assignment=resstock``
                 (default ResStock 1.6); unused for ``fixed``
             level2_charger_power_kw: Level 2 kW when ``charger_assignment=resstock``
-                (default ResStock 5.69); unused for ``fixed``
+                (default 7.2); unused for ``fixed``
             charger_buffer_fraction: Extra discharge fraction for resstock L1/L2 SOC
                 feasibility (default 0.2); unused for ``fixed``
+            exclude_infeasible_charger_profiles: Drop (or redraw) slots no home charger covers
+            infeasible_profile_redraw_attempts: Max NHTS profile redraws per infeasible slot
             home_charging_fraction_assignment: ``none`` (100% home) or ``resstock`` (RECS TSV)
             temperature_adjustment: When ``resstock``, battery sizing uses temp-scaled duty miles
             weather_dir: ResStock weather CSV directory (required for ``resstock`` temp adj)
@@ -975,7 +1010,24 @@ class EVDemandCalculator:
                 f"charger_buffer_fraction must be >= 0; got {charger_buffer_fraction}"
             )
         self.charger_buffer_fraction = charger_buffer_fraction
+        self.exclude_infeasible_charger_profiles = exclude_infeasible_charger_profiles
+        if infeasible_profile_redraw_attempts < 0:
+            raise ValueError(
+                "infeasible_profile_redraw_attempts must be >= 0; "
+                f"got {infeasible_profile_redraw_attempts}"
+            )
+        self.infeasible_profile_redraw_attempts = infeasible_profile_redraw_attempts
         self.home_charging_fraction_assignment = home_charging_fraction_assignment
+        # Filled by match_and_generate_trip_schedules when charger redraw runs.
+        self.last_charger_redraw_stats: pl.DataFrame = pl.DataFrame(
+            schema={
+                "bldg_id": pl.Int64,
+                "vehicle_id": pl.Int64,
+                "n_attempts": pl.Int64,
+                "recovered": pl.Boolean,
+                "status": pl.Utf8,
+            }
+        )
 
         # Pipeline components.
         if vehicle_ownership is not None:
@@ -1104,6 +1156,8 @@ class EVDemandCalculator:
             level1_charger_power_kw=config.level1_charger_power_kw,
             level2_charger_power_kw=config.level2_charger_power_kw,
             charger_buffer_fraction=config.charger_buffer_fraction,
+            exclude_infeasible_charger_profiles=config.exclude_infeasible_charger_profiles,
+            infeasible_profile_redraw_attempts=config.infeasible_profile_redraw_attempts,
             home_charging_fraction_assignment=config.home_charging_fraction_assignment,
             temperature_adjustment=config.temperature_adjustment,
             weather_dir=config.weather_dir,
@@ -1245,7 +1299,10 @@ class EVDemandCalculator:
         ev_attributes = self._assign_home_charging_fractions(ev_attributes)
 
         # Attach per-vehicle charger level / kW onto the same attribute frame
-        # (SOC feasibility uses home-attributed / scaled discharge).
+        # (SOC feasibility uses home-attributed / scaled discharge). Vehicles no
+        # home charger can cover are dropped here when charger_assignment=resstock;
+        # we then redraw NHTS profiles for those slots before giving up.
+        attrs_before_charger = ev_attributes
         ev_attributes = self._assign_chargers(
             ev_attributes,
             trip_schedules=trip_schedules,
@@ -1253,7 +1310,322 @@ class EVDemandCalculator:
             hours_base=resolved_hours,
         )
 
+        infeasible = attrs_before_charger.join(
+            ev_attributes.select("bldg_id", "vehicle_id"),
+            on=["bldg_id", "vehicle_id"],
+            how="anti",
+        )
+        if (
+            infeasible.height > 0
+            and self.charger_assignment == "resstock"
+            and self.exclude_infeasible_charger_profiles
+            and self.infeasible_profile_redraw_attempts > 0
+        ):
+            # Strip failed slots from trips/duty before attempting recovery.
+            keep_keys = ev_attributes.select("bldg_id", "vehicle_id")
+            if not trip_schedules.is_empty():
+                trip_schedules = trip_schedules.join(
+                    keep_keys, on=["bldg_id", "vehicle_id"], how="inner"
+                )
+            if not hourly_temp_scaled_miles.is_empty():
+                hourly_temp_scaled_miles = hourly_temp_scaled_miles.join(
+                    keep_keys, on=["bldg_id", "vehicle_id"], how="inner"
+                )
+
+            recovered_trips, recovered_attrs, recovered_duty, redraw_stats = (
+                self._redraw_charger_infeasible_vehicles(
+                    infeasible=infeasible,
+                    bldg_veh_df=bldg_veh_df,
+                    hours_base=resolved_hours,
+                    hourly_temp_f_by_bldg=resolved_temps,
+                )
+            )
+            self.last_charger_redraw_stats = redraw_stats
+            if recovered_attrs.height > 0:
+                ev_attributes = pl.concat(
+                    [ev_attributes, recovered_attrs], how="diagonal_relaxed"
+                )
+                if recovered_trips.height > 0:
+                    trip_schedules = (
+                        pl.concat([trip_schedules, recovered_trips], how="diagonal_relaxed")
+                        if trip_schedules.height > 0
+                        else recovered_trips
+                    )
+                if recovered_duty.height > 0:
+                    hourly_temp_scaled_miles = (
+                        pl.concat(
+                            [hourly_temp_scaled_miles, recovered_duty],
+                            how="diagonal_relaxed",
+                        )
+                        if hourly_temp_scaled_miles.height > 0
+                        else recovered_duty
+                    )
+        elif infeasible.height > 0:
+            # Dropped without redraw (attempts=0 or exclude path already filtered).
+            keep_keys = ev_attributes.select("bldg_id", "vehicle_id")
+            if not trip_schedules.is_empty():
+                trip_schedules = trip_schedules.join(
+                    keep_keys, on=["bldg_id", "vehicle_id"], how="inner"
+                )
+            if not hourly_temp_scaled_miles.is_empty():
+                hourly_temp_scaled_miles = hourly_temp_scaled_miles.join(
+                    keep_keys, on=["bldg_id", "vehicle_id"], how="inner"
+                )
+            self.last_charger_redraw_stats = infeasible.select(
+                "bldg_id", "vehicle_id"
+            ).with_columns(
+                pl.lit(0).alias("n_attempts"),
+                pl.lit(False).alias("recovered"),
+                pl.lit("excluded_no_redraw").alias("status"),
+            )
+        else:
+            self.last_charger_redraw_stats = pl.DataFrame(
+                schema={
+                    "bldg_id": ev_attributes.schema.get("bldg_id", pl.Int64),
+                    "vehicle_id": pl.Int64,
+                    "n_attempts": pl.Int64,
+                    "recovered": pl.Boolean,
+                    "status": pl.Utf8,
+                }
+            )
+
         return trip_schedules, ev_attributes, hourly_temp_scaled_miles
+
+    @staticmethod
+    def _slot_redraw_salt(bldg_id: object, vehicle_id: int) -> int:
+        """Stable per-slot salt for redraw seeds (not Python's randomized hash())."""
+        return zlib.adler32(f"{bldg_id}:{int(vehicle_id)}".encode("utf-8")) & 0x7FFFFFFF
+
+    def _redraw_charger_infeasible_vehicles(
+        self,
+        *,
+        infeasible: pl.DataFrame,
+        bldg_veh_df: pl.DataFrame,
+        hours_base: pl.DataFrame,
+        hourly_temp_f_by_bldg: pl.DataFrame | None,
+    ) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+        """Redraw NHTS profiles for slots no home charger could cover.
+
+        Keeps the EV ownership assignment; only the driving diary (and dependent
+        battery / charger draws) are resampled. Home-charging fraction from the
+        first pass is preserved when present (household trait, not diary trait).
+
+        Returns:
+            ``(trip_schedules, ev_attributes, hourly_temp_scaled_miles, redraw_stats)``
+            for successfully recovered slots (frames may be empty). ``redraw_stats``
+            has one row per input infeasible slot with ``n_attempts``, ``recovered``,
+            and ``status`` (``recovered`` / ``excluded``).
+        """
+        max_attempts = self.infeasible_profile_redraw_attempts
+        recovered_trips: list[pl.DataFrame] = []
+        recovered_attrs: list[pl.DataFrame] = []
+        recovered_duty: list[pl.DataFrame] = []
+        stats_rows: list[dict[str, object]] = []
+
+        # Building demographics for NHTS matching (one row per building).
+        bldg_lookup = {row["bldg_id"]: row for row in bldg_veh_df.iter_rows(named=True)}
+
+        trip_gen = self.trip_schedule_generator
+        for row in infeasible.iter_rows(named=True):
+            bldg_id = row["bldg_id"]
+            vehicle_id = int(row["vehicle_id"])
+            if bldg_id not in bldg_lookup:
+                stats_rows.append(
+                    {
+                        "bldg_id": bldg_id,
+                        "vehicle_id": vehicle_id,
+                        "n_attempts": 0,
+                        "recovered": False,
+                        "status": "excluded",
+                    }
+                )
+                continue
+
+            bldg_row = dict(bldg_lookup[bldg_id])
+            # Sample a single vehicle-day pair, then remap to this slot's vehicle_id.
+            sample_row = {**bldg_row, "vehicles": 1}
+            sample_df = pl.DataFrame([sample_row])
+
+            # Preserve first-pass home fraction when available.
+            preserved_home = None
+            if "fraction_charged_home" in infeasible.columns:
+                preserved_home = {
+                    "charge_at_home_bin": row.get("charge_at_home_bin"),
+                    "fraction_charged_home": row.get("fraction_charged_home"),
+                }
+
+            recovered = False
+            attempts_used = 0
+            salt = self._slot_redraw_salt(bldg_id, vehicle_id)
+            for attempt in range(1, max_attempts + 1):
+                attempts_used = attempt
+                seed = self.random_state + 1_000_003 * attempt + salt
+                profiles = cast(
+                    dict[tuple[str, int], VehicleProfile],
+                    self.nhts_sampler.sample_with_seed(sample_df, random_state=seed),
+                )
+                raw_profile = next(iter(profiles.values()))
+                profile = VehicleProfile(
+                    bldg_id=bldg_id,
+                    vehicle_id=vehicle_id,
+                    weekday=raw_profile.weekday,
+                    weekend=raw_profile.weekend,
+                )
+
+                slot_trips = TripScheduleGenerator(
+                    start_date=trip_gen.start_date,
+                    end_date=trip_gen.end_date,
+                    random_state=seed,
+                    max_workers=1,
+                    min_trip_away_hours=trip_gen.min_trip_away_hours,
+                    max_departure_hour=trip_gen.max_departure_hour,
+                    max_arrival_hour=trip_gen.max_arrival_hour,
+                    time_offsets=trip_gen.time_offsets,
+                    time_offset_probabilities=trip_gen.time_offset_probabilities,
+                    miles_noise_std_fraction=trip_gen.miles_noise_std_fraction,
+                ).generate({(bldg_id, vehicle_id): profile})
+
+                slot_duty = ChargingSimulator.build_hourly_temp_scaled_miles(
+                    slot_trips,
+                    hours_base,
+                    hourly_temp_f_by_bldg=hourly_temp_f_by_bldg,
+                )
+                max_miles = ChargingSimulator.max_daily_miles_from_hourly_temp_scaled(
+                    slot_duty
+                )
+                vehicle_duty = (
+                    pl.DataFrame(
+                        {
+                            "bldg_id": [bldg_id],
+                            "vehicle_id": [vehicle_id],
+                        }
+                    )
+                    .join(max_miles, on=["bldg_id", "vehicle_id"], how="left")
+                    .with_columns(pl.col("max_daily_miles").fill_null(0.0))
+                )
+
+                # Fresh RNG so redraw battery draws don't share the fleet stream.
+                slot_battery_assigner = EVBatteryAssigner(
+                    option_probabilities=self.battery_assigner.option_probabilities,
+                    autonomie_params=self.battery_assigner.autonomie_params,
+                    random_state=seed,
+                )
+                slot_attrs = slot_battery_assigner.assign(
+                    vehicle_duty,
+                    buffer_fraction=self.capacity_buffer_fraction,
+                )
+
+                if (
+                    preserved_home is not None
+                    and preserved_home.get("fraction_charged_home") is not None
+                ):
+                    slot_attrs = slot_attrs.with_columns(
+                        pl.lit(preserved_home.get("charge_at_home_bin")).alias(
+                            "charge_at_home_bin"
+                        ),
+                        pl.lit(
+                            float(preserved_home["fraction_charged_home"])
+                        ).alias("fraction_charged_home"),
+                    )
+                else:
+                    slot_attrs = self._assign_home_charging_fractions(slot_attrs)
+
+                # Probe charger feasibility; drop_infeasible keeps a 0-row frame on fail.
+                probed = self._assign_chargers(
+                    slot_attrs,
+                    trip_schedules=slot_trips,
+                    hourly_temp_scaled_miles=slot_duty,
+                    hours_base=hours_base,
+                )
+                if probed.height == 1:
+                    recovered_trips.append(slot_trips)
+                    recovered_attrs.append(probed)
+                    recovered_duty.append(slot_duty)
+                    recovered = True
+                    logging.info(
+                        "Recovered charger-infeasible EV bldg_id=%r vehicle_id=%s "
+                        "on NHTS profile redraw attempt %s/%s",
+                        bldg_id,
+                        vehicle_id,
+                        attempt,
+                        max_attempts,
+                    )
+                    break
+
+            stats_rows.append(
+                {
+                    "bldg_id": bldg_id,
+                    "vehicle_id": vehicle_id,
+                    "n_attempts": attempts_used,
+                    "recovered": recovered,
+                    "status": "recovered" if recovered else "excluded",
+                }
+            )
+
+        redraw_stats = pl.DataFrame(
+            stats_rows,
+            schema={
+                "bldg_id": infeasible.schema.get("bldg_id", pl.Int64),
+                "vehicle_id": pl.Int64,
+                "n_attempts": pl.Int64,
+                "recovered": pl.Boolean,
+                "status": pl.Utf8,
+            },
+        )
+        n_recovered = int(redraw_stats.filter(pl.col("recovered")).height) if redraw_stats.height else 0
+        n_failed = int(redraw_stats.filter(~pl.col("recovered")).height) if redraw_stats.height else 0
+        if n_failed:
+            failed_ids = (
+                redraw_stats.filter(~pl.col("recovered"))["bldg_id"].head(5).to_list()
+            )
+            logging.warning(
+                "After %s NHTS profile redraw attempt(s), %s EV(s) remain "
+                "charger-infeasible and are excluded from the fleet "
+                "(e.g. bldg_id=%s)",
+                max_attempts,
+                n_failed,
+                failed_ids,
+            )
+        if n_recovered:
+            recovered_attempts = redraw_stats.filter(pl.col("recovered"))["n_attempts"]
+            logging.info(
+                "Recovered %s / %s charger-infeasible EV(s) via NHTS profile redraw "
+                "(attempts among recovered: mean=%.1f, max=%s)",
+                n_recovered,
+                infeasible.height,
+                float(recovered_attempts.mean()),
+                int(recovered_attempts.max()),
+            )
+
+        trips_out = (
+            pl.concat(recovered_trips, how="diagonal_relaxed")
+            if recovered_trips
+            else pl.DataFrame(
+                schema={
+                    "bldg_id": infeasible.schema.get("bldg_id", pl.Int64),
+                    "vehicle_id": pl.Int64,
+                }
+            )
+        )
+        attrs_out = (
+            pl.concat(recovered_attrs, how="diagonal_relaxed")
+            if recovered_attrs
+            else infeasible.clear()
+        )
+        duty_out = (
+            pl.concat(recovered_duty, how="diagonal_relaxed")
+            if recovered_duty
+            else pl.DataFrame(
+                schema={
+                    "bldg_id": infeasible.schema.get("bldg_id", pl.Int64),
+                    "vehicle_id": pl.Int64,
+                    "hour_index": pl.UInt32,
+                    "travel_date": pl.Datetime(time_unit="us"),
+                    "temp_scaled_miles": pl.Float64,
+                }
+            )
+        )
+        return trips_out, attrs_out, duty_out, redraw_stats
 
     def _assign_home_charging_fractions(
         self,
@@ -1450,21 +1822,27 @@ class EVDemandCalculator:
                     arr[int(hour_index)] = float(discharge)
 
         # Sample L1/L2 only from levels that pass the SOC foresight + buffer check.
+        # Vehicles no home charger can cover are dropped (exclude_infeasible=True) so
+        # implausible EV schedules (e.g. multi-day away) leave the fleet cleanly.
         charger_attrs = self.charger_assigner.assign(
             vehicles_with_meta,
             presence_by_vehicle=presence_by_vehicle,
             discharge_kwh_by_vehicle=discharge_kwh_by_vehicle,
             buffer_fraction=self.charger_buffer_fraction,
+            drop_infeasible=self.exclude_infeasible_charger_profiles,
         )
+        n_infeasible = ev_attributes.height - charger_attrs.height
         logging.info(
             "Assigned ResStock L1/L2 chargers for %s EV(s) "
-            "(SOC-feasible, buffer=%.2f): Level 1=%s, Level 2=%s",
+            "(SOC-feasible, buffer=%.2f): Level 1=%s, Level 2=%s%s",
             charger_attrs.height,
             self.charger_buffer_fraction,
             (charger_attrs["charger_level"] == "Level 1").sum(),
             (charger_attrs["charger_level"] == "Level 2").sum(),
+            f"; excluded {n_infeasible} infeasible" if n_infeasible else "",
         )
-        return ev_attributes.join(charger_attrs, on=["bldg_id", "vehicle_id"], how="left")
+        # Inner join drops any vehicle excluded by the feasibility filter.
+        return ev_attributes.join(charger_attrs, on=["bldg_id", "vehicle_id"], how="inner")
 
     def _assign_ev_slots(self) -> pl.DataFrame:
         """Assign a ``vehicles`` column (EV slot count) according to ``ev_assignment``."""

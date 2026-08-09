@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import polars as pl
 
-from utils.EVs.NHTSProfileSampler import VehicleProfile
+from utils.EVs.NHTSProfileSampler import TripProfile, VehicleProfile
 
 # NHTS travel day is 4:00am through 3:59am the next calendar day.
 DEFAULT_TRAVEL_DAY_START_HOUR = 4
@@ -23,6 +23,11 @@ DEFAULT_MAX_ARRIVAL_HOUR = DEFAULT_TRAVEL_DAY_END_HOUR  # 28 = 4am next day (exc
 DEFAULT_TIME_OFFSETS: tuple[int, ...] = (-2, -1, 0, 1, 2)
 DEFAULT_TIME_OFFSET_PROBABILITIES: tuple[float, ...] = (0.05, 0.10, 0.70, 0.10, 0.05)
 DEFAULT_MILES_NOISE_STD_FRACTION = 0.1
+# Synthetic seam legs copy miles *and* duration from the mirrored observed leg.
+# The 65 mph value is an audit threshold only: if the inter-trip gap is shorter
+# than that mirrored duration, we clamp duration to the gap but keep miles so
+# SOC / battery sizing are not understated.
+MAX_SYNTHETIC_TRIP_AVERAGE_SPEED_MPH = 65.0
 
 # Trip-schedule dtypes, declared explicitly so vehicles matched to an empty NHTS
 # template (owned but not driven on the survey day) still yield a typed 0-row frame
@@ -38,6 +43,12 @@ TRIP_SCHEDULE_DTYPES: dict[str, PolarsDtype] = {
     "trip_arrival_date": pl.Datetime("us"),
     "trip_arrival_hour": pl.Int64,
     "trip_miles_driven": pl.Float64,
+    # True only for imputed cross-day return/leave legs (seam reconciliation).
+    "is_synthetic_trip": pl.Boolean,
+    # Audit fields for synthetic seams (null / False on observed rows).
+    "synthetic_seam_kind": pl.Utf8,  # "return_home" | "leave_home" | null
+    "synthetic_duration_clamped": pl.Boolean,  # True if mirror duration > gap
+    "synthetic_mirror_duration_hours": pl.Int64,  # pre-clamp mirrored duration
     "tour_id": pl.Int64,
     "tour_departure_date": pl.Datetime("us"),
     "tour_departure_hour": pl.Int64,
@@ -391,7 +402,7 @@ class TripScheduleGenerator:
         )
 
         # Pre-allocate lists for batch DataFrame construction
-        bldg_ids: list[str] = []
+        bldg_ids: list[str | int] = []
         vehicle_ids: list[int] = []
         travel_dates: list[datetime] = [] # date of the 4am NHTS travel-day start (not drive date)
         trip_departure_dates: list[datetime] = [] # calendar date of departure times
@@ -399,17 +410,30 @@ class TripScheduleGenerator:
         trip_departure_hours: list[int] = [] # trip departure hours
         trip_arrival_hours: list[int] = [] # trip arrival hours 
         trip_miles_driven: list[float] = [] # miles driven for each trip
+        is_synthetic_trips: list[bool] = [] # True only for imputed cross-day seam legs
+        synthetic_seam_kinds: list[str | None] = [] # return_home / leave_home / None
+        synthetic_duration_clamped: list[bool] = [] # True if mirror duration exceeded gap
+        synthetic_mirror_duration_hours: list[int | None] = [] # pre-clamp mirror hours
         tour_ids_out: list[int] = [] # links legs that belong to the same away tour
         tour_departure_dates: list[datetime] = [] # calendar date of tour departure times
         tour_arrival_dates: list[datetime] = [] # calendar date of tour arrival times
         tour_departure_hours: list[int] = [] # tour departure hours
         tour_arrival_hours: list[int] = [] # tour arrival hours (exclusive end of away interval)
+        # Per travel-day bookkeeping for the post-pass seam reconciler below.
+        # Each entry is (travel_date, day template, start_row, end_row) into the
+        # parallel schedule lists. Empty days still get a record (start==end) so
+        # we can skip them when pairing adjacent driven days.
+        day_records: list[tuple[date, TripProfile, int, int]] = []
 
         for travel_date in travel_days:
             is_weekday = travel_date.weekday() < 5  # Monday-Friday are weekdays
             day = profile.weekday if is_weekday else profile.weekend
             n_trips = len(day.trip_ids)
+            # Index of the first row we will emit for this travel day (before appending).
+            day_row_start = len(travel_dates)
             if n_trips == 0:
+                # Idle template: no legs emitted; presence stays home by default.
+                day_records.append((travel_date, day, day_row_start, day_row_start))
                 continue
 
             trip_dep = np.array(day.trip_departure_hours, dtype=int)
@@ -518,11 +542,43 @@ class TripScheduleGenerator:
                 trip_departure_hours.append(dep_clock)
                 trip_arrival_hours.append(arr_clock)
                 trip_miles_driven.append(float(miles_variance[leg]))
+                is_synthetic_trips.append(False)
+                synthetic_seam_kinds.append(None)
+                synthetic_duration_clamped.append(False)
+                synthetic_mirror_duration_hours.append(None)
                 tour_ids_out.append(old_to_new_tour[old_tour])
                 tour_departure_dates.append(datetime.combine(tour_dep_cal, datetime.min.time()))
                 tour_arrival_dates.append(datetime.combine(tour_arr_cal, datetime.min.time()))
                 tour_departure_hours.append(tour_dep_clock)
                 tour_arrival_hours.append(tour_arr_clock)
+
+            # Record the half-open row slice [day_row_start, len) for this travel day.
+            day_records.append((travel_date, day, day_row_start, len(travel_dates)))
+
+        # After all travel days are emitted, reconcile open home/away seams.
+        # Missing return/leave legs are appended with mirrored miles *and*
+        # duration so discharge and peak-daily-mile battery sizing include them.
+        self._apply_synthetic_seam_trips(
+            day_records=day_records,
+            bldg_ids=bldg_ids,
+            vehicle_ids=vehicle_ids,
+            travel_dates=travel_dates,
+            trip_departure_dates=trip_departure_dates,
+            trip_departure_hours=trip_departure_hours,
+            trip_arrival_dates=trip_arrival_dates,
+            trip_arrival_hours=trip_arrival_hours,
+            trip_miles_driven=trip_miles_driven,
+            is_synthetic_trips=is_synthetic_trips,
+            synthetic_seam_kinds=synthetic_seam_kinds,
+            synthetic_duration_clamped=synthetic_duration_clamped,
+            synthetic_mirror_duration_hours=synthetic_mirror_duration_hours,
+            tour_ids=tour_ids_out,
+            tour_departure_dates=tour_departure_dates,
+            tour_departure_hours=tour_departure_hours,
+            tour_arrival_dates=tour_arrival_dates,
+            tour_arrival_hours=tour_arrival_hours,
+            rng=rng,
+        )
 
         schedule_data = {
             "bldg_id": bldg_ids,
@@ -536,6 +592,10 @@ class TripScheduleGenerator:
             "trip_arrival_date": trip_arrival_dates,
             "trip_arrival_hour": trip_arrival_hours,
             "trip_miles_driven": trip_miles_driven,
+            "is_synthetic_trip": is_synthetic_trips,
+            "synthetic_seam_kind": synthetic_seam_kinds,
+            "synthetic_duration_clamped": synthetic_duration_clamped,
+            "synthetic_mirror_duration_hours": synthetic_mirror_duration_hours,
             # Home-away tour (presence / charging eligibility)
             "tour_id": tour_ids_out,
             "tour_departure_date": tour_departure_dates,
@@ -559,6 +619,305 @@ class TripScheduleGenerator:
                 "trip_arrival_hour",
             ]
         )
+
+    @staticmethod
+    def _sample_midpoint_weighted_hour(
+        start: datetime,
+        end: datetime,
+        rng: np.random.RandomState,
+    ) -> datetime:
+        """Sample an hourly boundary in ``[start, end]`` with midpoint-heavy weights.
+
+        Candidate boundaries receive discrete triangular weights. For six choices,
+        for example, the normalized probabilities are proportional to
+        ``[1, 2, 3, 3, 2, 1]``. This is symmetric, leaves every feasible hour
+        possible, and introduces no preferred clock time.
+        """
+        if end < start:
+            raise ValueError(f"presence transition window is inverted: {start} > {end}")
+        # Number of whole hours spanning the gap; candidates are inclusive endpoints.
+        # Example: start=9pm, end=3am → 6 hours → candidates at 9,10,11,0,1,2,3 (7 pts).
+        n_hours = int((end - start).total_seconds() // 3600)
+        candidates = [start + timedelta(hours=offset) for offset in range(n_hours + 1)]
+        n = len(candidates)
+        # Discrete triangle peaked at the midpoint(s): weight rises then falls.
+        # index 0 and n-1 get weight 1; middle indices get the largest weight.
+        weights = np.array([min(i + 1, n - i) for i in range(n)], dtype=float)
+        weights /= weights.sum()
+        return candidates[int(rng.choice(n, p=weights))]
+
+    def _apply_synthetic_seam_trips(
+        self,
+        *,
+        day_records: list[tuple[date, TripProfile, int, int]],
+        bldg_ids: list[str | int],
+        vehicle_ids: list[int],
+        travel_dates: list[datetime],
+        trip_departure_dates: list[datetime],
+        trip_departure_hours: list[int],
+        trip_arrival_dates: list[datetime],
+        trip_arrival_hours: list[int],
+        trip_miles_driven: list[float],
+        is_synthetic_trips: list[bool],
+        synthetic_seam_kinds: list[str | None],
+        synthetic_duration_clamped: list[bool],
+        synthetic_mirror_duration_hours: list[int | None],
+        tour_ids: list[int],
+        tour_departure_dates: list[datetime],
+        tour_departure_hours: list[int],
+        tour_arrival_dates: list[datetime],
+        tour_arrival_hours: list[int],
+        rng: np.random.RandomState,
+    ) -> None:
+        """Impute missing drive legs between adjacent open travel days.
+
+        Synthetic return/leave legs copy miles and duration from the opposite
+        observed edge of the same tour (after schedule perturbation). Duration is
+        clamped to the available inter-trip gap, and the trip is centered
+        stochastically around the gap midpoint:
+
+        - away → home: append the missing return-home leg to the final tour;
+        - home → away: prepend the missing leave-home leg to the first tour;
+        - away → away: join the two away spells without a state transition.
+
+        Observed rows remain untouched. Synthetic rows participate in discharge
+        and peak-daily-mile battery sizing exactly like observed drive rows.
+        Empty days retain the existing seam behavior (home by default), because
+        they have no pair of observed trip anchors.
+        """
+
+        def timestamp(day_values: list[datetime], hour_values: list[int], idx: int) -> datetime:
+            """Combine a date column with its parallel hour column into one datetime."""
+            return day_values[idx].replace(hour=hour_values[idx])
+
+        # Walk consecutive travel-day records for this vehicle.
+        for previous, following in zip(day_records, day_records[1:], strict=False):
+            previous_date, previous_day, previous_start, previous_end = previous
+            following_date, following_day, following_start, following_end = following
+            # Only act on true overnight seams (adjacent calendar travel days).
+            if following_date != previous_date + timedelta(days=1):
+                continue
+            # Skip if either side is an empty/idle day (no observed trip anchors).
+            if previous_start == previous_end or following_start == following_end:
+                continue
+
+            previous_indices = range(previous_start, previous_end)
+            following_indices = range(following_start, following_end)
+            # Last observed drive arrival on day D (end of the inter-trip gap).
+            last_idx = max(
+                previous_indices,
+                key=lambda idx: timestamp(trip_arrival_dates, trip_arrival_hours, idx),
+            )
+            # First observed drive departure on day D+1 (start of next activity).
+            first_idx = min(
+                following_indices,
+                key=lambda idx: timestamp(trip_departure_dates, trip_departure_hours, idx),
+            )
+            # Feasible window for the unobserved return/leave: (last_arr, first_dep).
+            gap_start = timestamp(trip_arrival_dates, trip_arrival_hours, last_idx)
+            gap_end = timestamp(trip_departure_dates, trip_departure_hours, first_idx)
+            if gap_end < gap_start:
+                # Perturbation/packing should prevent this; an instant seam flip is
+                # safer than creating an inverted tour if custom bounds violate it.
+                gap_end = gap_start
+
+            # Which tour rows to edit on each side of the seam.
+            final_tour_id = tour_ids[last_idx]
+            first_tour_id = tour_ids[first_idx]
+
+            def add_synthetic_leg(
+                *,
+                mirror_idx: int,
+                assigned_travel_date: date,
+                synthetic_tour_id: int,
+                synthetic_tour_departure: datetime,
+                synthetic_tour_arrival: datetime,
+                seam_kind: str,
+            ) -> tuple[datetime, datetime] | None:
+                """Append one midpoint-centered synthetic row from a mirror leg.
+
+                Steps:
+                1. Copy miles from ``mirror_idx`` (opposite tour edge).
+                2. Copy duration from that same scheduled leg (after offsets),
+                   clamped to the gap length.
+                3. Sample a feasible departure so the trip midpoint sits near the
+                   gap midpoint (triangular weights over possible departures).
+                4. Append a real trip row flagged ``is_synthetic_trip=True``.
+                """
+                # Whole hours available between last arrival and next departure.
+                gap_hours = int((gap_end - gap_start).total_seconds() // 3600)
+                if gap_hours < 1:
+                    # Degenerate gap: no room for a drive interval; caller falls
+                    # back to an instant presence flip with no synthetic miles.
+                    return None
+
+                # Mirror miles + duration from the same observed (perturbed) leg.
+                miles = max(0.0, float(trip_miles_driven[mirror_idx]))
+                mirror_departure = timestamp(
+                    trip_departure_dates, trip_departure_hours, mirror_idx
+                )
+                mirror_arrival = timestamp(
+                    trip_arrival_dates, trip_arrival_hours, mirror_idx
+                )
+                mirror_duration = max(
+                    1,
+                    int((mirror_arrival - mirror_departure).total_seconds() // 3600),
+                )
+                # Never overrun the gap. Prefer filling the gap over shrinking miles
+                # so SOC / battery sizing still see the true distance.
+                duration_clamped = mirror_duration > gap_hours
+                duration = min(mirror_duration, gap_hours)
+
+                # Audit-only: gap shorter than the mirrored drive. Keep miles.
+                implied_speed = miles / duration
+                if implied_speed > MAX_SYNTHETIC_TRIP_AVERAGE_SPEED_MPH:
+                    logging.warning(
+                        "Synthetic seam trip for building %s vehicle %s requires "
+                        "%.1f mph (%.1f miles in %s hour(s); mirror duration was "
+                        "%s hour(s)); preserving miles for SOC",
+                        bldg_ids[mirror_idx],
+                        vehicle_ids[mirror_idx],
+                        implied_speed,
+                        miles,
+                        duration,
+                        mirror_duration,
+                    )
+
+                # Place the duration-h trip so its midpoint is near the gap midpoint:
+                # sample departure in [gap_start, gap_end - duration] with triangular
+                # weights peaking at the center of that feasible departure window.
+                latest_departure = gap_end - timedelta(hours=duration)
+                departure = self._sample_midpoint_weighted_hour(
+                    gap_start,
+                    latest_departure,
+                    rng,
+                )
+                arrival = departure + timedelta(hours=duration)
+
+                # Emit one schedule row. Tour bounds are passed in by the caller and
+                # may be overwritten immediately after for the return/leave endpoint.
+                bldg_ids.append(bldg_ids[mirror_idx])
+                vehicle_ids.append(vehicle_ids[mirror_idx])
+                travel_dates.append(
+                    datetime.combine(assigned_travel_date, datetime.min.time())
+                )
+                trip_departure_dates.append(departure.replace(hour=0))
+                trip_departure_hours.append(departure.hour)
+                trip_arrival_dates.append(arrival.replace(hour=0))
+                trip_arrival_hours.append(arrival.hour)
+                trip_miles_driven.append(miles)
+                is_synthetic_trips.append(True)
+                synthetic_seam_kinds.append(seam_kind)
+                synthetic_duration_clamped.append(duration_clamped)
+                synthetic_mirror_duration_hours.append(mirror_duration)
+                tour_ids.append(synthetic_tour_id)
+                tour_departure_dates.append(synthetic_tour_departure.replace(hour=0))
+                tour_departure_hours.append(synthetic_tour_departure.hour)
+                tour_arrival_dates.append(synthetic_tour_arrival.replace(hour=0))
+                tour_arrival_hours.append(synthetic_tour_arrival.hour)
+                return departure, arrival
+
+            if not previous_day.ends_home and following_day.starts_home:
+                # Case 1 — RETURN HOME (ends away → next starts home).
+                # Story: still out overnight; next morning leaves from home.
+                # Impute home←away drive ending in the gap; close day-D's final tour.
+                #
+                # Miles + duration proxy = first leg of that final tour (the outbound
+                # that left home): tour-symmetry — distance and drive time out ≈ back.
+                final_tour_indices = [
+                    idx for idx in previous_indices if tour_ids[idx] == final_tour_id
+                ]
+                mirror_idx = min(
+                    final_tour_indices,
+                    key=lambda idx: timestamp(
+                        trip_departure_dates,
+                        trip_departure_hours,
+                        idx,
+                    ),
+                )
+                # Keep the original leave-home time; only the return endpoint moves.
+                original_tour_departure = timestamp(
+                    tour_departure_dates,
+                    tour_departure_hours,
+                    mirror_idx,
+                )
+                synthetic = add_synthetic_leg(
+                    mirror_idx=mirror_idx,
+                    # Charge the synthetic miles to day D's travel_date (return home).
+                    assigned_travel_date=previous_date,
+                    synthetic_tour_id=final_tour_id,
+                    synthetic_tour_departure=original_tour_departure,
+                    # Placeholder tour arrival; overwritten with synthetic arrival below.
+                    synthetic_tour_arrival=gap_end,
+                    seam_kind="return_home",
+                )
+                if synthetic is None:
+                    # No drive room: presence flips home at gap_start with 0 miles.
+                    transition = gap_start
+                else:
+                    _, transition = synthetic  # home arrival = end of synthetic drive
+                    # Newly appended row is last; its tour must end at home arrival.
+                    tour_arrival_dates[-1] = transition.replace(hour=0)
+                    tour_arrival_hours[-1] = transition.hour
+                # All observed legs on the same open tour share the new home arrival.
+                for idx in previous_indices:
+                    if tour_ids[idx] == final_tour_id:
+                        tour_arrival_dates[idx] = transition.replace(hour=0)
+                        tour_arrival_hours[idx] = transition.hour
+            elif previous_day.ends_home and not following_day.starts_home:
+                # Case 2 — LEAVE HOME (ends home → next starts away).
+                # Story: home overnight; D+1's first observed leg already starts away.
+                # Impute home→away drive in the gap; open day-D+1's first tour earlier.
+                #
+                # Miles + duration proxy = last leg of that first tour (homebound
+                # edge when the tour eventually returns; else last observed leg).
+                first_tour_indices = [
+                    idx for idx in following_indices if tour_ids[idx] == first_tour_id
+                ]
+                mirror_idx = max(
+                    first_tour_indices,
+                    key=lambda idx: timestamp(
+                        trip_arrival_dates,
+                        trip_arrival_hours,
+                        idx,
+                    ),
+                )
+                # Keep the original return-home time; only the leave endpoint moves.
+                original_tour_arrival = timestamp(
+                    tour_arrival_dates,
+                    tour_arrival_hours,
+                    mirror_idx,
+                )
+                synthetic = add_synthetic_leg(
+                    mirror_idx=mirror_idx,
+                    # Charge the synthetic miles to day D+1's travel_date (leave home).
+                    assigned_travel_date=following_date,
+                    synthetic_tour_id=first_tour_id,
+                    # Placeholder tour departure; overwritten with synthetic dep below.
+                    synthetic_tour_departure=gap_start,
+                    synthetic_tour_arrival=original_tour_arrival,
+                    seam_kind="leave_home",
+                )
+                if synthetic is None:
+                    transition = gap_start
+                else:
+                    transition, _ = synthetic  # leave home = start of synthetic drive
+                    # Newly appended row is last; its tour must start at leave time.
+                    tour_departure_dates[-1] = transition.replace(hour=0)
+                    tour_departure_hours[-1] = transition.hour
+                # All observed legs on the same open-start tour share the new leave.
+                for idx in following_indices:
+                    if tour_ids[idx] == first_tour_id:
+                        tour_departure_dates[idx] = transition.replace(hour=0)
+                        tour_departure_hours[idx] = transition.hour
+            elif not previous_day.ends_home and not following_day.starts_home:
+                # Case 3 — AWAY → AWAY: no home visit at the seam, so no synthetic
+                # drive. Extend day-D's final tour through the gap so presence stays
+                # continuously away until the next observed departure.
+                for idx in previous_indices:
+                    if tour_ids[idx] == final_tour_id:
+                        tour_arrival_dates[idx] = gap_end.replace(hour=0)
+                        tour_arrival_hours[idx] = gap_end.hour
 
     def generate(
         self,
@@ -642,8 +1001,10 @@ class TripScheduleGenerator:
         Per-vehicle peak daily miles over the simulated trip schedule.
 
         Sums ``trip_miles_driven`` within each (bldg_id, vehicle_id, travel_date), then
-        takes the max across travel days. Vehicles absent from ``trip_schedules`` are
-        omitted (callers should left-join onto vehicle slots and fill nulls with 0).
+        takes the max across travel days. Includes synthetic seam legs
+        (``is_synthetic_trip``), so imputed return/leave miles enlarge peak duty and
+        pack sizing. Vehicles absent from ``trip_schedules`` are omitted (callers
+        should left-join onto vehicle slots and fill nulls with 0).
         """
         required = {"bldg_id", "vehicle_id", "travel_date", "trip_miles_driven"}
         missing = required - set(trip_schedules.columns)

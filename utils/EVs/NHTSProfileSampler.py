@@ -416,6 +416,32 @@ class NHTSProfileSampler:
             trip_weights=weights,
         )
 
+    def sample_with_seed(
+        self,
+        bldg_veh_df: pl.DataFrame,
+        nhts_df: pl.DataFrame | None = None,
+        *,
+        random_state: int,
+        return_catalog: bool = False,
+        match_on_vehicles: bool | None = None,
+    ) -> dict[tuple[str, int], VehicleProfile] | tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]:
+        """Like ``sample``, but temporarily seeds NumPy with ``random_state``.
+
+        Used to redraw NHTS profiles for charger-infeasible EV slots without
+        permanently perturbing the process-global RNG state used elsewhere.
+        """
+        prior = np.random.get_state()
+        try:
+            np.random.seed(int(random_state))
+            return self.sample(
+                bldg_veh_df,
+                nhts_df,
+                return_catalog=return_catalog,
+                match_on_vehicles=match_on_vehicles,
+            )
+        finally:
+            np.random.set_state(prior)
+
     @overload
     def sample(
         self,

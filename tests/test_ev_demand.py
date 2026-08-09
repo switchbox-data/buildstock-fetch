@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import pairwise
 from unittest.mock import patch
 
@@ -580,6 +580,42 @@ def test_load_nhts_data_includes_empty_vehicle_days():
     assert empty_ids.n_unique() == n_empty
 
 
+def test_load_nhts_data_keeps_open_days_that_touch_home():
+    """Open NHTS profiles remain eligible, while every retained day touches home."""
+    from utils.EVs.ev_utils import load_nhts_data
+
+    driven = load_nhts_data(
+        "utils/EVs/ev_data/inputs/NHTS_v2_1_trip_surveys.csv",
+        "MD",
+        include_zero_driving_days_in_match_pool=False,
+    ).sort(["hh_vehicle_id", "weekday", "start_time", "seq_trip_id"])
+    day_states = driven.group_by(["hh_vehicle_id", "weekday"]).agg(
+        pl.col("why_from").first().is_in([1, 2]).alias("starts_home"),
+        pl.col("why_to").last().is_in([1, 2]).alias("ends_home"),
+        (
+            pl.col("why_from").is_in([1, 2]).any()
+            | pl.col("why_to").is_in([1, 2]).any()
+        ).alias("touches_home"),
+    )
+
+    assert day_states["touches_home"].all()
+    # Both-ends-open (night-shift-style) days stay eligible; feasibility is
+    # enforced later at charger assignment, not by the match-pool filter.
+    assert day_states.filter(~pl.col("starts_home") & ~pl.col("ends_home")).height > 0
+
+def test_load_nhts_data_can_exclude_zero_driving_days():
+    """The match pool can omit owned-but-idle vehicle-day markers."""
+    from utils.EVs.ev_utils import load_nhts_data
+
+    nhts = load_nhts_data(
+        "utils/EVs/ev_data/inputs/NHTS_v2_1_trip_surveys.csv",
+        "MD",
+        include_zero_driving_days_in_match_pool=False,
+    )
+    assert not nhts["is_empty_day"].any()
+    assert nhts.height > 0
+
+
 def test_sample_zero_vehicles(
     calculator, mock_nhts_data, mock_metadata_with_zero, ev_ownership_df, ev_battery_df, ev_autonomie_df
 ):
@@ -835,6 +871,165 @@ def test_build_tours_from_nhts_legs_school_dropoff_commute():
     assert day.trip_arrival_hours == [9, 10, 18, 19]
     assert day.trip_miles_driven == miles
     assert day.tour_ends_away == [False]
+    assert day.starts_home is True
+    assert day.ends_home is True
+
+
+def test_synthetic_seam_trip_returns_home_between_adjacent_days():
+    """An open final tour gains a mirrored-mile return leg before the next departure."""
+    open_day = TripProfile(
+        trip_departure_hours=[8],
+        trip_arrival_hours=[9],
+        trip_miles_driven=[90.0],
+        trip_weights=[1.0],
+        trip_ids=[1],
+        tour_ids=[1],
+        tour_departure_hours=[8],
+        tour_arrival_hours=[9],
+        tour_ends_away=[True],
+        starts_home=True,
+        ends_home=False,
+    )
+    profile = make_vehicle_profile(weekday=open_day, weekend=TripProfile())
+    gen = TripScheduleGenerator(
+        start_date=datetime(2022, 1, 3, 4),
+        end_date=datetime(2022, 1, 5, 3),
+        time_offsets=(0,),
+        time_offset_probabilities=(1.0,),
+        miles_noise_std_fraction=0.0,
+    )
+
+    schedules = gen.generate_daily_trip_schedule(profile, rng=np.random.RandomState(0))
+    observed = schedules.filter(~pl.col("is_synthetic_trip")).sort("travel_date")
+    synthetic = schedules.filter(pl.col("is_synthetic_trip")).row(0, named=True)
+    monday, tuesday = observed.iter_rows(named=True)
+    synthetic_departure = synthetic["trip_departure_date"].replace(
+        hour=synthetic["trip_departure_hour"]
+    )
+    synthetic_arrival = synthetic["trip_arrival_date"].replace(
+        hour=synthetic["trip_arrival_hour"]
+    )
+    final_observed_arrival = monday["trip_arrival_date"].replace(
+        hour=monday["trip_arrival_hour"]
+    )
+    next_observed_departure = tuesday["trip_departure_date"].replace(
+        hour=tuesday["trip_departure_hour"]
+    )
+
+    assert final_observed_arrival <= synthetic_departure < synthetic_arrival <= next_observed_departure
+    assert synthetic["trip_miles_driven"] == pytest.approx(monday["trip_miles_driven"])
+    # Duration mirrors the observed outbound leg (8→9 = 1 hour), not a speed prior.
+    assert synthetic_arrival - synthetic_departure == timedelta(hours=1)
+    assert synthetic["synthetic_seam_kind"] == "return_home"
+    assert synthetic["synthetic_duration_clamped"] is False
+    assert synthetic["synthetic_mirror_duration_hours"] == 1
+    assert monday["tour_arrival_date"] == synthetic["tour_arrival_date"]
+    assert monday["tour_arrival_hour"] == synthetic["tour_arrival_hour"]
+    assert tuesday["tour_departure_date"] == tuesday["trip_departure_date"]
+    assert tuesday["tour_departure_hour"] == tuesday["trip_departure_hour"]
+    # Synthetic miles belong to Monday, so battery-duty sizing sees 180 rather than 90.
+    peak = TripScheduleGenerator.max_daily_miles_from_trip_schedules(schedules)
+    assert peak["max_daily_miles"][0] == pytest.approx(180.0)
+
+
+def test_synthetic_seam_trip_mirrors_multi_hour_duration():
+    """Synthetic duration copies a multi-hour mirror leg when the gap allows it."""
+    open_day = TripProfile(
+        trip_departure_hours=[8],
+        trip_arrival_hours=[11],  # 3-hour outbound
+        trip_miles_driven=[45.0],
+        trip_weights=[1.0],
+        trip_ids=[1],
+        tour_ids=[1],
+        tour_departure_hours=[8],
+        tour_arrival_hours=[11],
+        tour_ends_away=[True],
+        starts_home=True,
+        ends_home=False,
+    )
+    profile = make_vehicle_profile(weekday=open_day, weekend=TripProfile())
+    gen = TripScheduleGenerator(
+        start_date=datetime(2022, 1, 3, 4),
+        end_date=datetime(2022, 1, 5, 3),
+        time_offsets=(0,),
+        time_offset_probabilities=(1.0,),
+        miles_noise_std_fraction=0.0,
+    )
+    schedules = gen.generate_daily_trip_schedule(profile, rng=np.random.RandomState(0))
+    synthetic = schedules.filter(pl.col("is_synthetic_trip")).row(0, named=True)
+    duration = (
+        synthetic["trip_arrival_date"].replace(hour=synthetic["trip_arrival_hour"])
+        - synthetic["trip_departure_date"].replace(hour=synthetic["trip_departure_hour"])
+    )
+    assert duration == timedelta(hours=3)
+    assert synthetic["trip_miles_driven"] == pytest.approx(45.0)
+
+
+def test_synthetic_seam_trip_leaves_home_between_adjacent_days():
+    """An open-start day gains a mirrored-mile leave-home leg after the prior arrival."""
+    open_day = TripProfile(
+        trip_departure_hours=[8],
+        trip_arrival_hours=[9],
+        trip_miles_driven=[10.0],
+        trip_weights=[1.0],
+        trip_ids=[1],
+        tour_ids=[1],
+        tour_departure_hours=[8],
+        tour_arrival_hours=[9],
+        tour_ends_away=[False],
+        starts_home=False,
+        ends_home=True,
+    )
+    profile = make_vehicle_profile(weekday=open_day, weekend=TripProfile())
+    gen = TripScheduleGenerator(
+        start_date=datetime(2022, 1, 3, 4),
+        end_date=datetime(2022, 1, 5, 3),
+        time_offsets=(0,),
+        time_offset_probabilities=(1.0,),
+        miles_noise_std_fraction=0.0,
+    )
+
+    schedules = gen.generate_daily_trip_schedule(profile, rng=np.random.RandomState(0))
+    observed = schedules.filter(~pl.col("is_synthetic_trip")).sort("travel_date")
+    synthetic = schedules.filter(pl.col("is_synthetic_trip")).row(0, named=True)
+    monday, tuesday = observed.iter_rows(named=True)
+    previous_observed_arrival = monday["trip_arrival_date"].replace(
+        hour=monday["trip_arrival_hour"]
+    )
+    synthetic_departure = synthetic["trip_departure_date"].replace(
+        hour=synthetic["trip_departure_hour"]
+    )
+    synthetic_arrival = synthetic["trip_arrival_date"].replace(
+        hour=synthetic["trip_arrival_hour"]
+    )
+    next_observed_departure = tuesday["trip_departure_date"].replace(
+        hour=tuesday["trip_departure_hour"]
+    )
+
+    assert previous_observed_arrival <= synthetic_departure < synthetic_arrival <= next_observed_departure
+    assert synthetic["trip_miles_driven"] == pytest.approx(tuesday["trip_miles_driven"])
+    assert synthetic_arrival - synthetic_departure == timedelta(hours=1)
+    assert synthetic["synthetic_seam_kind"] == "leave_home"
+    assert synthetic["synthetic_duration_clamped"] is False
+    assert tuesday["tour_departure_date"] == synthetic["tour_departure_date"]
+    assert tuesday["tour_departure_hour"] == synthetic["tour_departure_hour"]
+    assert monday["tour_arrival_date"] == monday["trip_arrival_date"]
+    assert monday["tour_arrival_hour"] == monday["trip_arrival_hour"]
+
+
+def test_midpoint_weighted_presence_sampler_uses_triangular_probabilities():
+    class CapturingRng:
+        def choice(self, n, p):
+            assert n == 6
+            assert p == pytest.approx(np.array([1, 2, 3, 3, 2, 1]) / 12)
+            return 2
+
+    sampled = TripScheduleGenerator._sample_midpoint_weighted_hour(
+        datetime(2022, 1, 1, 0),
+        datetime(2022, 1, 1, 5),
+        CapturingRng(),
+    )
+    assert sampled == datetime(2022, 1, 1, 2)
 
 
 def test_long_work_dwell_stays_one_tour():
@@ -2035,6 +2230,7 @@ end_date: 2024-02-01T03:00:00
 sampling:
   nhts_daily_miles_percentile_low: 10
   nhts_daily_miles_percentile_high: 90
+  include_zero_driving_days_in_match_pool: false
   random_state: 7
 trips:
   min_trip_away_hours: 1
@@ -2058,6 +2254,7 @@ charging:
     assert config.max_vehicles is None
     assert config.nhts_daily_miles_percentile_low == 10
     assert config.nhts_daily_miles_percentile_high == 90
+    assert config.include_zero_driving_days_in_match_pool is False
     assert config.random_state == 7
     assert config.batch_size == 1000
     assert config.charger_assignment == "fixed"
@@ -2128,6 +2325,8 @@ charging:
     assert config.level1_charger_power_kw == RESSTOCK_LEVEL1_CHARGER_KW
     assert config.level2_charger_power_kw == RESSTOCK_LEVEL2_CHARGER_KW
     assert config.charger_buffer_fraction == 0.2
+    assert config.exclude_infeasible_charger_profiles is True
+    assert config.infeasible_profile_redraw_attempts == 20
     assert config.ev_charger_path is not None
     assert config.ev_charger_path.endswith("Electric_Vehicle_Charger.tsv")
 
@@ -2196,7 +2395,7 @@ charging:
 
 
 def test_load_ev_demand_config_resstock_custom_level_powers(tmp_path):
-    """level1/level2_charger_power_kw override ResStock TRG defaults under resstock."""
+    """level1/level2_charger_power_kw override pipeline defaults under resstock."""
     from utils.EVs.ev_demand import load_ev_demand_config
 
     path = tmp_path / "resstock_custom_kw.yml"
@@ -2210,12 +2409,12 @@ charging:
   charging_strategy: immediate
   charger_assignment: resstock
   level1_charger_power_kw: 1.4
-  level2_charger_power_kw: 7.2
+  level2_charger_power_kw: 5.69
 """
     )
     config = load_ev_demand_config(path)
     assert config.level1_charger_power_kw == 1.4
-    assert config.level2_charger_power_kw == 7.2
+    assert config.level2_charger_power_kw == 5.69
     assert config.charger_power_kw is None
 
 

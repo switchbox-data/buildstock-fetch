@@ -37,6 +37,9 @@ sampling:
   # NHTS match: household demographics → one inventory vehicle (may be idle / empty TripProfile).
   ev_assignment: resstock_adoption
   # max_vehicles: 2  # required only when ev_assignment=pums_vehicles
+  # Include owned-but-idle vehicle-days as zero-driving match templates.
+  # false removes only is_empty_day markers; real trip profiles reporting 0 miles remain.
+  include_zero_driving_days_in_match_pool: false
   # Keep NHTS trip profiles (vehicle × survey day) whose daily miles fall in [low, high].
   # Applied in load_nhts_data. 0–95 keeps empty (0-mi) days and drops the heaviest ~5%.
   # (Note: this filter is applied to vehicles with trips and does not include idle vehicles.)
@@ -96,20 +99,26 @@ charging:
   #              (RECS 2020; Speake et al. 2025) among levels that cover the
   #              trip schedule under perfect SOC foresight (immediate home
   #              charging); rated powers from level1/level2_charger_power_kw
-  #              (defaults: ResStock TRG 1.6 / 5.69 kW — L2 is ResStock's
-  #              average observed 240 V draw, not a typical 32 A EVSE nameplate);
+  #              (defaults: 1.6 / 7.2 kW — typical 32 A EVSE; ResStock TRG
+  #              used 5.69 kW avg observed 240 V draw);
   #              charger_power_kw is ignored if set
   charger_assignment: resstock
   # Feasible level must cover trip discharge × (1 + buffer) under perfect SOC
   # foresight (ignored when charger_assignment=fixed).
   charger_buffer_fraction: 0.2
+  # When no charger level (even L2) can cover a vehicle's schedule under the buffer
+  # (e.g. multi-day away with no home plug), try redrawing the NHTS profile before
+  # dropping the EV. true = redraw then exclude; false = hard-fail on infeasibility.
+  exclude_infeasible_charger_profiles: true
+  # Max NHTS weekday/weekend redraws per infeasible slot (0 = drop immediately).
+  infeasible_profile_redraw_attempts: 20
   # Required only when charger_assignment=fixed (omit for resstock):
   # charger_power_kw: 7.2
-  # Optional when charger_assignment=resstock (omit → ResStock defaults):
+  # Optional when charger_assignment=resstock (omit → defaults 1.6 / 7.2):
   # level1_charger_power_kw: 1.6
-  # level2_charger_power_kw: 5.69
-  # Example override to a typical 32 A / 240 V Level 2 EVSE:
   # level2_charger_power_kw: 7.2
+  # Example: ResStock TRG average-draw Level 2 instead of nameplate:
+  # level2_charger_power_kw: 5.69
   # null = each vehicle starts at full battery capacity
   initial_soc_kwh: null
 

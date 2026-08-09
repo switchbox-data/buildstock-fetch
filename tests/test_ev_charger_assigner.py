@@ -106,7 +106,7 @@ def test_assign_is_reproducible(charger_lookup):
 
 
 def test_assign_maps_level_to_resstock_kw(charger_lookup):
-    # SFD owner 400%+ has ~49% L2 in the TSV — either level is valid; powers must match TRG.
+    # SFD owner 400%+ has ~49% L2 in the TSV — either level is valid; powers must match defaults.
     vehicles = _vehicles_frame(2)
     presence, discharge = _easy_schedules(vehicles)
     result = EVChargerAssigner(charger_lookup, random_state=0).assign(
@@ -128,14 +128,14 @@ def test_assign_maps_level_to_resstock_kw(charger_lookup):
 
 
 def test_assign_uses_custom_power_kw(charger_lookup):
-    # Scenario overrides replace ResStock TRG defaults after the L1/L2 draw.
+    # Scenario overrides replace pipeline defaults after the L1/L2 draw.
     vehicles = _vehicles_frame(4)
     presence, discharge = _easy_schedules(vehicles)
     result = EVChargerAssigner(
         charger_lookup,
         random_state=0,
         level1_power_kw=1.4,
-        level2_power_kw=7.2,
+        level2_power_kw=5.69,
     ).assign(
         vehicles,
         presence_by_vehicle=presence,
@@ -150,7 +150,7 @@ def test_assign_uses_custom_power_kw(charger_lookup):
         if level == "Level 1":
             assert power == 1.4
         else:
-            assert power == 7.2
+            assert power == 5.69
 
 
 def test_assign_rejects_negative_power_kw(charger_lookup):
@@ -291,6 +291,43 @@ def test_assign_raises_when_neither_level_feasible(charger_lookup):
             discharge_kwh_by_vehicle={key: discharge},
             buffer_fraction=0.0,
         )
+
+
+def test_assign_drops_infeasible_vehicle_when_requested(charger_lookup):
+    """drop_infeasible skips un-chargeable vehicles instead of raising, keeping the rest."""
+    n_hours = 8
+    # One infeasible vehicle (always away, discharge > pack) + one easy home vehicle.
+    infeasible = _vehicles_frame(1, capacity_kwh=20.0).with_columns(
+        pl.Series("bldg_id", [900])
+    )
+    feasible = _vehicles_frame(1, capacity_kwh=60.0).with_columns(
+        pl.Series("bldg_id", [1])
+    )
+    vehicles = pl.concat([infeasible, feasible])
+
+    presence = {
+        (900, 1): pl.DataFrame({"at_home": [False] * n_hours}),
+        (1, 1): pl.DataFrame({"at_home": [True] * n_hours}),
+    }
+    discharge = {
+        (900, 1): np.full(n_hours, 5.0, dtype=np.float64),  # 40 kWh > 20 kWh pack
+        (1, 1): np.zeros(n_hours, dtype=np.float64),
+    }
+    result = EVChargerAssigner(charger_lookup, random_state=0).assign(
+        vehicles,
+        presence_by_vehicle=presence,
+        discharge_kwh_by_vehicle=discharge,
+        buffer_fraction=0.0,
+        drop_infeasible=True,
+    )
+    assert result.height == 1
+    assert result["bldg_id"].to_list() == [1]
+    assert set(result.columns) == {
+        "bldg_id",
+        "vehicle_id",
+        "charger_level",
+        "charger_power_kw",
+    }
 
 
 def test_buffer_fraction_can_exclude_level1(charger_lookup):
