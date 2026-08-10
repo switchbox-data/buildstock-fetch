@@ -45,6 +45,18 @@ sampling:
   # (Note: this filter is applied to vehicles with trips and does not include idle vehicles.)
   nhts_daily_miles_percentile_low: 0
   nhts_daily_miles_percentile_high: 95
+  # Outdoor temp the NHTS feasibility screen sizes template miles against, so the
+  # match pool only holds days that some stock pack plus a Level 2 charger can serve
+  # on the coldest day of the run. 0°F is the worst case on the ResStock discharge
+  # curve (×2.26); raise it to keep more of the pool in warm climates.
+  # Ignored when temperature.temperature_adjustment=none.
+  # The screen also charges the template for the seam legs TripScheduleGenerator has
+  # to impute when a survey day starts or ends away from home, and drops days that
+  # are away on both edges (those chain into one tour with no home visit).
+  # Battery assignment later redraws from capacity ∩ L2-rechargeable packs on the
+  # annual schedule, so this template screen only requires that at least one pack
+  # clears both gates.
+  nhts_feasibility_temperature_f: 0
 
 trips:
   min_trip_away_hours: 1
@@ -58,9 +70,11 @@ trips:
   miles_noise_std_fraction: 0.1
 
 battery:
-  # Feasible pack must cover max_daily_duty_miles * kwh_per_mile * (1 + buffer).
-  # When temperature.temperature_adjustment=resstock, duty miles are temperature-scaled
-  # (Σ miles_share * power_mult(T)) so the buffer sits on top of peak daily discharge.
+  # Feasible pack must cover max_daily_duty_miles * kwh_per_mile * (1 + buffer)
+  # and refill that buffered energy on Level 2 during the home window on that same
+  # peak day (peak_day_home_hours × level2_charger_power_kw). When
+  # temperature.temperature_adjustment=resstock, duty miles are temperature-scaled
+  # (Σ miles_share * power_mult(T)) so both gates sit on top of peak daily discharge.
   capacity_buffer_fraction: 0.2
 
 temperature:
@@ -106,12 +120,9 @@ charging:
   # Feasible level must cover trip discharge × (1 + buffer) under perfect SOC
   # foresight (ignored when charger_assignment=fixed).
   charger_buffer_fraction: 0.2
-  # When no charger level (even L2) can cover a vehicle's schedule under the buffer
-  # (e.g. multi-day away with no home plug), try redrawing the NHTS profile before
-  # dropping the EV. true = redraw then exclude; false = hard-fail on infeasibility.
-  exclude_infeasible_charger_profiles: true
-  # Max NHTS weekday/weekend redraws per infeasible slot (0 = drop immediately).
-  infeasible_profile_redraw_attempts: 20
+  # NHTS vehicle-day templates are prefiltered against the stock pack set and
+  # Level 2 (see sampling.nhts_feasibility_temperature_f). Any residual
+  # battery/charger infeasibility is a hard error.
   # Required only when charger_assignment=fixed (omit for resstock):
   # charger_power_kw: 7.2
   # Optional when charger_assignment=resstock (omit → defaults 1.6 / 7.2):

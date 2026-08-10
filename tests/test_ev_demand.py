@@ -6,16 +6,6 @@ import numpy as np
 import polars as pl
 import pytest
 
-from utils.EVs.NHTSProfileSampler import (
-    TripProfile,
-    VehicleProfile,
-    nhts_arrival_hour,
-    nhts_departure_hour,
-    summarize_nhts_match_catalog,
-    NHTSProfileSampler,
-)
-from utils.EVs.nhts_tours import trips_as_singleton_tours
-from utils.EVs.TripScheduleGenerator import TripScheduleGenerator, trip_schedule_schema
 from utils.EVs.charging import (
     build_hours_base,
     build_is_off_peak,
@@ -27,6 +17,16 @@ from utils.EVs.charging import (
     schedule_off_peak_immediate_charging,
 )
 from utils.EVs.ev_demand import EVDemandCalculator
+from utils.EVs.nhts_tours import build_tours_from_legs, trips_as_singleton_tours
+from utils.EVs.NHTSProfileSampler import (
+    NHTSProfileSampler,
+    TripProfile,
+    VehicleProfile,
+    nhts_arrival_hour,
+    nhts_departure_hour,
+    summarize_nhts_match_catalog,
+)
+from utils.EVs.TripScheduleGenerator import TripScheduleGenerator, trip_schedule_schema
 
 HOURS_PER_YEAR = 8760
 
@@ -529,6 +529,258 @@ def test_match_allows_empty_vehicle_day():
     assert profile.trip_miles_driven == []
 
 
+def test_nhts_reference_filter_applies_battery_and_daily_l2_constraints():
+    """Initial match pools omit days no stock pack or daily-repeat L2 can support."""
+    sampler = NHTSProfileSampler(
+        reference_battery_options=((100.0, 1.0),),
+        reference_level2_power_kw=7.2,
+        capacity_buffer_fraction=0.2,
+        charger_buffer_fraction=0.2,
+    )
+
+    battery_infeasible = trips_as_singleton_tours(
+        trip_departure_hours=[8],
+        trip_arrival_hours=[9],
+        trip_miles_driven=[90.0],  # 108 buffered kWh > 100 kWh
+        trip_weights=[1.0],
+    )
+    charger_infeasible = trips_as_singleton_tours(
+        trip_departure_hours=[4],
+        trip_arrival_hours=[3],
+        trip_miles_driven=[10.0],  # one home hour: 7.2 kWh < 12 buffered kWh
+        trip_weights=[1.0],
+    )
+    feasible = trips_as_singleton_tours(
+        trip_departure_hours=[4],
+        trip_arrival_hours=[3],
+        trip_miles_driven=[5.0],  # one home hour covers 6 buffered kWh
+        trip_weights=[1.0],
+    )
+
+    assert not sampler._profile_is_reference_feasible(battery_infeasible)
+    assert not sampler._profile_is_reference_feasible(charger_infeasible)
+    assert sampler._profile_is_reference_feasible(feasible)
+    assert sampler._profile_is_reference_feasible(TripProfile())
+
+
+def test_nhts_reference_filter_requires_one_option_to_clear_both_gates():
+    """Day survives when any single pack clears capacity and Level 2 recharge."""
+    big_thirsty = (200.0, 1.0)
+    small_efficient = (40.0, 0.4)
+    sampler = NHTSProfileSampler(
+        reference_battery_options=(big_thirsty, small_efficient),
+        reference_level2_power_kw=7.2,
+        capacity_buffer_fraction=0.2,
+        charger_buffer_fraction=0.2,
+    )
+
+    # 20 mi with 20 home hours (144 kWh of L2): both packs fit and both recharge.
+    easy_day = trips_as_singleton_tours(
+        trip_departure_hours=[8],
+        trip_arrival_hours=[12],
+        trip_miles_driven=[20.0],
+        trip_weights=[1.0],
+    )
+    # 100 mi with 20 home hours: too much for the small pack, so only the big pack is
+    # drawable and it recharges in time.
+    long_haul = trips_as_singleton_tours(
+        trip_departure_hours=[8],
+        trip_arrival_hours=[12],
+        trip_miles_driven=[100.0],
+        trip_weights=[1.0],
+    )
+    # 60 mi with 5 home hours (36 kWh of L2): only the efficient pack recharges daily.
+    # The template screen only needs one viable pack; battery assignment later drops
+    # thirstier packs that fit capacity but fail the annual L2 gate.
+    short_home_window = trips_as_singleton_tours(
+        trip_departure_hours=[4],
+        trip_arrival_hours=[23],
+        trip_miles_driven=[60.0],
+        trip_weights=[1.0],
+    )
+    # 500 mi: no pack has the capacity at all.
+    beyond_every_pack = trips_as_singleton_tours(
+        trip_departure_hours=[8],
+        trip_arrival_hours=[12],
+        trip_miles_driven=[500.0],
+        trip_weights=[1.0],
+    )
+
+    assert sampler._profile_is_reference_feasible(easy_day)
+    assert sampler._profile_is_reference_feasible(long_haul)
+    assert sampler._profile_is_reference_feasible(short_home_window)
+    assert not sampler._profile_is_reference_feasible(beyond_every_pack)
+
+
+def _two_leg_tour(*, starts_home: bool, ends_home: bool):
+    """One tour, out 8->9 then back 9->18, with configurable home boundaries."""
+    return build_tours_from_legs(
+        start_times=[800, 900],
+        end_times=[900, 1800],
+        trip_miles_driven=[10.0, 40.0],
+        trip_weights=[1.0, 1.0],
+        why_from=[1 if starts_home else 3, 3],
+        why_to=[3, 1 if ends_home else 3],
+    )
+
+
+def test_reference_home_hours_accounts_for_seam_boundary():
+    """Open home boundaries cost the template most of its overnight charging window."""
+    sampler = NHTSProfileSampler(
+        reference_battery_options=((100.0, 1.0),),
+        reference_level2_power_kw=7.2,
+    )
+
+    # Boundary window is 18:00 -> 08:00 next day = 14 h; mirrored homebound leg is 9 h.
+    closed = _two_leg_tour(starts_home=True, ends_home=True)
+    assert sampler._seam_boundary_legs(closed) == (0.0, 0.0)
+    assert sampler._reference_home_hours(closed, seam_drive_hours=0.0) == 14.0
+
+    # One open end: overnight home is not credited (seam placement can erase it);
+    # only interior gaps between tours remain — none here, so 0.
+    starts_away = _two_leg_tour(starts_home=False, ends_home=True)
+    assert sampler._seam_boundary_legs(starts_away) == (40.0, 9.0)
+    assert sampler._reference_home_hours(starts_away, seam_drive_hours=9.0) == 0.0
+
+    # Both ends open is an away -> away seam: the vehicle never comes home overnight.
+    never_home = _two_leg_tour(starts_home=False, ends_home=False)
+    assert sampler._seam_boundary_legs(never_home) == (50.0, 10.0)
+    assert sampler._reference_home_hours(never_home, seam_drive_hours=10.0) == 0.0
+    assert not sampler._profile_is_reference_feasible(never_home)
+
+
+def test_nhts_reference_filter_rejects_open_day_without_interior_home_gap():
+    """Open-ended days with no interior home gap fail — overnight is not credited."""
+    # Single tour 8→18, starts away: mirrored seam miles + zero credited home hours.
+    starts_away = _two_leg_tour(starts_home=False, ends_home=True)
+    sampler = NHTSProfileSampler(
+        reference_battery_options=((100.0, 1.0),),
+        reference_level2_power_kw=7.2,
+    )
+    assert sampler._reference_home_hours(starts_away, seam_drive_hours=9.0) == 0.0
+    assert not sampler._profile_is_reference_feasible(starts_away)
+
+
+def test_nhts_reference_filter_rejects_away_to_away_seam_despite_interior_gaps():
+    """Away on both edges chains replayed days, so interior home gaps do not survive."""
+    # Two short tours with a 6 h home gap between them (11:00-17:00), but the day
+    # both starts and ends away from home.
+    both_open = build_tours_from_legs(
+        start_times=[1000, 1700],
+        end_times=[1100, 1800],
+        trip_miles_driven=[3.0, 3.0],
+        trip_weights=[1.0, 1.0],
+        why_from=[3, 1],
+        why_to=[1, 3],
+    )
+    assert not both_open.starts_home
+    assert not both_open.ends_home
+    # The gap is real in the template, yet the profile is still screened out.
+    assert both_open.tour_ids == [1, 2]
+    sampler = NHTSProfileSampler(
+        reference_battery_options=((100.0, 1.0),),
+        reference_level2_power_kw=7.2,
+    )
+    assert sampler._reference_home_hours(both_open, seam_drive_hours=2.0) == 6.0
+    assert not sampler._profile_is_reference_feasible(both_open)
+
+
+def test_nhts_reference_filter_sizes_open_day_with_mirrored_seam_miles():
+    """A starts-away template is sized with the leg the seam reconciler mirrors."""
+    legs = {
+        "start_times": [1300, 1300, 1400],
+        "end_times": [1400, 1400, 1600],
+        "trip_miles_driven": [23.81, 0.38, 43.15],
+        "trip_weights": [1.0, 1.0, 1.0],
+    }
+    closed = build_tours_from_legs(**legs, why_from=[1, 3, 3], why_to=[3, 3, 1])
+    starts_away = build_tours_from_legs(**legs, why_from=[3, 3, 3], why_to=[3, 3, 1])
+
+    sampler = NHTSProfileSampler(
+        reference_battery_options=((100.0, 1.0),),
+        reference_level2_power_kw=7.2,
+    )
+
+    # 67.34 observed miles fit the pack; the 43.15-mile mirrored leg pushes it over.
+    assert sampler._profile_is_reference_feasible(closed)
+    seam_miles, seam_hours = sampler._seam_boundary_legs(starts_away)
+    assert seam_miles == pytest.approx(43.15)
+    assert seam_hours == 2.0
+    assert not sampler._profile_is_reference_feasible(starts_away)
+
+
+def test_nhts_reference_filter_sizes_for_cold_noisy_peak_day():
+    """The screen sizes the annual peak day, not the raw survey day."""
+    options = ((100.0, 1.0),)
+    template = trips_as_singleton_tours(
+        trip_departure_hours=[8],
+        trip_arrival_hours=[12],
+        trip_miles_driven=[72.0],
+        trip_weights=[1.0],
+    )
+
+    raw = NHTSProfileSampler(reference_battery_options=options, reference_level2_power_kw=7.2)
+    assert raw._profile_is_reference_feasible(template)
+
+    # Per-leg miles noise: 72 template mi → 86.4 design mi → 103.7 buffered kWh.
+    noisy = NHTSProfileSampler(
+        reference_battery_options=options,
+        reference_level2_power_kw=7.2,
+        miles_noise_std_fraction=0.1,
+    )
+    assert not noisy._profile_is_reference_feasible(template)
+
+    # 0°F is the worst point on the ResStock discharge curve (×2.26).
+    cold = NHTSProfileSampler(
+        reference_battery_options=options,
+        reference_level2_power_kw=7.2,
+        reference_temperature_f=0.0,
+    )
+    assert not cold._profile_is_reference_feasible(template)
+
+    # 75°F sits at the curve minimum, so a mild reference barely moves the screen.
+    mild = NHTSProfileSampler(
+        reference_battery_options=options,
+        reference_level2_power_kw=7.2,
+        reference_temperature_f=75.0,
+    )
+    assert mild._profile_is_reference_feasible(template)
+
+
+def test_nhts_reference_filter_removes_infeasible_days_before_matching():
+    nhts = pl.DataFrame({
+        "house_id": ["h_bad", "h_good"],
+        "hh_vehicle_id": ["bad", "good"],
+        "income_bucket": [1, 1],
+        "occupants": [2, 2],
+        "vehicles": [1, 1],
+        "urban": [1, 1],
+        "weekday": [2, 2],
+        "start_time": [400, 400],
+        "end_time": [300, 300],
+        "miles_driven": [10.0, 5.0],
+        "trip_weight": [1.0, 1.0],
+    })
+    sampler = NHTSProfileSampler(
+        nhts_df=nhts,
+        random_state=0,
+        reference_battery_options=((100.0, 1.0),),
+        reference_level2_power_kw=7.2,
+        capacity_buffer_fraction=0.2,
+        charger_buffer_fraction=0.2,
+    )
+
+    _, vehicle_ids = sampler.match(
+        target_income=1,
+        target_urban=1,
+        target_occupants=2,
+        target_vehicles=1,
+        num_samples=1,
+        weekday=True,
+    )
+    assert vehicle_ids == ["good"]
+
+
 def test_match_household_first_equal_weight():
     """Multi-car HH is one household draw; both cars can fill num_samples=2."""
     nhts = pl.DataFrame({
@@ -783,7 +1035,7 @@ def test_per_trip_offsets_can_stretch_duration_and_differ_across_legs():
             super().__init__(0)
             self._choice_calls = 0
 
-        def choice(self, a, size=None, replace=True, p=None):  # noqa: A003
+        def choice(self, a, size=None, replace=True, p=None):
             self._choice_calls += 1
             if self._choice_calls == 1:
                 return np.full(size, -1, dtype=int)
@@ -2301,11 +2553,11 @@ home_charging:
 
 def test_load_ev_demand_config_resstock_chargers_omit_power(tmp_path):
     """charger_assignment=resstock does not require charger_power_kw; fills L1/L2 defaults."""
+    from utils.EVs.ev_demand import load_ev_demand_config
     from utils.EVs.EVChargerAssigner import (
         RESSTOCK_LEVEL1_CHARGER_KW,
         RESSTOCK_LEVEL2_CHARGER_KW,
     )
-    from utils.EVs.ev_demand import load_ev_demand_config
 
     path = tmp_path / "resstock_chargers.yml"
     path.write_text(
@@ -2325,10 +2577,30 @@ charging:
     assert config.level1_charger_power_kw == RESSTOCK_LEVEL1_CHARGER_KW
     assert config.level2_charger_power_kw == RESSTOCK_LEVEL2_CHARGER_KW
     assert config.charger_buffer_fraction == 0.2
-    assert config.exclude_infeasible_charger_profiles is True
-    assert config.infeasible_profile_redraw_attempts == 20
     assert config.ev_charger_path is not None
     assert config.ev_charger_path.endswith("Electric_Vehicle_Charger.tsv")
+
+
+def test_load_ev_demand_config_rejects_removed_redraw_keys(tmp_path):
+    """Legacy redraw/drop knobs are rejected with a clear message."""
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = tmp_path / "legacy_redraw.yml"
+    path.write_text(
+        """
+state: MD
+release: res_2024_tmy3_2
+start_date: 2024-01-01T04:00:00
+end_date: 2024-01-03T03:00:00
+charging:
+  charging_strategy: immediate
+  charger_assignment: resstock
+  exclude_infeasible_charger_profiles: true
+  infeasible_profile_redraw_attempts: 20
+"""
+    )
+    with pytest.raises(ValueError, match="Removed EV demand config key"):
+        load_ev_demand_config(path)
 
 
 def test_load_ev_demand_config_resstock_custom_charger_buffer(tmp_path):

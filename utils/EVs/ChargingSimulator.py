@@ -115,6 +115,102 @@ class ChargingSimulator:
         return presence_by_vehicle
 
     @staticmethod
+    def home_hours_on_peak_duty_day(
+        presence_by_vehicle: dict[tuple[str | int, int], pl.DataFrame],
+        hourly_temp_scaled_miles: pl.DataFrame,
+        hours_base: pl.DataFrame,
+        *,
+        travel_day_start_hour: int = 4,
+    ) -> pl.DataFrame:
+        """Home hours on each vehicle's peak temp-scaled-miles travel day.
+
+        Pairs with ``max_daily_miles`` for the Level 2 daily-repeat gate at battery
+        sizing: both use the NHTS 4am-to-4am ``travel_date``, so the recharge budget
+        is the home window on the same day the capacity gate sizes against — not the
+        year's worst home day (which can be an empty away day from seam chaining).
+
+        Args:
+            presence_by_vehicle: Output of ``generate_presence``
+            hourly_temp_scaled_miles: Output of ``build_hourly_temp_scaled_miles``
+            hours_base: Shared calendar with ``hour_index`` and ``timestamp``
+            travel_day_start_hour: NHTS travel-day boundary (default 4am)
+
+        Returns:
+            ``bldg_id``, ``vehicle_id``, ``peak_day_home_hours``
+        """
+        # No EVs → typed empty frame for safe joins downstream.
+        if not presence_by_vehicle:
+            return pl.DataFrame(
+                schema={
+                    "bldg_id": pl.Int64,
+                    "vehicle_id": pl.Int64,
+                    "peak_day_home_hours": pl.Float64,
+                }
+            )
+
+        if "timestamp" not in hours_base.columns or "hour_index" not in hours_base.columns:
+            raise ValueError("hours_base must include hour_index and timestamp")
+
+        # Clock hour → NHTS travel day. Subtract 4h so e.g. Jan 2 02:00 maps to
+        # the travel day that started Jan 1 04:00 (same axis as trip ``travel_date``).
+        hour_travel_days = hours_base.select(
+            "hour_index",
+            (
+                pl.col("timestamp") - pl.duration(hours=travel_day_start_hour)
+            ).dt.date().alias("travel_day"),
+        )
+
+        # --- Which travel day has the most temp-scaled miles? (same as max_daily_miles) ---
+        if hourly_temp_scaled_miles.is_empty():
+            peak_lookup: dict[tuple[object, int], object] = {}
+        else:
+            peak_days = (
+                hourly_temp_scaled_miles.group_by("bldg_id", "vehicle_id", "travel_date")
+                .agg(pl.col("temp_scaled_miles").sum().alias("daily_miles"))
+                # Highest daily miles first; first() after group_by keeps that peak day.
+                .sort("daily_miles", descending=True)
+                .group_by("bldg_id", "vehicle_id")
+                .agg(pl.col("travel_date").first().alias("peak_travel_date"))
+                # Datetime travel_date → date so it matches hour_travel_days.
+                .with_columns(pl.col("peak_travel_date").dt.date().alias("peak_travel_day"))
+            )
+            peak_lookup = {
+                (row["bldg_id"], int(row["vehicle_id"])): row["peak_travel_day"]
+                for row in peak_days.iter_rows(named=True)
+            }
+
+        # --- Sum at_home hours on that peak travel day per vehicle ---
+        rows_bldg: list[object] = []
+        rows_veh: list[int] = []
+        rows_home: list[float] = []
+        for (bldg_id, vehicle_id), presence in presence_by_vehicle.items():
+            if "at_home" not in presence.columns:
+                raise ValueError(f"presence schedule for {(bldg_id, vehicle_id)} missing at_home")
+            # Attach travel_day to each presence hour, then keep only the peak day.
+            framed = (
+                presence.select("hour_index", "at_home")
+                .join(hour_travel_days, on="hour_index", how="left")
+            )
+            peak_day = peak_lookup.get((bldg_id, int(vehicle_id)))
+            if peak_day is None:
+                # Idle / no duty miles: treat as a full home day (any pack fits).
+                home_hours = 24.0
+            else:
+                day = framed.filter(pl.col("travel_day") == peak_day)
+                home_hours = float(day["at_home"].sum()) if day.height else 0.0
+            rows_bldg.append(bldg_id)
+            rows_veh.append(int(vehicle_id))
+            rows_home.append(home_hours)
+
+        return pl.DataFrame(
+            {
+                "bldg_id": rows_bldg,
+                "vehicle_id": rows_veh,
+                "peak_day_home_hours": rows_home,
+            }
+        )
+
+    @staticmethod
     def build_hourly_temp_scaled_miles(
         trip_schedules: pl.DataFrame,
         hours_base: pl.DataFrame,

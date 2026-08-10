@@ -7,6 +7,7 @@ from typing import Any, Literal, overload
 import numpy as np
 import polars as pl
 
+from utils.EVs.ev_utils import resstock_temp_power_mult
 from utils.EVs.nhts_tours import (
     TripProfile,
     build_tours_from_legs,
@@ -103,10 +104,61 @@ class NHTSProfileSampler:
     max_vehicles: int = 2
     match_on_vehicles: bool = False
     random_state: int = 42
+    # (usable_capacity_kwh, kwh_per_mile) per stock option, from
+    # ``EVBatteryAssigner.stock_option_parameters()``. None disables the filter.
+    reference_battery_options: tuple[tuple[float, float], ...] | None = None
+    reference_level2_power_kw: float | None = None
+    capacity_buffer_fraction: float = 0.2
+    charger_buffer_fraction: float = 0.2
+    # Outdoor temperature the screen sizes against. None means no temperature
+    # scaling (matches temperature_adjustment=none).
+    reference_temperature_f: float | None = None
+    # Annual replay redraws each leg's miles, so the peak day exceeds the template.
+    miles_noise_std_fraction: float = 0.0
     _cache: dict[str, dict] | None = field(default=None, init=False, repr=False)
+    _design_miles_multiplier: float = field(default=1.0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         np.random.seed(self.random_state)
+        # Filter knobs are all-or-nothing: either screen against packs+L2, or skip.
+        reference_values = (
+            self.reference_battery_options,
+            self.reference_level2_power_kw,
+        )
+        if any(value is not None for value in reference_values) and not all(
+            value is not None for value in reference_values
+        ):
+            raise ValueError(
+                "reference battery options and Level 2 power must either both be "
+                "set or both be omitted"
+            )
+        if self.reference_battery_options is not None:
+            if not self.reference_battery_options:
+                raise ValueError("reference_battery_options must not be empty")
+            if any(
+                capacity <= 0 or kwh_per_mile <= 0
+                for capacity, kwh_per_mile in self.reference_battery_options
+            ):
+                raise ValueError("reference battery capacity and efficiency must be > 0")
+        if self.reference_level2_power_kw is not None and self.reference_level2_power_kw <= 0:
+            raise ValueError("reference Level 2 power must be > 0")
+        if self.capacity_buffer_fraction < 0 or self.charger_buffer_fraction < 0:
+            raise ValueError("NHTS feasibility buffer fractions must be >= 0")
+        if self.miles_noise_std_fraction < 0:
+            raise ValueError("miles_noise_std_fraction must be >= 0")
+
+        # Convert survey-day miles → annual peak-day miles for screening:
+        #   design = template × temp_power_mult(T_ref) × (1 + 2 × miles_noise_std)
+        # The factor of 2 on noise is a ~2σ headroom so a noisy redraw of every leg
+        # still fits. Without this, raw NHTS miles pass the screen then fail later.
+        temperature_multiplier = 1.0
+        if self.reference_temperature_f is not None:
+            temperature_multiplier = float(
+                resstock_temp_power_mult(self.reference_temperature_f)
+            )
+        self._design_miles_multiplier = temperature_multiplier * (
+            1.0 + 2.0 * self.miles_noise_std_fraction
+        )
 
     @staticmethod
     def _log_progress(current: int, total: int, description: str, progress_interval: int = 10000) -> None:
@@ -173,6 +225,7 @@ class NHTSProfileSampler:
         # Keep rows for the requested day type (weekday=2 Mon–Fri, weekend=1 Sat/Sun).
         day_flag = 2 if weekday else 1
         day_df = nhts_df.filter(pl.col("weekday") == day_flag)
+        day_df = self._filter_feasible_vehicle_days(day_df, weekday=weekday)
 
         self._cache[cache_key] = self._build_matching_cache(day_df)
 
@@ -183,6 +236,241 @@ class NHTSProfileSampler:
             sum(len(v) for v in self._cache[cache_key]["vehicles_by_house"].values()),
         )
         return self._cache[cache_key]
+
+    @staticmethod
+    def _travel_hour(clock_hour: int, *, day_start_hour: int = 4) -> int:
+        """Map a clock hour onto the NHTS 4am-to-4am travel-day axis.
+
+        NHTS travel days run 4am→4am. Clock hours before the day start (0–3) belong
+        to the *end* of that travel day, so shift them by +24 onto the continuous axis
+        (e.g. 2am → 26). Hours 4–23 stay as-is.
+        """
+        return clock_hour if clock_hour >= day_start_hour else clock_hour + 24
+
+    @staticmethod
+    def _tour_edge_leg(profile: TripProfile, *, tour_id: int, edge: Literal["first", "last"]) -> int | None:
+        """Index of the leg ``TripScheduleGenerator`` mirrors at one edge of a tour.
+
+        Matches the seam reconciler's choice: ``first`` is the earliest departure
+        (the outbound that left home), ``last`` the latest arrival (the homebound).
+        """
+        # Collect every driving leg that belongs to this tour (tour_ids is 1-based).
+        indices = [i for i, value in enumerate(profile.tour_ids) if value == tour_id]
+        if not indices:
+            return None
+        # "last" = homebound arrival (latest arrival hour among the tour's legs).
+        if edge == "last":
+            return max(indices, key=lambda i: profile.trip_arrival_hours[i])
+        # "first" = outbound departure (earliest departure hour among the tour's legs).
+        return min(indices, key=lambda i: profile.trip_departure_hours[i])
+
+    def _seam_boundary_legs(self, profile: TripProfile) -> tuple[float, float]:
+        """Miles and drive hours the seam reconciler imputes for open home boundaries.
+
+        A template that starts or ends away from home cannot be replayed on its own:
+        ``TripScheduleGenerator`` imputes the missing leave-home / return-home leg by
+        mirroring the opposite edge of the same tour. Those miles are real discharge
+        and the drive hours are unavailable for charging, so the screen has to size
+        the template the way it will actually be replayed.
+
+        Returns:
+            ``(extra_miles, extra_drive_hours)`` to add on top of observed template duty.
+        """
+        # No tour linkage → nothing to mirror (idle / fixture without tour_ids).
+        if not profile.tour_ids:
+            return 0.0, 0.0
+
+        # Decide which tour edges need a synthetic seam leg.
+        edges: list[tuple[int, Literal["first", "last"]]] = []
+        if not profile.starts_home:
+            # Observed already away at day start → impute leave_home by mirroring the
+            # *last* leg of the first tour (the homebound that will be reversed).
+            edges.append((profile.tour_ids[0], "last"))
+        if not profile.ends_home:
+            # Observed still away at day end → impute return_home by mirroring the
+            # *first* leg of the final tour (the outbound that will be reversed).
+            edges.append((profile.tour_ids[-1], "first"))
+
+        # Sum mirrored miles + drive duration for every open edge.
+        miles = 0.0
+        hours = 0.0
+        for tour_id, edge in edges:
+            leg = self._tour_edge_leg(profile, tour_id=tour_id, edge=edge)
+            if leg is None:
+                continue
+            miles += max(0.0, float(profile.trip_miles_driven[leg]))
+            departure = self._travel_hour(int(profile.trip_departure_hours[leg]))
+            arrival = self._travel_hour(int(profile.trip_arrival_hours[leg]))
+            # At least 1 hour: a same-hour snap still occupies a drive slot.
+            hours += float(max(1, arrival - departure))
+        return miles, hours
+
+    def _reference_home_hours(self, profile: TripProfile, *, seam_drive_hours: float = 0.0) -> float:
+        """Hours per repeated travel day the template leaves for home charging.
+
+        Presence is tour-based: a vehicle parked mid-tour is away and cannot charge.
+        Hours split into two parts:
+
+        - *interior* — home gaps between tours, unaffected by the day boundary.
+        - *boundary* — the window wrapping midnight, between the last leg's arrival
+          and the next day's first departure.
+
+        A closed day keeps that whole boundary window at home. One or both ends open
+        means the reconciler may place the seam (and time-offset jitter) anywhere in
+        the overnight gap, so the template screen credits **no** overnight home — only
+        interior gaps between tours, which survive replay. Annual battery sizing then
+        pairs peak duty with that day's actual home hours.
+
+        ``seam_drive_hours`` is accepted for call-site compatibility with the seam
+        reconciler's mirrored drive duration; open-day overnight credit no longer
+        depends on it (worst-case placement leaves none).
+        """
+        _ = seam_drive_hours  # retained for API compatibility; see docstring
+        # Map every drive leg onto the 4am-to-4am axis so "first" / "last" wrap correctly.
+        departures = [self._travel_hour(int(hour)) for hour in profile.trip_departure_hours]
+        arrivals = [self._travel_hour(int(hour)) for hour in profile.trip_arrival_hours]
+        first_departure = min(departures)
+        # Guard: if arrival snapped earlier than departure on the axis, treat as dep.
+        last_arrival = max(max(arrivals), first_departure)
+
+        # --- Interior home hours (between first departure and last arrival) ---
+        # Start from "always home", then punch out each tour's away window.
+        at_home = np.ones(24, dtype=bool)
+        for departure, arrival in zip(
+            profile.tour_departure_hours, profile.tour_arrival_hours, strict=True
+        ):
+            dep = self._travel_hour(int(departure))
+            arr = self._travel_hour(int(arrival))
+            # Tour that wraps past midnight on the travel-day axis.
+            if arr <= dep:
+                arr += 24
+            # Convert travel-day hours [4, 28) → mask indices [0, 24).
+            start = max(4, dep) - 4
+            stop = min(28, arr) - 4
+            if stop > start:
+                at_home[start:stop] = False
+        # Only count home bits *inside* the active tour span (not overnight yet).
+        interior_start = max(0, min(24, first_departure - 4))
+        interior_stop = max(0, min(24, last_arrival - 4))
+        interior_home = float(at_home[interior_start:interior_stop].sum())
+
+        # --- Boundary / overnight home hours (last arrival → next first departure) ---
+        boundary_window = float((first_departure + 24) - last_arrival)
+        if profile.starts_home and profile.ends_home:
+            # Closed home day: the whole overnight gap is available for charging.
+            boundary_home = boundary_window
+        else:
+            # Open edge(s): seam placement + time offsets can consume the overnight
+            # window entirely on the annual peak day, so the template screen does not
+            # credit it. Interior tour gaps remain.
+            boundary_home = 0.0
+        return interior_home + boundary_home
+
+    def _profile_is_reference_feasible(self, profile: TripProfile) -> bool:
+        """Whether the stock EV fleet plus Level 2 can support one daily template.
+
+        Screening against one fixed reference vehicle is not valid: capacity favors
+        the biggest pack while recharge energy favors the most efficient one, and the
+        two are different packs. Both gates are evaluated per option; the day survives
+        when **at least one** option clears both. ``EVBatteryAssigner`` then redraws
+        from the capacity ∩ Level 2-rechargeable set on the annual schedule, so the
+        template screen only needs to know that some stock pack can support the day.
+
+        Duty is the template as replayed: observed miles plus any seam leg the
+        reconciler has to impute for an open home boundary, scaled to the reference
+        cold day and padded for per-leg miles noise.
+
+        Battery feasibility limits buffered daily energy to usable pack capacity.
+        Charger feasibility is a daily-repeat energy balance: the buffered energy
+        must be replenishable during the template's home hours. This repeat condition
+        is intentional; a one-day SOC simulation starting full would make charger
+        power irrelevant whenever the battery-capacity test already passes.
+        """
+        # Idle templates: home all day, zero discharge → always feasible.
+        if not profile.has_trips:
+            return True
+
+        # Caller must enable the screen with both knobs (validated in __post_init__).
+        assert self.reference_battery_options is not None
+        assert self.reference_level2_power_kw is not None
+
+        # Hard reject: both edges open. Replay chains day N's open end into day N+1's
+        # open start without a home visit, so interior gaps in the *template* do not
+        # survive as charging windows in the annual schedule.
+        if not profile.starts_home and not profile.ends_home:
+            return False
+
+        # Design duty = (observed miles + mirrored seam miles) × cold/noise headroom.
+        seam_miles, seam_drive_hours = self._seam_boundary_legs(profile)
+        design_miles = (
+            float(sum(profile.trip_miles_driven)) + seam_miles
+        ) * self._design_miles_multiplier
+
+        # Home charging budget for the repeated day, after seam compression.
+        home_hours = self._reference_home_hours(profile, seam_drive_hours=seam_drive_hours)
+        if home_hours <= 0.0:
+            # No interior home gap, and open days get no overnight credit → never charged.
+            return False
+
+        # Level 2 energy available overnight / between tours (power is not temp-scaled).
+        available_level2_kwh = home_hours * self.reference_level2_power_kw
+
+        # Per-pack oracle: day survives if any single pack clears capacity + L2 recharge.
+        for capacity_kwh, kwh_per_mile in self.reference_battery_options:
+            design_kwh = design_miles * kwh_per_mile
+            # Battery gate: buffered peak-day energy must fit usable pack capacity.
+            if design_kwh * (1.0 + self.capacity_buffer_fraction) > capacity_kwh + 1e-9:
+                continue
+            # Charger gate: same buffered energy must refill during home hours on L2.
+            if design_kwh * (1.0 + self.charger_buffer_fraction) > available_level2_kwh + 1e-9:
+                continue
+            return True
+        return False
+
+    def _filter_feasible_vehicle_days(
+        self,
+        day_df: pl.DataFrame,
+        *,
+        weekday: bool,
+    ) -> pl.DataFrame:
+        """Remove NHTS vehicle-days no stock pack plus L2 charger can support.
+
+        Runs once per weekday/weekend cache build. Profiles that fail
+        ``_profile_is_reference_feasible`` never enter the demographic match pool.
+        """
+        # Filter disabled (or empty input): return the pool unchanged.
+        if self.reference_battery_options is None or day_df.is_empty():
+            return day_df
+
+        # Evaluate each unique vehicle-day once (rows are trip legs, not profiles).
+        eligible_ids: list[str] = []
+        vehicle_ids = sorted(str(value) for value in day_df["hh_vehicle_id"].unique())
+        for vehicle_id in vehicle_ids:
+            profile = self._trip_profile_from_nhts(day_df, vehicle_id, weekday=weekday)
+            if self._profile_is_reference_feasible(profile):
+                eligible_ids.append(vehicle_id)
+
+        # Keep only legs belonging to surviving vehicle-days.
+        filtered = day_df.filter(
+            pl.col("hh_vehicle_id").cast(pl.Utf8).is_in(eligible_ids)
+        )
+        logging.info(
+            "NHTS %s reference-feasibility filter retained %s/%s vehicle-day profiles "
+            "(%s stock packs, Level 2=%.3f kW, capacity buffer=%.2f, charger buffer=%.2f, "
+            "design miles x%.3f at %s)",
+            "weekday" if weekday else "weekend",
+            len(eligible_ids),
+            len(vehicle_ids),
+            len(self.reference_battery_options),
+            self.reference_level2_power_kw,
+            self.capacity_buffer_fraction,
+            self.charger_buffer_fraction,
+            self._design_miles_multiplier,
+            "no temperature scaling"
+            if self.reference_temperature_f is None
+            else f"{self.reference_temperature_f:.1f}F",
+        )
+        return filtered
 
     def _build_matching_cache(self, df: pl.DataFrame) -> dict:
         """
@@ -415,32 +703,6 @@ class NHTSProfileSampler:
             trip_miles_driven=trip_miles_driven,
             trip_weights=weights,
         )
-
-    def sample_with_seed(
-        self,
-        bldg_veh_df: pl.DataFrame,
-        nhts_df: pl.DataFrame | None = None,
-        *,
-        random_state: int,
-        return_catalog: bool = False,
-        match_on_vehicles: bool | None = None,
-    ) -> dict[tuple[str, int], VehicleProfile] | tuple[dict[tuple[str, int], VehicleProfile], pl.DataFrame]:
-        """Like ``sample``, but temporarily seeds NumPy with ``random_state``.
-
-        Used to redraw NHTS profiles for charger-infeasible EV slots without
-        permanently perturbing the process-global RNG state used elsewhere.
-        """
-        prior = np.random.get_state()
-        try:
-            np.random.seed(int(random_state))
-            return self.sample(
-                bldg_veh_df,
-                nhts_df,
-                return_catalog=return_catalog,
-                match_on_vehicles=match_on_vehicles,
-            )
-        finally:
-            np.random.set_state(prior)
 
     @overload
     def sample(

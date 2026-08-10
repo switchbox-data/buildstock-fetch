@@ -54,6 +54,12 @@ def test_autonomie_join_covers_all_options(option_probabilities, autonomie_param
     assert set(assigner.option_probabilities["ev_option_name"]) <= set(
         assigner.autonomie_params["ev_option_name"]
     )
+    options = assigner.stock_option_parameters()
+    assert len(options) == autonomie_params.height
+    assert set(options) == {
+        (row["battery_capacity_kwh"], row["kwh_per_mile"])
+        for row in autonomie_params.iter_rows(named=True)
+    }
 
 
 def test_assign_is_reproducible(option_probabilities, autonomie_params):
@@ -99,6 +105,46 @@ def test_assign_filters_to_feasible_options(option_probabilities, autonomie_para
     assert result.height == 1
     # Feasible <=> capacity >= duty_miles * kwh_per_mile * 1.2 (buffer on peak discharge)
     assert float(result["battery_capacity_kwh"][0]) >= 180.0 * float(result["kwh_per_mile"][0]) * 1.2
+
+
+def test_assign_level2_gate_excludes_thirsty_packs(option_probabilities, autonomie_params):
+    """Packs that fit capacity but cannot refill on Level 2 are not drawable."""
+    assigner = EVBatteryAssigner(option_probabilities, autonomie_params, random_state=0)
+    # 100 mi peak duty: every stock pack has the capacity, but a short home window
+    # on that peak day (5 h × 7.2 kW = 36 kWh) only recharges the more efficient packs
+    # under a 20% buffer. Pickup options need ~43–45 buffered kWh and must be excluded.
+    duty = _duty(pl.DataFrame({"bldg_id": ["x"], "vehicle_id": [1]}), 100.0).with_columns(
+        pl.lit(5.0).alias("peak_day_home_hours")
+    )
+    result = assigner.assign(
+        duty,
+        buffer_fraction=0.2,
+        charger_buffer_fraction=0.2,
+        level2_power_kw=7.2,
+    )
+    assert result.height == 1
+    assert "Pickup" not in result["ev_option_name"][0]
+    design_kwh = 100.0 * float(result["kwh_per_mile"][0])
+    assert design_kwh * 1.2 <= 36.0 + 1e-9
+    assert float(result["battery_capacity_kwh"][0]) >= design_kwh * 1.2
+
+
+def test_assign_raises_when_level2_gate_eliminates_all_packs(
+    option_probabilities, autonomie_params
+):
+    assigner = EVBatteryAssigner(option_probabilities, autonomie_params, random_state=0)
+    # Capacity would pass for many packs at 40 mi, but 1 home hour of L2 (7.2 kWh)
+    # cannot refill any of them with a 20% charger buffer.
+    duty = _duty(pl.DataFrame({"bldg_id": ["x"], "vehicle_id": [1]}), 40.0).with_columns(
+        pl.lit(1.0).alias("peak_day_home_hours")
+    )
+    with pytest.raises(ValueError, match="available_level2_kwh"):
+        assigner.assign(
+            duty,
+            buffer_fraction=0.2,
+            charger_buffer_fraction=0.2,
+            level2_power_kw=7.2,
+        )
 
 
 def test_assign_raises_when_no_option_feasible(option_probabilities, autonomie_params):

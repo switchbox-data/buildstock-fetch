@@ -472,8 +472,8 @@ class TripScheduleGenerator:
                     continue
                 tour_dep[t_idx] = int(trip_dep[leg_idx].min())
                 if tour_ends_away[t_idx]:
-                    # tour ends away from home, so the tour arrival hour is the max arrival hour
-                    # this is an assumption but might need to be fixed later
+                    # tour ends away from home, so set the tour arrival hour is the max arrival hour
+                    # (this is a placeholder assumption)
                     tour_arr[t_idx] = self.max_arrival_hour
                 else:
                     tour_arr[t_idx] = int(trip_arr[leg_idx].max())
@@ -485,6 +485,7 @@ class TripScheduleGenerator:
             )
             keep_tour = keep_tour & keep_after_pack
 
+            # Shift legs with the tour based on the above normalized tour departure and arrival hours
             for t_idx in range(n_tours):
                 if not keep_tour[t_idx]:
                     continue
