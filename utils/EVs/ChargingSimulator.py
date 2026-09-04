@@ -10,6 +10,7 @@ from utils.EVs.charging import (
     DEFAULT_PEAK_CLOCK_HOURS,
     DEFAULT_SOC_MIN_FRACTION,
     DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
+    DEFAULT_TOU_SUMMER_MONTHS,
     build_hours_base,
     build_is_off_peak,
     build_off_peak_charging_params,
@@ -597,7 +598,12 @@ class ChargingSimulator:
         charging_strategy: ChargingStrategy = "immediate",
         hourly_price_usd_per_kwh: np.ndarray | None = None,
         shed_load_penalty_usd_per_kwh: float | np.ndarray | None = None,
-        peak_clock_hours: Iterable[int] = DEFAULT_PEAK_CLOCK_HOURS,
+        peak_clock_hours: Iterable[int] | None = None,
+        peak_clock_hours_summer: Iterable[int] | None = None,
+        peak_clock_hours_winter: Iterable[int] | None = None,
+        summer_months: Iterable[int] = DEFAULT_TOU_SUMMER_MONTHS,
+        weekends_off_peak: bool = False,
+        holidays_off_peak: bool = False,
         soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
         soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
         allow_emergency_peak_charging: bool = False,
@@ -621,7 +627,7 @@ class ChargingSimulator:
           no peak charging and no emergency override.
         - ``off_peak_immediate``: TOU Immediate — charge at full power whenever home and
           off-peak until the pack is full. Optional ``allow_emergency_peak_charging`` permits
-          on-peak home charging when foresight shows an energy shortfall before the next trip.
+          on-peak home charging when a 48-hour forecast shows an energy shortfall on any trip.
         - ``cost_minimizing``: perfect-foresight LP that shifts charging to the cheapest
           home hours while meeting trip energy needs. Requires ``hourly_price_usd_per_kwh``.
           Optional ``shed_load_penalty_usd_per_kwh`` penalizes curtailed trip energy; ``None``
@@ -647,11 +653,17 @@ class ChargingSimulator:
             hourly_price_usd_per_kwh: Length-``num_hours`` marginal price array for optimized charging
             shed_load_penalty_usd_per_kwh: Penalty on curtailed trip energy for ``cost_minimizing``;
                 ``None`` uses ``DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH``
-            peak_clock_hours: On-peak clock hours (0-23) for ``off_peak`` / ``off_peak_immediate``
+            peak_clock_hours: Year-round on-peak clock hours (0-23); ignored when seasonal
+                summer/winter peak sets are provided
+            peak_clock_hours_summer: Summer on-peak clock hours (seasonal TOU)
+            peak_clock_hours_winter: Non-summer on-peak clock hours (seasonal TOU)
+            summer_months: Months (1-12) using the summer peak set
+            weekends_off_peak: Treat Saturday/Sunday as entirely off-peak
+            holidays_off_peak: Treat BGE Schedule EV holidays as entirely off-peak
             soc_min_fraction: Minimum comfortable SOC fraction for ``off_peak`` strategy
             soc_safety_buffer_fraction: Extra SOC fraction above daily trip energy for ``off_peak``
             allow_emergency_peak_charging: For ``off_peak_immediate`` only; allow on-peak home
-                charging when remaining off-peak supply cannot cover the next trip
+                charging when a 48-hour off-peak-only forecast would underflow
             hourly_temp_f_by_bldg: Optional ``bldg_id``, ``hour_index``, ``temp_f`` (°F) used to
                 scale discharge when ``hourly_temp_scaled_miles`` is not provided
             hourly_temp_scaled_miles: Optional reusable duty frame from
@@ -678,8 +690,20 @@ class ChargingSimulator:
 
         hours_base = self._resolve_hours_base(hours_base)
         num_hours = hours_base.height
-        # Shared off-peak mask for all vehicles (depends only on clock hour, not trips).
-        is_off_peak = build_is_off_peak(hours_base, peak_clock_hours=peak_clock_hours)
+        # Shared off-peak mask for all vehicles (calendar / TOU windows only).
+        is_off_peak = build_is_off_peak(
+            hours_base,
+            peak_clock_hours=(
+                peak_clock_hours
+                if peak_clock_hours is not None
+                else DEFAULT_PEAK_CLOCK_HOURS
+            ),
+            peak_clock_hours_summer=peak_clock_hours_summer,
+            peak_clock_hours_winter=peak_clock_hours_winter,
+            summer_months=summer_months,
+            weekends_off_peak=weekends_off_peak,
+            holidays_off_peak=holidays_off_peak,
+        )
 
         if charging_strategy == "cost_minimizing":
             if hourly_price_usd_per_kwh is None:

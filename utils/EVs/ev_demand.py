@@ -24,8 +24,6 @@ from utils.EVs.EVBatteryAssigner import DEFAULT_CAPACITY_BUFFER_FRACTION, EVBatt
 from utils.EVs.EVChargerAssigner import (
     DEFAULT_CHARGER_BUFFER_FRACTION,
     EVChargerAssigner,
-    RESSTOCK_LEVEL1_CHARGER_KW,
-    RESSTOCK_LEVEL2_CHARGER_KW,
 )
 from utils.EVs.EVHomeChargingFractionAssigner import EVHomeChargingFractionAssigner
 from utils.EVs.NHTSProfileSampler import NHTSProfileSampler, VehicleProfile
@@ -43,10 +41,14 @@ from utils.EVs.VehicleOwnershipModel import VehicleOwnershipModel
 from utils.EVs.charging import (
     ChargingStrategy,
     DEFAULT_PEAK_CLOCK_HOURS,
+    DEFAULT_PEAK_CLOCK_HOURS_SUMMER,
+    DEFAULT_PEAK_CLOCK_HOURS_WINTER,
     DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH,
     DEFAULT_SOC_MIN_FRACTION,
     DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
+    DEFAULT_TOU_SUMMER_MONTHS,
     build_hours_base,
+    build_is_off_peak,
 )
 
 # How EVs (or vehicle slots treated as EVs) are assigned to ResStock buildings.
@@ -102,14 +104,84 @@ REQUIRED_SIM_START_HOUR = DEFAULT_TRAVEL_DAY_START_HOUR  # 4
 REQUIRED_SIM_END_HOUR = (DEFAULT_TRAVEL_DAY_START_HOUR - 1) % 24  # 3
 
 
+# Scenario knobs with no Python defaults. YAML (or an explicit constructor
+# call) must set every name. Paths and strategy-specific optionals are not here.
+REQUIRED_SCENARIO_FIELDS: Final[frozenset[str]] = frozenset({
+    "state",
+    "release",
+    "start_date",
+    "end_date",
+    "ev_assignment",
+    "random_state",
+    "nhts_daily_miles_percentile_low",
+    "nhts_daily_miles_percentile_high",
+    "include_zero_driving_days_in_match_pool",
+    "nhts_feasibility_temperature_f",
+    "min_trip_away_hours",
+    "max_departure_hour",
+    "max_arrival_hour",
+    "time_offsets",
+    "time_offset_probabilities",
+    "miles_noise_std_fraction",
+    "capacity_buffer_fraction",
+    "temperature_adjustment",
+    "max_workers",
+    "batch_size",
+    "upload_s3",
+    "charging_strategy",
+    "charger_assignment",
+    "charger_buffer_fraction",
+    "home_charging_fraction_assignment",
+    "tou_summer_months",
+    "tou_weekends_off_peak",
+    "tou_holidays_off_peak",
+    "allow_emergency_peak_charging",
+})
+
+
 @dataclass
 class EVDemandConfig:
-    """All parameters for an EV demand run (typically loaded from YAML)."""
+    """All parameters for an EV demand run (loaded from YAML).
+
+    Scenario knobs have no Python defaults — set them in YAML. Optional fields
+    below are either conventional input paths (filled when omitted) or knobs that
+    only apply to some assignment / charging modes.
+    """
 
     state: str
     release: str
-    start_date: datetime | None = None
-    end_date: datetime | None = None
+    start_date: datetime
+    end_date: datetime
+
+    ev_assignment: EvAssignmentMode
+    random_state: int
+    nhts_daily_miles_percentile_low: float
+    nhts_daily_miles_percentile_high: float
+    include_zero_driving_days_in_match_pool: bool
+    nhts_feasibility_temperature_f: float
+
+    min_trip_away_hours: int
+    max_departure_hour: int
+    max_arrival_hour: int
+    time_offsets: tuple[int, ...]
+    time_offset_probabilities: tuple[float, ...]
+    miles_noise_std_fraction: float
+
+    capacity_buffer_fraction: float
+    temperature_adjustment: TemperatureAdjustmentMode
+
+    max_workers: int | None
+    batch_size: int
+    upload_s3: bool
+
+    charging_strategy: ChargingStrategy
+    charger_assignment: ChargerAssignmentMode
+    charger_buffer_fraction: float
+    home_charging_fraction_assignment: HomeChargingFractionAssignmentMode
+    tou_summer_months: tuple[int, ...]
+    tou_weekends_off_peak: bool
+    tou_holidays_off_peak: bool
+    allow_emergency_peak_charging: bool
 
     metadata_path: str | None = None
     # Required when ev_assignment=pums_vehicles; ignored for resstock_adoption.
@@ -137,89 +209,46 @@ class EVDemandConfig:
     # temperature_adjustment=resstock; ignored otherwise).
     weather_dir: str | None = None
 
-    # Sampling / matching
-    # Default: ResStock max-1-EV adoption (no NHTS vehicle-count matching).
-    ev_assignment: EvAssignmentMode = "resstock_adoption"
-    random_state: int = 42
+    # Optional occupied *housing-stock* EV share in [0, 1] for resstock_adoption
+    # (ResStock weight-weighted). None = Bernoulli at baseline ResStock P(EV).
+    # When set: priority-sample buildings on key u/P(EV), take a weight prefix to hit
+    # this stock share. Ignored for pums_vehicles.
+    target_adoption_rate: float | None = None
     # Required when ev_assignment=pums_vehicles; ignored for resstock_adoption.
     max_vehicles: int | None = None
-    # Applied in load_nhts_data: keep trip profiles whose daily miles fall in [low, high].
-    # 0–100 = full pool; e.g. 0–95 keeps empties and drops the heaviest ~5% of survey days.
-    nhts_daily_miles_percentile_low: float = 0.0
-    nhts_daily_miles_percentile_high: float = 100.0
-    # Include owned-but-idle NHTS vehicle-days as zero-driving match templates.
-    include_zero_driving_days_in_match_pool: bool = True
-    # Outdoor temperature the NHTS feasibility screen sizes template miles against,
-    # so the pool only holds days some stock pack plus Level 2 can serve on the
-    # coldest day of the run. Ignored when temperature_adjustment=none. The ResStock
-    # discharge curve clips to 0–100°F, where 0°F is the worst case (×2.26).
-    nhts_feasibility_temperature_f: float = 0.0
 
-    # Trip schedule perturbation / packing
-    min_trip_away_hours: int = DEFAULT_MIN_TRIP_AWAY_HOURS
-    max_departure_hour: int = DEFAULT_MAX_DEPARTURE_HOUR
-    max_arrival_hour: int = DEFAULT_MAX_ARRIVAL_HOUR
-    time_offsets: tuple[int, ...] = DEFAULT_TIME_OFFSETS
-    time_offset_probabilities: tuple[float, ...] = DEFAULT_TIME_OFFSET_PROBABILITIES
-    miles_noise_std_fraction: float = DEFAULT_MILES_NOISE_STD_FRACTION
-
-    # Battery assignment: pack must cover peak daily discharge duty × (1 + buffer).
-    # With temperature_adjustment=resstock, duty miles are Σ(miles_share * power_mult(T)).
-    capacity_buffer_fraction: float = DEFAULT_CAPACITY_BUFFER_FRACTION
-
-    # Discharge temperature dependence (ResStock curve on Autonomie kWh/mi).
-    # none: miles * kwh_per_mile; resstock: × power_mult(T_outdoor) using weather_dir CSVs.
-    # Also used for battery sizing duty miles when enabled.
-    temperature_adjustment: TemperatureAdjustmentMode = "none"
-
-    # Pipeline
-    max_workers: int | None = 8
-    batch_size: int = 20000
-    upload_s3: bool = False
-
-    # Charging — strategy-specific knobs are required only for the strategy that uses them:
-    #   immediate / off_peak / …: see _validate_charging_strategy_inputs
-    # Charger power:
-    #   charger_assignment=fixed → charger_power_kw (defaults to 7.2 if omitted);
-    #     level1/level2_charger_power_kw ignored
-    #   charger_assignment=resstock → sample L1 vs L2 from TSV among SOC-feasible
-    #     levels (perfect foresight); powers from level1/level2_charger_power_kw
-    #     (default 1.6 / 7.2); charger_power_kw ignored
-    charging_strategy: ChargingStrategy = "immediate"
-    # fixed: use charger_power_kw for every EV; resstock: sample L1/L2 from TSV.
-    charger_assignment: ChargerAssignmentMode = "fixed"
-    # Global charger kW when charger_assignment=fixed; None when resstock (per-vehicle).
+    # Charger power: YAML must set charger_power_kw (fixed) or both level1/level2
+    # (resstock). No silent fill from Python constants.
     charger_power_kw: float | None = None
-    # Per-level rated powers when charger_assignment=resstock (None → ResStock defaults).
     level1_charger_power_kw: float | None = None
     level2_charger_power_kw: float | None = None
-    # resstock only: inflate trip discharge by (1+buffer) when testing L1/L2 SOC feasibility.
-    charger_buffer_fraction: float = DEFAULT_CHARGER_BUFFER_FRACTION
-    # Home-charging energy share (residential meter): none → 1.0; resstock → RECS TSV sample.
-    # Scales home discharge / charger feasibility only; battery sizing stays on full duty.
-    home_charging_fraction_assignment: HomeChargingFractionAssignmentMode = "none"
     # None = each vehicle starts at full battery capacity.
     initial_soc_kwh: float | None = None
     # off_peak only
     soc_min_fraction: float | None = None
     soc_safety_buffer_fraction: float | None = None
-    # off_peak and off_peak_immediate
+    # off_peak and off_peak_immediate — year-round on-peak hours (legacy), OR seasonal:
     peak_clock_hours: tuple[int, ...] | None = None
-    # off_peak_immediate only (default False = pure TOU Immediate)
-    allow_emergency_peak_charging: bool = False
+    peak_clock_hours_summer: tuple[int, ...] | None = None
+    peak_clock_hours_winter: tuple[int, ...] | None = None
     # cost_minimizing only
     shed_load_penalty_usd_per_kwh: float | None = None
-    # Prices for cost_minimizing (exactly one of these):
+    # Prices for cost_minimizing (exactly one source family):
     # - hourly_price_path: CSV/parquet/npy with one value per simulation hour
     # - flat_price_usd_per_kwh: constant $/kWh broadcast to all hours
     # - daily_price_usd_per_kwh: length-24 profile indexed by clock hour (element h = hour h)
+    # - seasonal TOU prices (all four required): on/off × summer/winter, using the same
+    #   peak windows / weekend / holiday rules as build_is_off_peak
     hourly_price_path: str | None = None
     flat_price_usd_per_kwh: float | None = None
     daily_price_usd_per_kwh: tuple[float, ...] | None = None
+    tou_on_peak_price_summer_usd_per_kwh: float | None = None
+    tou_off_peak_price_summer_usd_per_kwh: float | None = None
+    tou_on_peak_price_winter_usd_per_kwh: float | None = None
+    tou_off_peak_price_winter_usd_per_kwh: float | None = None
 
     def __post_init__(self) -> None:
-        if self.start_date is not None and self.end_date is not None:
-            validate_travel_day_simulation_window(self.start_date, self.end_date)
+        validate_travel_day_simulation_window(self.start_date, self.end_date)
 
         if self.ev_assignment not in EV_ASSIGNMENT_MODES:
             raise ValueError(
@@ -256,6 +285,19 @@ class EVDemandConfig:
                 "(at most one EV per household)",
                 self.max_vehicles,
             )
+
+        if self.target_adoption_rate is not None:
+            if not (0.0 <= self.target_adoption_rate <= 1.0):
+                raise ValueError(
+                    f"sampling.target_adoption_rate must be in [0, 1]; "
+                    f"got {self.target_adoption_rate}"
+                )
+            if self.ev_assignment == "pums_vehicles":
+                logging.warning(
+                    "sampling.target_adoption_rate=%s is ignored when "
+                    "ev_assignment=pums_vehicles",
+                    self.target_adoption_rate,
+                )
 
         if self.metadata_path is None:
             self.metadata_path = str(
@@ -357,13 +399,14 @@ class EVDemandConfig:
                 f"charger_buffer_fraction must be >= 0; got {self.charger_buffer_fraction}"
             )
 
-        # Charger power is mode-gated:
-        #   fixed    → scalar charger_power_kw; ignore level1/level2 overrides
-        #   resstock → sample L1/L2; apply level1/level2_charger_power_kw (ResStock defaults)
+        # Charger power is mode-gated and must come from YAML (no silent fill):
+        #   fixed    → charging.charger_power_kw; ignore level1/level2 overrides
+        #   resstock → charging.level1_charger_power_kw and level2_charger_power_kw
         if self.charger_assignment == "fixed":
             if self.charger_power_kw is None:
-                # Preserve historical default for fixed-rate scenarios / unit tests.
-                self.charger_power_kw = DEFAULT_LEVEL2_CHARGER_KW
+                raise ValueError(
+                    "charging.charger_power_kw is required when charger_assignment=fixed"
+                )
             if self.charger_power_kw < 0:
                 raise ValueError(
                     f"charger_power_kw must be >= 0; got {self.charger_power_kw}"
@@ -387,10 +430,22 @@ class EVDemandConfig:
                     self.charger_power_kw,
                 )
                 self.charger_power_kw = None
-            if self.level1_charger_power_kw is None:
-                self.level1_charger_power_kw = RESSTOCK_LEVEL1_CHARGER_KW
-            if self.level2_charger_power_kw is None:
-                self.level2_charger_power_kw = RESSTOCK_LEVEL2_CHARGER_KW
+            missing_levels = [
+                name
+                for name, value in (
+                    ("level1_charger_power_kw", self.level1_charger_power_kw),
+                    ("level2_charger_power_kw", self.level2_charger_power_kw),
+                )
+                if value is None
+            ]
+            if missing_levels:
+                raise ValueError(
+                    "charger_assignment=resstock requires "
+                    + " and ".join(missing_levels)
+                )
+            # missing_levels already rejected Nones; asserts narrow float | None for the checker.
+            assert self.level1_charger_power_kw is not None
+            assert self.level2_charger_power_kw is not None
             if self.level1_charger_power_kw < 0:
                 raise ValueError(
                     f"level1_charger_power_kw must be >= 0; got {self.level1_charger_power_kw}"
@@ -411,24 +466,60 @@ class EVDemandConfig:
                 f"charging_strategy must be one of {sorted(valid)}; got {strategy!r}"
             )
 
+        seasonal_tou_prices = (
+            self.tou_on_peak_price_summer_usd_per_kwh,
+            self.tou_off_peak_price_summer_usd_per_kwh,
+            self.tou_on_peak_price_winter_usd_per_kwh,
+            self.tou_off_peak_price_winter_usd_per_kwh,
+        )
+        n_seasonal_set = sum(1 for p in seasonal_tou_prices if p is not None)
+        if n_seasonal_set not in (0, 4):
+            raise ValueError(
+                "Seasonal TOU prices require all four of: "
+                "tou_on_peak_price_summer_usd_per_kwh, "
+                "tou_off_peak_price_summer_usd_per_kwh, "
+                "tou_on_peak_price_winter_usd_per_kwh, "
+                "tou_off_peak_price_winter_usd_per_kwh"
+            )
+        has_seasonal_tou_prices = n_seasonal_set == 4
+
         price_sources = sum(
             1
             for src in (
                 self.hourly_price_path,
                 self.flat_price_usd_per_kwh,
                 self.daily_price_usd_per_kwh,
+                True if has_seasonal_tou_prices else None,
             )
             if src is not None
         )
         if price_sources > 1:
             raise ValueError(
                 "Provide at most one of hourly_price_path, flat_price_usd_per_kwh, "
-                "or daily_price_usd_per_kwh"
+                "daily_price_usd_per_kwh, or seasonal TOU prices "
+                "(tou_*_peak_price_*_usd_per_kwh)"
             )
         if self.daily_price_usd_per_kwh is not None and len(self.daily_price_usd_per_kwh) != 24:
             raise ValueError(
                 f"daily_price_usd_per_kwh must have length 24; got {len(self.daily_price_usd_per_kwh)}"
             )
+        if has_seasonal_tou_prices:
+            for name, value in (
+                ("tou_on_peak_price_summer_usd_per_kwh", self.tou_on_peak_price_summer_usd_per_kwh),
+                ("tou_off_peak_price_summer_usd_per_kwh", self.tou_off_peak_price_summer_usd_per_kwh),
+                ("tou_on_peak_price_winter_usd_per_kwh", self.tou_on_peak_price_winter_usd_per_kwh),
+                ("tou_off_peak_price_winter_usd_per_kwh", self.tou_off_peak_price_winter_usd_per_kwh),
+            ):
+                assert value is not None
+                if value < 0:
+                    raise ValueError(f"{name} must be >= 0; got {value}")
+
+        if any(m < 1 or m > 12 for m in self.tou_summer_months):
+            raise ValueError(
+                f"tou_summer_months must be in 1–12; got {self.tou_summer_months}"
+            )
+        if not self.tou_summer_months:
+            raise ValueError("tou_summer_months must be non-empty")
 
         soc_target_knobs = {
             "soc_min_fraction": self.soc_min_fraction,
@@ -439,10 +530,39 @@ class EVDemandConfig:
         }
         has_prices = price_sources > 0
 
-        def _validate_peak_clock_hours() -> None:
+        def _validate_peak_windows() -> None:
+            seasonal = (
+                self.peak_clock_hours_summer is not None
+                or self.peak_clock_hours_winter is not None
+            )
+            if seasonal:
+                if (
+                    self.peak_clock_hours_summer is None
+                    or self.peak_clock_hours_winter is None
+                ):
+                    raise ValueError(
+                        f"charging_strategy={strategy} requires both "
+                        "peak_clock_hours_summer and peak_clock_hours_winter "
+                        "when using seasonal TOU windows"
+                    )
+                for label, hours in (
+                    ("summer", self.peak_clock_hours_summer),
+                    ("winter", self.peak_clock_hours_winter),
+                ):
+                    if not hours:
+                        raise ValueError(
+                            f"peak_clock_hours_{label} must be a non-empty list"
+                        )
+                    if any(h < 0 or h > 23 for h in hours):
+                        raise ValueError(
+                            f"peak_clock_hours_{label} must be clock hours in 0–23; "
+                            f"got {hours}"
+                        )
+                return
             if self.peak_clock_hours is None:
                 raise ValueError(
-                    f"charging_strategy={strategy} requires peak_clock_hours"
+                    f"charging_strategy={strategy} requires peak_clock_hours "
+                    "or seasonal peak_clock_hours_summer / peak_clock_hours_winter"
                 )
             if not self.peak_clock_hours:
                 raise ValueError(
@@ -453,17 +573,26 @@ class EVDemandConfig:
                     f"peak_clock_hours must be clock hours in 0–23; got {self.peak_clock_hours}"
                 )
 
+        def _has_peak_windows() -> bool:
+            return (
+                self.peak_clock_hours is not None
+                or self.peak_clock_hours_summer is not None
+                or self.peak_clock_hours_winter is not None
+            )
+
         if strategy == "off_peak":
             missing = [name for name, value in soc_target_knobs.items() if value is None]
-            if self.peak_clock_hours is None:
-                missing.append("peak_clock_hours")
+            if not _has_peak_windows():
+                missing.append(
+                    "peak_clock_hours (or peak_clock_hours_summer/winter)"
+                )
             if missing:
                 raise ValueError(
                     "charging_strategy=off_peak requires " + ", ".join(missing)
                 )
             assert self.soc_min_fraction is not None
             assert self.soc_safety_buffer_fraction is not None
-            _validate_peak_clock_hours()
+            _validate_peak_windows()
             if not 0.0 <= self.soc_min_fraction <= 1.0:
                 raise ValueError(
                     f"soc_min_fraction must be within [0, 1]; got {self.soc_min_fraction}"
@@ -481,12 +610,12 @@ class EVDemandConfig:
             if unused:
                 logging.warning(
                     "charging_strategy=off_peak ignores %s "
-                    "(off_peak uses peak_clock_hours, not $/kWh prices)",
+                    "(off_peak uses peak windows, not $/kWh prices)",
                     ", ".join(unused),
                 )
 
         elif strategy == "off_peak_immediate":
-            _validate_peak_clock_hours()
+            _validate_peak_windows()
             unused = [
                 name
                 for name, value in {**soc_target_knobs, **cost_min_knobs}.items()
@@ -505,8 +634,16 @@ class EVDemandConfig:
             if not has_prices:
                 raise ValueError(
                     "charging_strategy=cost_minimizing requires one of: "
-                    "hourly_price_path, flat_price_usd_per_kwh, or daily_price_usd_per_kwh"
+                    "hourly_price_path, flat_price_usd_per_kwh, daily_price_usd_per_kwh, "
+                    "or seasonal TOU prices (tou_*_peak_price_*_usd_per_kwh)"
                 )
+            if has_seasonal_tou_prices and not _has_peak_windows():
+                raise ValueError(
+                    "seasonal TOU prices require peak_clock_hours or "
+                    "peak_clock_hours_summer / peak_clock_hours_winter"
+                )
+            if has_seasonal_tou_prices:
+                _validate_peak_windows()
             if self.shed_load_penalty_usd_per_kwh is None:
                 raise ValueError(
                     "charging_strategy=cost_minimizing requires shed_load_penalty_usd_per_kwh"
@@ -520,10 +657,22 @@ class EVDemandConfig:
                 name
                 for name, value in {
                     **soc_target_knobs,
-                    "peak_clock_hours": self.peak_clock_hours,
+                    "peak_clock_hours": self.peak_clock_hours
+                    if not has_seasonal_tou_prices
+                    else None,
                 }.items()
                 if value is not None
             ]
+            # Year-round peak_clock_hours alone is unused by cost_min unless seasonal
+            # prices need the mask; seasonal peak windows are used for price building.
+            if (
+                not has_seasonal_tou_prices
+                and (
+                    self.peak_clock_hours_summer is not None
+                    or self.peak_clock_hours_winter is not None
+                )
+            ):
+                unused.append("peak_clock_hours_summer/winter")
             if self.allow_emergency_peak_charging:
                 unused.append("allow_emergency_peak_charging")
             if unused:
@@ -539,6 +688,8 @@ class EVDemandConfig:
                     **soc_target_knobs,
                     **cost_min_knobs,
                     "peak_clock_hours": self.peak_clock_hours,
+                    "peak_clock_hours_summer": self.peak_clock_hours_summer,
+                    "peak_clock_hours_winter": self.peak_clock_hours_winter,
                 }.items()
                 if value is not None
             ]
@@ -552,6 +703,21 @@ class EVDemandConfig:
                     ", ".join(unused),
                 )
 
+    def peak_window_kwargs(self) -> dict[str, Any]:
+        """Kwargs for ``build_is_off_peak`` / ``generate_soc_schedules`` peak windows.
+
+        Single place that maps config field names → the argument names those
+        helpers expect (e.g. ``tou_summer_months`` → ``summer_months``).
+        """
+        return {
+            "peak_clock_hours": self.peak_clock_hours,  # legacy year-round (or None)
+            "peak_clock_hours_summer": self.peak_clock_hours_summer,
+            "peak_clock_hours_winter": self.peak_clock_hours_winter,
+            "summer_months": self.tou_summer_months,  # which months use summer peaks
+            "weekends_off_peak": self.tou_weekends_off_peak,
+            "holidays_off_peak": self.tou_holidays_off_peak,
+        }
+
     @property
     def match_on_vehicles(self) -> bool:
         """True only for the PUMS multi-vehicle assignment mode."""
@@ -559,8 +725,6 @@ class EVDemandConfig:
 
     def num_simulation_hours(self) -> int:
         """Inclusive hourly count from ``start_date`` through ``end_date`` (hour-aligned)."""
-        if self.start_date is None or self.end_date is None:
-            raise ValueError("start_date and end_date are required to compute simulation hours")
         start_hour = self.start_date.replace(minute=0, second=0, microsecond=0)
         end_hour = self.end_date.replace(minute=0, second=0, microsecond=0)
         if end_hour < start_hour:
@@ -681,10 +845,13 @@ def _load_hourly_price_file(path: str | Path, *, num_hours: int) -> np.ndarray:
 def resolve_hourly_prices(config: EVDemandConfig) -> np.ndarray | None:
     """Build the simulation-length hourly price array from config, or ``None`` if unset."""
     num_hours = config.num_simulation_hours()
+    # Source 1: explicit per-hour file (already length = simulation hours).
     if config.hourly_price_path is not None:
         return _load_hourly_price_file(config.hourly_price_path, num_hours=num_hours)
+    # Source 2: constant $/kWh for every hour (e.g. flat Schedule R–like).
     if config.flat_price_usd_per_kwh is not None:
         return np.full(num_hours, float(config.flat_price_usd_per_kwh), dtype=np.float64)
+    # Source 3: length-24 daily profile tiled across the year by clock hour.
     if config.daily_price_usd_per_kwh is not None:
         # Index by clock hour, not simulation-hour offset: element h is the price for
         # clock hour h, so a profile stays aligned to midnight even though the
@@ -693,6 +860,30 @@ def resolve_hourly_prices(config: EVDemandConfig) -> np.ndarray | None:
         daily = np.asarray(config.daily_price_usd_per_kwh, dtype=np.float64)
         clock_hours = (np.arange(num_hours) + config.start_date.hour) % 24
         return daily[clock_hours]
+    # Source 4: seasonal TOU (BGE Schedule EV) — four rates + same peak mask as charging.
+    seasonal = (
+        config.tou_on_peak_price_summer_usd_per_kwh,
+        config.tou_off_peak_price_summer_usd_per_kwh,
+        config.tou_on_peak_price_winter_usd_per_kwh,
+        config.tou_off_peak_price_winter_usd_per_kwh,
+    )
+    if all(p is not None for p in seasonal):
+        assert config.start_date is not None and config.end_date is not None
+        on_s, off_s, on_w, off_w = (float(p) for p in seasonal)  # type: ignore[arg-type]
+        # Rebuild the same hour grid the chargers use.
+        hours_base = build_hours_base(config.start_date, config.end_date)
+        # True where off-peak (weekends/holidays/seasonal windows).
+        is_off_peak = build_is_off_peak(hours_base, **config.peak_window_kwargs())
+        summer_months = set(config.tou_summer_months)
+        # True on summer calendar months (rate level), independent of peak/off-peak.
+        is_summer = np.array(
+            [d.month in summer_months for d in hours_base["date"].to_list()],
+            dtype=bool,
+        )
+        # Pick off-peak $/kWh by season, on-peak $/kWh by season, then mask.
+        off_price = np.where(is_summer, off_s, off_w)
+        on_price = np.where(is_summer, on_s, on_w)
+        return np.where(is_off_peak, off_price, on_price).astype(np.float64, copy=False)
     return None
 
 
@@ -701,9 +892,10 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
 
     Nested sections ``paths``, ``sampling``, ``trips``, ``battery``, ``temperature``,
     ``pipeline``, ``charging``, and ``home_charging`` are flattened into dataclass fields.
-    Dates must be ISO datetimes with clock hour (e.g. ``2024-01-01T04:00:00``); date-only
-    values are rejected. ``start_date`` must be at 04:00 and ``end_date`` at 03:00
-    (NHTS travel day).
+    Scenario knobs listed in ``REQUIRED_SCENARIO_FIELDS`` have no Python defaults and
+    must be present in YAML. Dates must be ISO datetimes with clock hour
+    (e.g. ``2024-01-01T04:00:00``); date-only values are rejected. ``start_date`` must be
+    at 04:00 and ``end_date`` at 03:00 (NHTS travel day).
     """
     config_path = Path(path)
     with config_path.open() as f:
@@ -735,6 +927,16 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
         flat["end_date"] = _coerce_config_date(flat["end_date"])
     if "peak_clock_hours" in flat:
         flat["peak_clock_hours"] = tuple(int(h) for h in flat["peak_clock_hours"])
+    if "peak_clock_hours_summer" in flat and flat["peak_clock_hours_summer"] is not None:
+        flat["peak_clock_hours_summer"] = tuple(int(h) for h in flat["peak_clock_hours_summer"])
+    if "peak_clock_hours_winter" in flat and flat["peak_clock_hours_winter"] is not None:
+        flat["peak_clock_hours_winter"] = tuple(int(h) for h in flat["peak_clock_hours_winter"])
+    if "tou_summer_months" in flat and flat["tou_summer_months"] is not None:
+        flat["tou_summer_months"] = tuple(int(m) for m in flat["tou_summer_months"])
+    if "tou_weekends_off_peak" in flat and flat["tou_weekends_off_peak"] is not None:
+        flat["tou_weekends_off_peak"] = bool(flat["tou_weekends_off_peak"])
+    if "tou_holidays_off_peak" in flat and flat["tou_holidays_off_peak"] is not None:
+        flat["tou_holidays_off_peak"] = bool(flat["tou_holidays_off_peak"])
     if "time_offsets" in flat:
         flat["time_offsets"] = tuple(int(x) for x in flat["time_offsets"])
     if "time_offset_probabilities" in flat:
@@ -743,6 +945,8 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
         flat["daily_price_usd_per_kwh"] = tuple(float(x) for x in flat["daily_price_usd_per_kwh"])
     if "allow_emergency_peak_charging" in flat and flat["allow_emergency_peak_charging"] is not None:
         flat["allow_emergency_peak_charging"] = bool(flat["allow_emergency_peak_charging"])
+    if "upload_s3" in flat and flat["upload_s3"] is not None:
+        flat["upload_s3"] = bool(flat["upload_s3"])
     if (
         "include_zero_driving_days_in_match_pool" in flat
         and flat["include_zero_driving_days_in_match_pool"] is not None
@@ -767,6 +971,10 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
         "nhts_daily_miles_percentile_low",
         "nhts_daily_miles_percentile_high",
         "nhts_feasibility_temperature_f",
+        "tou_on_peak_price_summer_usd_per_kwh",
+        "tou_off_peak_price_summer_usd_per_kwh",
+        "tou_on_peak_price_winter_usd_per_kwh",
+        "tou_off_peak_price_winter_usd_per_kwh",
     ):
         if key in flat and flat[key] is not None:
             flat[key] = float(flat[key])
@@ -806,10 +1014,11 @@ def load_ev_demand_config(path: str | Path) -> EVDemandConfig:
     if unknown:
         raise ValueError(f"Unknown EV demand config keys in {config_path}: {sorted(unknown)}")
 
-    required = {"state", "release", "start_date", "end_date"}
-    missing = required - set(flat)
+    missing = REQUIRED_SCENARIO_FIELDS - set(flat)
     if missing:
-        raise ValueError(f"EV demand config {config_path} missing required keys: {sorted(missing)}")
+        raise ValueError(
+            f"EV demand config {config_path} missing required keys: {sorted(missing)}"
+        )
 
     return EVDemandConfig(**flat)
 
@@ -843,10 +1052,11 @@ class EVDemandCalculator:
         ev_charger_df: pl.DataFrame | None = None,
         ev_charge_at_home_df: pl.DataFrame | None = None,
         *,
-        ev_assignment: EvAssignmentMode = "resstock_adoption",
+        ev_assignment: EvAssignmentMode,
         max_vehicles: int | None = None,
         vehicle_ownership: VehicleOwnershipModel | None = None,
         random_state: int = 42,
+        target_adoption_rate: float | None = None,
         max_workers: int | None = None,
         min_trip_away_hours: int = DEFAULT_MIN_TRIP_AWAY_HOURS,
         max_departure_hour: int = DEFAULT_MAX_DEPARTURE_HOUR,
@@ -855,13 +1065,13 @@ class EVDemandCalculator:
         time_offset_probabilities: tuple[float, ...] = DEFAULT_TIME_OFFSET_PROBABILITIES,
         miles_noise_std_fraction: float = DEFAULT_MILES_NOISE_STD_FRACTION,
         capacity_buffer_fraction: float = DEFAULT_CAPACITY_BUFFER_FRACTION,
-        charger_assignment: ChargerAssignmentMode = "fixed",
+        charger_assignment: ChargerAssignmentMode,
         charger_power_kw: float | None = None,
         level1_charger_power_kw: float | None = None,
         level2_charger_power_kw: float | None = None,
         charger_buffer_fraction: float = DEFAULT_CHARGER_BUFFER_FRACTION,
-        home_charging_fraction_assignment: HomeChargingFractionAssignmentMode = "none",
-        temperature_adjustment: TemperatureAdjustmentMode = "none",
+        home_charging_fraction_assignment: HomeChargingFractionAssignmentMode,
+        temperature_adjustment: TemperatureAdjustmentMode,
         nhts_feasibility_temperature_f: float = 0.0,
         weather_dir: str | Path | None = None,
         weather_map: pl.DataFrame | None = None,
@@ -949,10 +1159,12 @@ class EVDemandCalculator:
                 "ev_charge_at_home_df is required when "
                 "home_charging_fraction_assignment=resstock"
             )
-        # Resolve fixed-rate power once; resstock leaves this None (per-vehicle attrs).
+        # Resolve charger power from the caller (YAML via from_config). No silent fill.
         if charger_assignment == "fixed":
             if charger_power_kw is None:
-                charger_power_kw = DEFAULT_LEVEL2_CHARGER_KW
+                raise ValueError(
+                    "charger_power_kw is required when charger_assignment=fixed"
+                )
             if charger_power_kw < 0:
                 raise ValueError(f"charger_power_kw must be non-negative, got {charger_power_kw}")
             if level1_charger_power_kw is not None or level2_charger_power_kw is not None:
@@ -969,10 +1181,11 @@ class EVDemandCalculator:
                     charger_power_kw,
                 )
                 charger_power_kw = None
-            if level1_charger_power_kw is None:
-                level1_charger_power_kw = RESSTOCK_LEVEL1_CHARGER_KW
-            if level2_charger_power_kw is None:
-                level2_charger_power_kw = RESSTOCK_LEVEL2_CHARGER_KW
+            if level1_charger_power_kw is None or level2_charger_power_kw is None:
+                raise ValueError(
+                    "level1_charger_power_kw and level2_charger_power_kw are required "
+                    "when charger_assignment=resstock"
+                )
             if level1_charger_power_kw < 0:
                 raise ValueError(
                     f"level1_charger_power_kw must be non-negative, got {level1_charger_power_kw}"
@@ -1031,12 +1244,21 @@ class EVDemandCalculator:
                 )
                 self.vehicle_ownership.fit(pums_df)
 
+        # Adoption-rate scaling only applies to ResStock Bernoulli ownership.
+        # pums_vehicles predicts fleet size instead; drop the knob there.
+        self.target_adoption_rate = (
+            target_adoption_rate if ev_assignment == "resstock_adoption" else None
+        )
         self.ev_adoption_sampler: EVAdoptionSampler | None = None
         if ev_assignment == "resstock_adoption":
             assert ev_ownership_df is not None  # validated above
             self.ev_adoption_sampler = EVAdoptionSampler(
                 ev_ownership_df=ev_ownership_df,
                 random_state=random_state,
+                # None → Bernoulli(baseline P(EV)); else priority-sample on key
+                # u_i/p_i and take a ResStock-weight prefix totaling this occupied
+                # housing-stock share. One u_i per ResStock building row either way.
+                target_adoption_rate=self.target_adoption_rate,
             )
         self.battery_assigner = EVBatteryAssigner(
             option_probabilities=ev_battery_df,
@@ -1066,17 +1288,23 @@ class EVDemandCalculator:
         # Screen the NHTS pool down to days some stock pack plus Level 2 can serve,
         # sized the way the assigners will size them: on the annual peak day, which
         # is temperature-scaled (when enabled) and carries per-leg miles noise.
+        reference_level2_power_kw = (
+            level2_charger_power_kw
+            if level2_charger_power_kw is not None
+            else charger_power_kw
+        )
+        if reference_level2_power_kw is None:
+            raise ValueError(
+                "NHTS feasibility screen needs a Level 2 kW: set "
+                "level2_charger_power_kw (resstock) or charger_power_kw (fixed)"
+            )
         self.nhts_sampler = NHTSProfileSampler(
             nhts_df=nhts_df,
             max_vehicles=nhts_max_vehicles,
             match_on_vehicles=match_on_vehicles,
             random_state=random_state,
             reference_battery_options=self.battery_assigner.stock_option_parameters(),
-            reference_level2_power_kw=(
-                level2_charger_power_kw
-                if level2_charger_power_kw is not None
-                else DEFAULT_LEVEL2_CHARGER_KW
-            ),
+            reference_level2_power_kw=reference_level2_power_kw,
             capacity_buffer_fraction=capacity_buffer_fraction,
             charger_buffer_fraction=charger_buffer_fraction,
             reference_temperature_f=(
@@ -1129,8 +1357,6 @@ class EVDemandCalculator:
         station_temps: dict[str, pl.DataFrame] | None = None,
     ) -> "EVDemandCalculator":
         """Build a calculator from an ``EVDemandConfig`` plus loaded input tables."""
-        if config.start_date is None or config.end_date is None:
-            raise ValueError("EVDemandConfig.start_date and end_date are required")
         return cls(
             metadata_df=metadata_df,
             nhts_df=nhts_df,
@@ -1146,6 +1372,7 @@ class EVDemandCalculator:
             max_vehicles=config.max_vehicles,
             vehicle_ownership=vehicle_ownership,
             random_state=config.random_state,
+            target_adoption_rate=config.target_adoption_rate,
             max_workers=config.max_workers,
             min_trip_away_hours=config.min_trip_away_hours,
             max_departure_hour=config.max_departure_hour,
@@ -1310,14 +1537,17 @@ class EVDemandCalculator:
         # Feasible packs = capacity ∩ Level 2 daily-repeat on that peak day.
         # Full trip duty (not scaled by home-charging fraction) — packs cover
         # physical driving; away charging is handled later via fraction_charged_home.
-        # Prefer resstock L2 kW; fall back to fixed charger_power_kw / ResStock default.
+        # Prefer resstock L2 kW; otherwise the fixed charger_power_kw (YAML-required).
         level2_kw = (
             self.level2_charger_power_kw
             if self.level2_charger_power_kw is not None
             else self.charger_power_kw
         )
         if level2_kw is None:
-            level2_kw = RESSTOCK_LEVEL2_CHARGER_KW
+            raise ValueError(
+                "Battery Level 2 daily-repeat gate needs level2_charger_power_kw "
+                "(resstock) or charger_power_kw (fixed)"
+            )
         ev_attributes = self.battery_assigner.assign(
             vehicle_duty,
             buffer_fraction=self.capacity_buffer_fraction,
@@ -1600,7 +1830,12 @@ class EVDemandCalculator:
         charging_strategy: ChargingStrategy = "immediate",
         hourly_price_usd_per_kwh: np.ndarray | None = None,
         shed_load_penalty_usd_per_kwh: float | np.ndarray | None = None,
-        peak_clock_hours: Iterable[int] = DEFAULT_PEAK_CLOCK_HOURS,
+        peak_clock_hours: Iterable[int] | None = None,
+        peak_clock_hours_summer: Iterable[int] | None = None,
+        peak_clock_hours_winter: Iterable[int] | None = None,
+        summer_months: Iterable[int] = DEFAULT_TOU_SUMMER_MONTHS,
+        weekends_off_peak: bool = False,
+        holidays_off_peak: bool = False,
         soc_min_fraction: float = DEFAULT_SOC_MIN_FRACTION,
         soc_safety_buffer_fraction: float = DEFAULT_SOC_SAFETY_BUFFER_FRACTION,
         allow_emergency_peak_charging: bool = False,
@@ -1638,6 +1873,11 @@ class EVDemandCalculator:
             hourly_price_usd_per_kwh=hourly_price_usd_per_kwh,
             shed_load_penalty_usd_per_kwh=shed_load_penalty_usd_per_kwh,
             peak_clock_hours=peak_clock_hours,
+            peak_clock_hours_summer=peak_clock_hours_summer,
+            peak_clock_hours_winter=peak_clock_hours_winter,
+            summer_months=summer_months,
+            weekends_off_peak=weekends_off_peak,
+            holidays_off_peak=holidays_off_peak,
             soc_min_fraction=soc_min_fraction,
             soc_safety_buffer_fraction=soc_safety_buffer_fraction,
             allow_emergency_peak_charging=allow_emergency_peak_charging,
@@ -1868,11 +2108,11 @@ def main():
                     station_temps=station_temps,
                 )
         if config.charging_strategy == "off_peak":
-            soc_kwargs["peak_clock_hours"] = config.peak_clock_hours
+            soc_kwargs.update(config.peak_window_kwargs())
             soc_kwargs["soc_min_fraction"] = config.soc_min_fraction
             soc_kwargs["soc_safety_buffer_fraction"] = config.soc_safety_buffer_fraction
         elif config.charging_strategy == "off_peak_immediate":
-            soc_kwargs["peak_clock_hours"] = config.peak_clock_hours
+            soc_kwargs.update(config.peak_window_kwargs())
             soc_kwargs["allow_emergency_peak_charging"] = config.allow_emergency_peak_charging
         elif config.charging_strategy == "cost_minimizing":
             soc_kwargs["hourly_price_usd_per_kwh"] = hourly_prices

@@ -23,6 +23,11 @@ from cvxpy.error import SolverError
 ChargingStrategy = Literal["immediate", "cost_minimizing", "off_peak", "off_peak_immediate"]
 
 DEFAULT_PEAK_CLOCK_HOURS: Final[tuple[int, ...]] = (17, 18, 19, 20)  # 5pm–9pm; hour 21 (9–10pm) is off-peak
+# BGE Schedule EV (P.S.C. Md. E-6): summer Jun–Sep weekdays 10am–8pm; non-summer
+# weekdays 7–11am and 5–9pm. Weekends/holidays are off-peak. DST shift not modeled.
+DEFAULT_PEAK_CLOCK_HOURS_SUMMER: Final[tuple[int, ...]] = tuple(range(10, 20))  # 10..19
+DEFAULT_PEAK_CLOCK_HOURS_WINTER: Final[tuple[int, ...]] = (7, 8, 9, 10, 17, 18, 19, 20)
+DEFAULT_TOU_SUMMER_MONTHS: Final[tuple[int, ...]] = (6, 7, 8, 9)  # Jun 1 – Sep 30
 DEFAULT_SOC_MIN_FRACTION = 0.2  # minimum comfortable SOC (SOC^min in TOU EV doc)
 DEFAULT_SOC_SAFETY_BUFFER_FRACTION = 0.2  # extra SOC buffer above daily trip energy need
 # Default shed penalty when none is passed: high enough that shedding is avoided unless
@@ -32,14 +37,18 @@ DEFAULT_SHED_LOAD_PENALTY_USD_PER_KWH = 1e6
 # default and fastest here, but struggles on near-degenerate schedules (few or no drive
 # hours pin the shed variables to a zero-width box); HIGHS/SCS pick up those cases.
 COST_MIN_LP_SOLVERS: Final[tuple[str, ...]] = ("CLARABEL", "HIGHS", "SCS")
+# Hours of off-peak-only foresight used by emergency peak charging. 48h covers
+# cases where the shortfall only becomes binding more than one day ahead
+# (e.g. Level-1 vehicles that need several peak home hours of advance charging).
+EMERGENCY_PEAK_LOOKAHEAD_HOURS: Final[int] = 48
 # How home charging is scheduled before SOC is derived from discharge + charge.
 
 def build_hourly_timestamps(start_date: datetime, end_date: datetime) -> pl.DataFrame:
     """Build hourly timestamps for the simulation window (inclusive, aligned to whole hours).
 
     Uses the clock hour of ``start_date`` / ``end_date`` (minutes/seconds cleared).
-    Typical NHTS-aligned year: ``2024-01-01 04:00`` through ``2025-01-01 03:00``
-    (last hour slot covering 03:00–03:59).
+    Typical NHTS-aligned year: ``2018-01-01 04:00`` through ``2019-01-01 03:00``
+    (last hour slot covering 03:00–03:59; 2018 matches AMY weather years).
 
     Args:
         start_date: Start of the range (hour included)
@@ -312,28 +321,6 @@ def schedule_immediate_charging(
     return charge_kwh
 
 
-def _next_trip_span(discharge_kwh: np.ndarray, start_idx: int) -> tuple[int, int] | None:
-    """Return ``(trip_start, trip_end_exclusive)`` for the next trip block at or after ``start_idx``.
-
-    A trip block is a run of hours with positive discharge. Returns ``None`` if no future
-    trip draw exists.
-    """
-    # Find first hour with positive discharge at or after start_idx.
-    num_hours = len(discharge_kwh)
-    trip_start = None
-    for hour_idx in range(start_idx, num_hours):
-        if discharge_kwh[hour_idx] > 1e-12:
-            trip_start = hour_idx
-            break
-    if trip_start is None:
-        return None
-    # Extend through the contiguous run of discharge hours.
-    trip_end = trip_start + 1
-    while trip_end < num_hours and discharge_kwh[trip_end] > 1e-12:
-        trip_end += 1
-    return trip_start, trip_end
-
-
 def _emergency_peak_needed(
     *,
     hour_idx: int,
@@ -343,32 +330,41 @@ def _emergency_peak_needed(
     is_off_peak: np.ndarray,
     charger_power_kw: float,
     battery_capacity_kwh: float,
+    lookahead_hours: int = EMERGENCY_PEAK_LOOKAHEAD_HOURS,
 ) -> bool:
-    """True when on-peak home charging is needed because off-peak supply cannot cover the next trip."""
-    span = _next_trip_span(discharge_kwh, hour_idx)
-    if span is None:
-        return False
-    trip_start, trip_end = span
+    """Return whether skipping this peak hour causes an SOC shortfall within the horizon.
 
-    # Remaining trip draw after this hour (this hour's discharge was already applied).
-    need_start = max(trip_start, hour_idx + 1)
-    need = float(discharge_kwh[need_start:trip_end].sum())
-    if need <= 1e-12:
-        return False
+    Simulate the normal off-peak-immediate policy over the next ``lookahead_hours``:
+    discharge first, then charge at available off-peak home hours. Future on-peak
+    emergency charging is intentionally excluded from this forecast, so the current
+    hour begins charging when any cumulative trip demand in the next ~2 days would
+    otherwise underflow.
+    """
+    # Start the what-if SOC from the value after this hour's discharge (already applied
+    # by the caller). We ask: "if we do *not* charge now, does the next horizon break?"
+    forecast_soc = current_soc
+    # Exclusive end of the forecast window; clamp at the end of the simulation.
+    horizon_end = min(len(discharge_kwh), hour_idx + 1 + lookahead_hours)
 
-    # Max kWh we could still add in future off-peak+home hours before the trip.
-    remaining_headroom = max(0.0, battery_capacity_kwh - current_soc)
-    supply = 0.0
-    for future_idx in range(hour_idx + 1, trip_start):
-        if remaining_headroom <= 1e-12:
-            break
+    # Replay future hours under the *strict* off-peak policy (no nested emergency).
+    for future_idx in range(hour_idx + 1, horizon_end):
+        # Same discharge-first rule as compute_hourly_soc / schedule_* loops.
+        trip_draw = float(discharge_kwh[future_idx])
+        # Any trip that exceeds forecast SOC → this peak hour should start charging now.
+        if trip_draw > forecast_soc + 1e-9:
+            return True
+        forecast_soc -= trip_draw
+
+        # Only credit future *off-peak* home charging. Counting future emergency peak
+        # hours here would circularly assume help that only arrives if we already fire.
         if at_home[future_idx] and is_off_peak[future_idx]:
-            added = min(charger_power_kw, remaining_headroom)
-            supply += added
-            remaining_headroom -= added
+            forecast_soc += min(
+                charger_power_kw,
+                battery_capacity_kwh - forecast_soc,
+            )
 
-    # Emergency peak charging if SOC + future off-peak supply cannot cover need.
-    return current_soc + supply + 1e-9 < need
+    # Horizon survived without underflow → no need to break the peak window this hour.
+    return False
 
 
 def schedule_off_peak_immediate_charging(
@@ -388,9 +384,8 @@ def schedule_off_peak_immediate_charging(
     begin max-power charging as soon as off-peak hours coincide with dwelling. Unlike
     ``schedule_off_peak_charging``, this fills toward full capacity (not ``SOC_req``).
 
-    When ``allow_emergency_peak_charging`` is True, on-peak home hours may charge if the
-    remaining off-peak+home window before the next trip cannot cover that trip's energy
-    need given the current SOC.
+    When ``allow_emergency_peak_charging`` is True, on-peak home hours may charge if a
+    48-hour forecast using only future off-peak home charging would underflow on any trip.
 
     Args:
         at_home: Whether the vehicle is home at the start of each hour
@@ -399,8 +394,8 @@ def schedule_off_peak_immediate_charging(
         battery_capacity_kwh: Battery capacity ``K^B`` (kWh)
         charger_power_kw: Max charge rate ``C^B`` when home (kW = kWh/hour)
         initial_soc_kwh: Start-of-hour-0 SOC ``s_0`` (kWh)
-        allow_emergency_peak_charging: If True, allow on-peak charging when foresight
-            shows an energy shortfall before the next trip
+        allow_emergency_peak_charging: If True, allow on-peak charging when a 48-hour
+            forecast shows an energy shortfall on any upcoming trip
 
     Returns:
         Hourly charge energy ``x_t^CB`` (kWh), same length as ``at_home``
@@ -420,18 +415,23 @@ def schedule_off_peak_immediate_charging(
 
     # Same greedy loop as immediate, but charge only off-peak (or emergency peak).
     for hour_idx in range(num_hours):
+        # Apply this hour's trip draw before deciding whether to charge.
         trip_draw = discharge_kwh[hour_idx]
         if trip_draw > current_soc:
+            # Underflow: clamp to empty (public charging assumed for the shortfall).
             current_soc = 0.0
         else:
             current_soc -= trip_draw
 
+        # Away or already full → no home charging this hour.
         if not at_home[hour_idx] or current_soc >= battery_capacity_kwh:
             continue
 
-        # Default: charge only in off-peak hours.
+        # Default TOU Immediate rule: charge only in off-peak hours.
         may_charge = bool(is_off_peak[hour_idx])
-        # Optional foresight override when the next trip would otherwise be short.
+        # Emergency override: if this is an on-peak home hour, look ahead
+        # EMERGENCY_PEAK_LOOKAHEAD_HOURS under a strict off-peak-only policy. If any
+        # trip in that window would underflow, break the peak window and charge now.
         if (
             not may_charge
             and allow_emergency_peak_charging
@@ -447,6 +447,7 @@ def schedule_off_peak_immediate_charging(
         ):
             may_charge = True
 
+        # Charge at max power toward a full pack (not toward an SOC_req floor).
         if may_charge:
             added = min(charger_power_kw, battery_capacity_kwh - current_soc)
             if added > 0.0:
@@ -608,24 +609,175 @@ def schedule_cost_minimizing_charging(
     return charge_kwh, shed_load_kwh
 
 
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    """Return the n-th weekday in month (weekday: Mon=0 … Sun=6; n is 1-based)."""
+    d = date(year, month, 1)  # start at the 1st of the month
+    # Move forward 0–6 days until we land on the requested weekday.
+    d += timedelta(days=(weekday - d.weekday()) % 7)
+    # Jump (n-1) full weeks forward (n=1 → first such weekday, n=3 → third, …).
+    return d + timedelta(weeks=n - 1)
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    """Return the last weekday in month (weekday: Mon=0 … Sun=6)."""
+    # Start at the last calendar day of the month.
+    if month == 12:
+        d = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        d = date(year, month + 1, 1) - timedelta(days=1)
+    # Walk backward 0–6 days until we hit the requested weekday.
+    d -= timedelta(days=(d.weekday() - weekday) % 7)
+    return d
+
+
+def _easter_sunday(year: int) -> date:
+    """Anonymous Gregorian algorithm for Western Easter Sunday."""
+    # Meeus/Jones/Butcher coefficients → month/day of Easter Sunday.
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    el = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * el) // 451
+    month = (h + el - 7 * m + 114) // 31
+    day = ((h + el - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
+
+
+def _observed_fixed_holiday(year: int, month: int, day: int) -> date:
+    """Fixed-date holiday; if it falls on Sunday, observe the following Monday (BGE)."""
+    d = date(year, month, day)
+    if d.weekday() == 6:  # Sunday → BGE observes the Monday after
+        return d + timedelta(days=1)
+    return d
+
+
+def bge_schedule_ev_holidays(year: int) -> set[date]:
+    """BGE Schedule EV off-peak holidays for a calendar year (no DST adjustments).
+
+    New Year's Day, Presidents' Day, Good Friday, Memorial Day, Independence Day,
+    Labor Day, Thanksgiving, Christmas; Monday following when a listed holiday
+    falls on Sunday (per Schedule EV).
+    """
+    holidays = {
+        _observed_fixed_holiday(year, 1, 1),  # New Year's Day (Jan 1, or Mon if Sun)
+        _nth_weekday(year, 2, 0, 3),  # Presidents' Day — 3rd Monday in February
+        _easter_sunday(year) - timedelta(days=2),  # Good Friday = Easter − 2 days
+        _last_weekday(year, 5, 0),  # Memorial Day — last Monday in May
+        _observed_fixed_holiday(year, 7, 4),  # Independence Day (Jul 4, or Mon if Sun)
+        _nth_weekday(year, 9, 0, 1),  # Labor Day — 1st Monday in September
+        _nth_weekday(year, 11, 3, 4),  # Thanksgiving — 4th Thursday in November
+        _observed_fixed_holiday(year, 12, 25),  # Christmas (Dec 25, or Mon if Sun)
+    }
+    return holidays
+
+
 def build_is_off_peak(
     hours_base: pl.DataFrame,
     *,
-    peak_clock_hours: Iterable[int] = DEFAULT_PEAK_CLOCK_HOURS,
+    peak_clock_hours: Iterable[int] | None = None,
+    peak_clock_hours_summer: Iterable[int] | None = None,
+    peak_clock_hours_winter: Iterable[int] | None = None,
+    summer_months: Iterable[int] = DEFAULT_TOU_SUMMER_MONTHS,
+    weekends_off_peak: bool = False,
+    holidays_off_peak: bool = False,
 ) -> np.ndarray:
-    """Return a boolean mask that is True during off-peak clock hours.
-    
+    """Return a boolean mask that is True during off-peak hours.
+
+    Year-round mode (legacy): pass ``peak_clock_hours`` only — every day uses that
+    on-peak set (weekends included unless ``weekends_off_peak``).
+
+    Seasonal mode (e.g. BGE Schedule EV): pass ``peak_clock_hours_summer`` and
+    ``peak_clock_hours_winter``. Dates whose month is in ``summer_months`` use the
+    summer set; all other months use winter. When both seasonal sets and
+    ``peak_clock_hours`` are set, seasonal wins.
+
     Args:
         hours_base: Hourly calendar with ``date`` and ``hour`` columns
-        peak_clock_hours: On-peak clock hours (0-23) for ``off_peak`` strategy
+        peak_clock_hours: Year-round on-peak clock hours (0-23)
+        peak_clock_hours_summer: Summer on-peak clock hours
+        peak_clock_hours_winter: Non-summer on-peak clock hours
+        summer_months: Months (1-12) treated as summer (default Jun–Sep)
+        weekends_off_peak: If True, Saturday/Sunday are entirely off-peak
+        holidays_off_peak: If True, BGE Schedule EV holidays are entirely off-peak
 
     Returns:
-        Boolean mask aligned with ``at_home`` that is True during off-peak clock hours
+        Boolean mask length ``hours_base.height`` (True = off-peak)
     """
-    peak_hours = set(peak_clock_hours)  # doc set H: on-peak clock hours (default 5-9pm)
+    # ---- choose seasonal vs year-round peak sets ----
+    use_seasonal = (
+        peak_clock_hours_summer is not None or peak_clock_hours_winter is not None
+    )
+    if use_seasonal:
+        # Both seasons required; refuse a half-configured seasonal TOU.
+        if peak_clock_hours_summer is None or peak_clock_hours_winter is None:
+            raise ValueError(
+                "peak_clock_hours_summer and peak_clock_hours_winter must both be set "
+                "for seasonal TOU windows"
+            )
+        summer_peak = set(int(h) for h in peak_clock_hours_summer)
+        winter_peak = set(int(h) for h in peak_clock_hours_winter)
+        for label, peak in (("summer", summer_peak), ("winter", winter_peak)):
+            if not peak:
+                raise ValueError(f"peak_clock_hours_{label} must be non-empty")
+            if any(h < 0 or h > 23 for h in peak):
+                raise ValueError(
+                    f"peak_clock_hours_{label} must be clock hours in 0–23; got {sorted(peak)}"
+                )
+    else:
+        # Legacy path: one on-peak set for every calendar day.
+        if peak_clock_hours is None:
+            peak_clock_hours = DEFAULT_PEAK_CLOCK_HOURS
+        year_round_peak = set(int(h) for h in peak_clock_hours)
+        if not year_round_peak:
+            raise ValueError("peak_clock_hours must be a non-empty list")
+        if any(h < 0 or h > 23 for h in year_round_peak):
+            raise ValueError(
+                f"peak_clock_hours must be clock hours in 0–23; got {sorted(year_round_peak)}"
+            )
+
+    summer_month_set = set(int(m) for m in summer_months)
+    if any(m < 1 or m > 12 for m in summer_month_set):
+        raise ValueError(f"summer_months must be in 1–12; got {sorted(summer_month_set)}")
+
+    # Pull per-row calendar date and clock hour from the simulation grid.
+    dates = hours_base["date"].to_list()
     clock_hours = hours_base["hour"].to_numpy()
-    # True = off-peak (t ∉ H); reused for every vehicle on the same calendar
-    return np.array([hour not in peak_hours for hour in clock_hours], dtype=bool)
+
+    # Precompute holiday dates for every year touched by the window (±1 for edges).
+    holiday_years = {d.year for d in dates} | {d.year + 1 for d in dates} | {
+        d.year - 1 for d in dates
+    }
+    holiday_set: set[date] = set()
+    if holidays_off_peak:
+        for year in holiday_years:
+            holiday_set |= bge_schedule_ev_holidays(year)
+
+    # ---- classify each simulation hour ----
+    is_off = np.empty(len(clock_hours), dtype=bool)
+    for i, (d, hour) in enumerate(zip(dates, clock_hours, strict=True)):
+        # Sat/Sun (weekday 5/6) → entire day off-peak when enabled.
+        if weekends_off_peak and d.weekday() >= 5:
+            is_off[i] = True
+            continue
+        # BGE Schedule EV holiday → entire day off-peak when enabled.
+        if holidays_off_peak and d in holiday_set:
+            is_off[i] = True
+            continue
+        # Pick the on-peak set for this date's season (or year-round legacy set).
+        if use_seasonal:
+            peak = summer_peak if d.month in summer_month_set else winter_peak
+        else:
+            peak = year_round_peak
+        # Off-peak iff this clock hour is not in the on-peak set.
+        is_off[i] = int(hour) not in peak
+    return is_off
 
 def build_off_peak_charging_params(
     at_home: np.ndarray,

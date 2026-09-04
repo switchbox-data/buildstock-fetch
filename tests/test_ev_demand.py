@@ -16,6 +16,11 @@ from utils.EVs.charging import (
     schedule_off_peak_charging,
     schedule_off_peak_immediate_charging,
 )
+from tests.ev_scenario import (
+    CALCULATOR_SCENARIO_KWARGS,
+    make_ev_demand_config,
+    write_scenario_yaml,
+)
 from utils.EVs.ev_demand import EVDemandCalculator
 from utils.EVs.nhts_tours import build_tours_from_legs, trips_as_singleton_tours
 from utils.EVs.NHTSProfileSampler import (
@@ -152,6 +157,7 @@ def calculator(mock_nhts_data, mock_metadata, ev_ownership_df, ev_battery_df, ev
         end_date=datetime(2022, 1, 8, 3),
         pums_df=mock_metadata,  # Using same data for simplicity
         random_state=42,
+        **CALCULATOR_SCENARIO_KWARGS,
     )
 
 
@@ -362,6 +368,7 @@ def test_sample_uses_sampler_nhts_by_default(
         "start_date": datetime(2022, 1, 1, 4),
         "end_date": datetime(2022, 1, 8, 3),
         "random_state": 42,
+        **CALCULATOR_SCENARIO_KWARGS,
     }
     profiles_explicit = EVDemandCalculator(**calculator_kwargs).nhts_sampler.sample(
         mock_metadata,
@@ -625,7 +632,7 @@ def _two_leg_tour(*, starts_home: bool, ends_home: bool):
 
 
 def test_reference_home_hours_accounts_for_seam_boundary():
-    """Open home boundaries cost the template most of its overnight charging window."""
+    """One-open self-repeat credits the centered seam's residual home window."""
     sampler = NHTSProfileSampler(
         reference_battery_options=((100.0, 1.0),),
         reference_level2_power_kw=7.2,
@@ -636,11 +643,15 @@ def test_reference_home_hours_accounts_for_seam_boundary():
     assert sampler._seam_boundary_legs(closed) == (0.0, 0.0)
     assert sampler._reference_home_hours(closed, seam_drive_hours=0.0) == 14.0
 
-    # One open end: overnight home is not credited (seam placement can erase it);
-    # only interior gaps between tours remain — none here, so 0.
+    # One open end: self-repeat inserts the 9 h mirrored seam in the 14 h
+    # boundary window. Centering it leaves half of the residual 5 h at home.
     starts_away = _two_leg_tour(starts_home=False, ends_home=True)
     assert sampler._seam_boundary_legs(starts_away) == (40.0, 9.0)
-    assert sampler._reference_home_hours(starts_away, seam_drive_hours=9.0) == 0.0
+    assert sampler._reference_home_hours(starts_away, seam_drive_hours=9.0) == 2.5
+
+    ends_away = _two_leg_tour(starts_home=True, ends_home=False)
+    assert sampler._seam_boundary_legs(ends_away) == (10.0, 1.0)
+    assert sampler._reference_home_hours(ends_away, seam_drive_hours=1.0) == 6.5
 
     # Both ends open is an away -> away seam: the vehicle never comes home overnight.
     never_home = _two_leg_tour(starts_home=False, ends_home=False)
@@ -649,16 +660,17 @@ def test_reference_home_hours_accounts_for_seam_boundary():
     assert not sampler._profile_is_reference_feasible(never_home)
 
 
-def test_nhts_reference_filter_rejects_open_day_without_interior_home_gap():
-    """Open-ended days with no interior home gap fail — overnight is not credited."""
-    # Single tour 8→18, starts away: mirrored seam miles + zero credited home hours.
+def test_nhts_reference_filter_can_admit_open_day_without_interior_home_gap():
+    """A one-open single-tour day can recharge in its centered seam window."""
+    # Single tour 8→18, starts away: 50 observed + 40 mirrored miles, but the
+    # efficient reference vehicle can replenish that duty in 2.5 home hours.
     starts_away = _two_leg_tour(starts_home=False, ends_home=True)
     sampler = NHTSProfileSampler(
-        reference_battery_options=((100.0, 1.0),),
+        reference_battery_options=((100.0, 0.1),),
         reference_level2_power_kw=7.2,
     )
-    assert sampler._reference_home_hours(starts_away, seam_drive_hours=9.0) == 0.0
-    assert not sampler._profile_is_reference_feasible(starts_away)
+    assert sampler._reference_home_hours(starts_away, seam_drive_hours=9.0) == 2.5
+    assert sampler._profile_is_reference_feasible(starts_away)
 
 
 def test_nhts_reference_filter_rejects_away_to_away_seam_despite_interior_gaps():
@@ -882,6 +894,7 @@ def test_sample_zero_vehicles(
         end_date=datetime(2022, 1, 8, 3),
         pums_df=mock_metadata_with_zero,
         random_state=42,
+        **CALCULATOR_SCENARIO_KWARGS,
     )
 
     profiles = calculator.nhts_sampler.sample(
@@ -1903,7 +1916,7 @@ def test_off_peak_immediate_fills_to_full_not_soc_req():
 
 
 def test_off_peak_immediate_emergency_allows_peak_when_shortfall():
-    """With emergency on, charge on-peak if remaining off-peak supply cannot cover next trip."""
+    """Emergency charging covers a shortfall forecast within the next 48 hours."""
     hours_base = build_hours_base(datetime(2022, 1, 1, 0), datetime(2022, 1, 1, 23))
     # Peak 12–21; only home after 17 (return into peak). Next trip at 22 needs 20 kWh;
     # no off-peak home hours remain before that departure.
@@ -1933,6 +1946,47 @@ def test_off_peak_immediate_emergency_allows_peak_when_shortfall():
 
     assert no_emergency[17:22].sum() == pytest.approx(0.0)
     assert with_emergency[17:22].sum() > 0.0
+
+
+def test_off_peak_immediate_emergency_looks_past_first_trip():
+    """Cumulative trips inside the 48h horizon trigger peak charging early."""
+    num_hours = 48
+    at_home = np.ones(num_hours, dtype=bool)
+    at_home[[18, 26]] = False
+    discharge = np.zeros(num_hours, dtype=np.float64)
+    discharge[[18, 26]] = 8.0
+    # No off-peak charging is available, isolating the emergency forecast behavior.
+    is_off_peak = np.zeros(num_hours, dtype=bool)
+
+    no_emergency = schedule_off_peak_immediate_charging(
+        at_home,
+        discharge,
+        is_off_peak=is_off_peak,
+        battery_capacity_kwh=40.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=10.0,
+        allow_emergency_peak_charging=False,
+    )
+    with_emergency = schedule_off_peak_immediate_charging(
+        at_home,
+        discharge,
+        is_off_peak=is_off_peak,
+        battery_capacity_kwh=40.0,
+        charger_power_kw=7.2,
+        initial_soc_kwh=10.0,
+        allow_emergency_peak_charging=True,
+    )
+
+    # The first 8 kWh trip is covered by the initial 10 kWh, but both trips are not.
+    # The rolling 48h forecast therefore starts charging before the first trip.
+    assert no_emergency[:18].sum() == pytest.approx(0.0)
+    assert with_emergency[:18].sum() > 0.0
+    _, underflow = compute_hourly_soc(
+        discharge,
+        with_emergency,
+        initial_soc_kwh=10.0,
+    )
+    assert not underflow.any()
 
 
 def test_generate_soc_schedules_off_peak(calculator):
@@ -2296,27 +2350,36 @@ def test_generate_soc_schedules_applies_resstock_temp_scale(calculator):
 def test_load_ev_demand_config_temperature_section(tmp_path):
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    cfg_path = tmp_path / "ev.yaml"
-    cfg_path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-01-03T03:00:00
-sampling:
-  ev_assignment: resstock_adoption
-temperature:
-  temperature_adjustment: resstock
-paths:
-  weather_dir: /tmp/weather_md
-charging:
-  charging_strategy: immediate
-  charger_power_kw: 7.2
-"""
+    cfg_path = write_scenario_yaml(
+        tmp_path / "ev.yaml",
+        temperature={"temperature_adjustment": "resstock"},
+        paths={"weather_dir": "/tmp/weather_md"},
     )
     config = load_ev_demand_config(cfg_path)
     assert config.temperature_adjustment == "resstock"
     assert config.weather_dir == "/tmp/weather_md"
+
+
+def test_load_ev_demand_config_target_adoption_rate(tmp_path):
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    cfg_path = write_scenario_yaml(
+        tmp_path / "ev_adoption.yaml",
+        sampling={"target_adoption_rate": 0.25},
+    )
+    config = load_ev_demand_config(cfg_path)
+    assert config.target_adoption_rate == pytest.approx(0.25)
+
+
+def test_load_ev_demand_config_target_adoption_rate_invalid(tmp_path):
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    cfg_path = write_scenario_yaml(
+        tmp_path / "ev_adoption_bad.yaml",
+        sampling={"target_adoption_rate": 1.5},
+    )
+    with pytest.raises(ValueError, match="target_adoption_rate must be in"):
+        load_ev_demand_config(cfg_path)
 
 
 def test_nhts_daily_miles_percentile_filter_noop_by_default(mock_nhts_data):
@@ -2472,29 +2535,18 @@ def test_load_nhts_data_applies_daily_miles_percentile():
 def test_load_ev_demand_config_from_yaml(tmp_path):
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    path = tmp_path / "scenario.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-02-01T03:00:00
-sampling:
-  nhts_daily_miles_percentile_low: 10
-  nhts_daily_miles_percentile_high: 90
-  include_zero_driving_days_in_match_pool: false
-  random_state: 7
-trips:
-  min_trip_away_hours: 1
-  miles_noise_std_fraction: 0.1
-battery:
-  capacity_buffer_fraction: 0.2
-pipeline:
-  batch_size: 1000
-charging:
-  charging_strategy: immediate
-  charger_power_kw: 7.2
-"""
+    path = write_scenario_yaml(
+        tmp_path / "scenario.yml",
+        end_date="2024-02-01T03:00:00",
+        sampling={
+            "nhts_daily_miles_percentile_low": 10,
+            "nhts_daily_miles_percentile_high": 90,
+            "include_zero_driving_days_in_match_pool": False,
+            "random_state": 7,
+        },
+        trips={"min_trip_away_hours": 1, "miles_noise_std_fraction": 0.1},
+        battery={"capacity_buffer_fraction": 0.2},
+        pipeline={"batch_size": 1000},
     )
     config = load_ev_demand_config(path)
     assert config.state == "MD"
@@ -2504,6 +2556,7 @@ charging:
     assert config.ev_assignment == "resstock_adoption"
     assert config.match_on_vehicles is False
     assert config.max_vehicles is None
+    assert config.target_adoption_rate is None
     assert config.nhts_daily_miles_percentile_low == 10
     assert config.nhts_daily_miles_percentile_high == 90
     assert config.include_zero_driving_days_in_match_pool is False
@@ -2528,22 +2581,40 @@ charging:
     assert config.ev_charge_at_home_path is None
 
 
-def test_load_ev_demand_config_resstock_home_charging_fraction(tmp_path):
-    """home_charging_fraction_assignment=resstock fills the Charge At Home TSV path."""
-    from utils.EVs.ev_demand import load_ev_demand_config
+def test_load_ev_demand_config_requires_scenario_keys(tmp_path):
+    from utils.EVs.ev_demand import REQUIRED_SCENARIO_FIELDS, load_ev_demand_config
 
-    path = tmp_path / "resstock_home_charging.yml"
+    path = tmp_path / "incomplete.yml"
     path.write_text(
         """
 state: MD
 release: res_2024_tmy3_2
 start_date: 2024-01-01T04:00:00
 end_date: 2024-01-03T03:00:00
-charging:
-  charging_strategy: immediate
-home_charging:
-  home_charging_fraction_assignment: resstock
 """
+    )
+    with pytest.raises(ValueError, match="missing required keys") as exc_info:
+        load_ev_demand_config(path)
+    message = str(exc_info.value)
+    assert "charging_strategy" in message
+    assert "ev_assignment" in message
+    assert "temperature_adjustment" in message
+    leftover = REQUIRED_SCENARIO_FIELDS - {
+        "state",
+        "release",
+        "start_date",
+        "end_date",
+    }
+    assert leftover  # scenario knobs are required, not just identity fields
+
+
+def test_load_ev_demand_config_resstock_home_charging_fraction(tmp_path):
+    """home_charging_fraction_assignment=resstock fills the Charge At Home TSV path."""
+    from utils.EVs.ev_demand import load_ev_demand_config
+
+    path = write_scenario_yaml(
+        tmp_path / "resstock_home_charging.yml",
+        home_charging={"home_charging_fraction_assignment": "resstock"},
     )
     config = load_ev_demand_config(path)
     assert config.home_charging_fraction_assignment == "resstock"
@@ -2551,53 +2622,35 @@ home_charging:
     assert config.ev_charge_at_home_path.endswith("Electric_Vehicle_Charge_At_Home.tsv")
 
 
-def test_load_ev_demand_config_resstock_chargers_omit_power(tmp_path):
-    """charger_assignment=resstock does not require charger_power_kw; fills L1/L2 defaults."""
+def test_load_ev_demand_config_resstock_chargers_require_level_powers(tmp_path):
+    """charger_assignment=resstock requires explicit L1/L2 kW in YAML."""
     from utils.EVs.ev_demand import load_ev_demand_config
-    from utils.EVs.EVChargerAssigner import (
-        RESSTOCK_LEVEL1_CHARGER_KW,
-        RESSTOCK_LEVEL2_CHARGER_KW,
-    )
 
-    path = tmp_path / "resstock_chargers.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-01-03T03:00:00
-charging:
-  charging_strategy: immediate
-  charger_assignment: resstock
-"""
+    path = write_scenario_yaml(
+        tmp_path / "resstock_chargers.yml",
+        charging={
+            "charger_assignment": "resstock",
+            "charger_power_kw": None,
+        },
     )
-    config = load_ev_demand_config(path)
-    assert config.charger_assignment == "resstock"
-    assert config.charger_power_kw is None
-    assert config.level1_charger_power_kw == RESSTOCK_LEVEL1_CHARGER_KW
-    assert config.level2_charger_power_kw == RESSTOCK_LEVEL2_CHARGER_KW
-    assert config.charger_buffer_fraction == 0.2
-    assert config.ev_charger_path is not None
-    assert config.ev_charger_path.endswith("Electric_Vehicle_Charger.tsv")
+    with pytest.raises(ValueError, match="level1_charger_power_kw"):
+        load_ev_demand_config(path)
 
 
 def test_load_ev_demand_config_rejects_removed_redraw_keys(tmp_path):
     """Legacy redraw/drop knobs are rejected with a clear message."""
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    path = tmp_path / "legacy_redraw.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-01-03T03:00:00
-charging:
-  charging_strategy: immediate
-  charger_assignment: resstock
-  exclude_infeasible_charger_profiles: true
-  infeasible_profile_redraw_attempts: 20
-"""
+    path = write_scenario_yaml(
+        tmp_path / "legacy_redraw.yml",
+        charging={
+            "charger_assignment": "resstock",
+            "level1_charger_power_kw": 1.6,
+            "level2_charger_power_kw": 7.2,
+            "charger_power_kw": None,
+            "exclude_infeasible_charger_profiles": True,
+            "infeasible_profile_redraw_attempts": 20,
+        },
     )
     with pytest.raises(ValueError, match="Removed EV demand config key"):
         load_ev_demand_config(path)
@@ -2607,18 +2660,15 @@ def test_load_ev_demand_config_resstock_custom_charger_buffer(tmp_path):
     """charger_buffer_fraction is configurable under charging: for resstock."""
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    path = tmp_path / "resstock_charger_buffer.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-01-03T03:00:00
-charging:
-  charging_strategy: immediate
-  charger_assignment: resstock
-  charger_buffer_fraction: 0.15
-"""
+    path = write_scenario_yaml(
+        tmp_path / "resstock_charger_buffer.yml",
+        charging={
+            "charger_assignment": "resstock",
+            "level1_charger_power_kw": 1.6,
+            "level2_charger_power_kw": 7.2,
+            "charger_power_kw": None,
+            "charger_buffer_fraction": 0.15,
+        },
     )
     config = load_ev_demand_config(path)
     assert config.charger_buffer_fraction == 0.15
@@ -2627,18 +2677,15 @@ charging:
 def test_load_ev_demand_config_rejects_negative_charger_buffer(tmp_path):
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    path = tmp_path / "bad_charger_buffer.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-01-03T03:00:00
-charging:
-  charging_strategy: immediate
-  charger_assignment: resstock
-  charger_buffer_fraction: -0.1
-"""
+    path = write_scenario_yaml(
+        tmp_path / "bad_charger_buffer.yml",
+        charging={
+            "charger_assignment": "resstock",
+            "level1_charger_power_kw": 1.6,
+            "level2_charger_power_kw": 7.2,
+            "charger_power_kw": None,
+            "charger_buffer_fraction": -0.1,
+        },
     )
     with pytest.raises(ValueError, match="charger_buffer_fraction"):
         load_ev_demand_config(path)
@@ -2648,18 +2695,14 @@ def test_load_ev_demand_config_resstock_ignores_charger_power_kw(tmp_path):
     """If someone sets charger_power_kw with resstock, clear it and warn."""
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    path = tmp_path / "resstock_ignore.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-01-03T03:00:00
-charging:
-  charging_strategy: immediate
-  charger_assignment: resstock
-  charger_power_kw: 7.2
-"""
+    path = write_scenario_yaml(
+        tmp_path / "resstock_ignore.yml",
+        charging={
+            "charger_assignment": "resstock",
+            "level1_charger_power_kw": 1.6,
+            "level2_charger_power_kw": 7.2,
+            "charger_power_kw": 7.2,
+        },
     )
     config = load_ev_demand_config(path)
     assert config.charger_assignment == "resstock"
@@ -2667,22 +2710,17 @@ charging:
 
 
 def test_load_ev_demand_config_resstock_custom_level_powers(tmp_path):
-    """level1/level2_charger_power_kw override pipeline defaults under resstock."""
+    """level1/level2_charger_power_kw are required YAML knobs under resstock."""
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    path = tmp_path / "resstock_custom_kw.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-01-03T03:00:00
-charging:
-  charging_strategy: immediate
-  charger_assignment: resstock
-  level1_charger_power_kw: 1.4
-  level2_charger_power_kw: 5.69
-"""
+    path = write_scenario_yaml(
+        tmp_path / "resstock_custom_kw.yml",
+        charging={
+            "charger_assignment": "resstock",
+            "level1_charger_power_kw": 1.4,
+            "level2_charger_power_kw": 5.69,
+            "charger_power_kw": None,
+        },
     )
     config = load_ev_demand_config(path)
     assert config.level1_charger_power_kw == 1.4
@@ -2694,20 +2732,14 @@ def test_load_ev_demand_config_fixed_ignores_level_powers(tmp_path):
     """level1/level2_charger_power_kw are optional and ignored under fixed."""
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    path = tmp_path / "fixed_ignore_levels.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-01-03T03:00:00
-charging:
-  charging_strategy: immediate
-  charger_assignment: fixed
-  charger_power_kw: 7.2
-  level1_charger_power_kw: 1.6
-  level2_charger_power_kw: 5.69
-"""
+    path = write_scenario_yaml(
+        tmp_path / "fixed_ignore_levels.yml",
+        charging={
+            "charger_assignment": "fixed",
+            "charger_power_kw": 7.2,
+            "level1_charger_power_kw": 1.6,
+            "level2_charger_power_kw": 5.69,
+        },
     )
     config = load_ev_demand_config(path)
     assert config.charger_assignment == "fixed"
@@ -2719,7 +2751,7 @@ charging:
 def test_resolve_hourly_prices_flat_and_daily():
     from utils.EVs.ev_demand import EVDemandConfig, resolve_hourly_prices
 
-    flat_cfg = EVDemandConfig(
+    flat_cfg = make_ev_demand_config(
         state="MD",
         release="res_2024_tmy3_2",
         start_date=datetime(2024, 1, 1, 4),
@@ -2734,7 +2766,7 @@ def test_resolve_hourly_prices_flat_and_daily():
     assert np.allclose(flat, 0.12)
 
     daily = tuple([0.10] * 12 + [0.20] * 12)
-    daily_cfg = EVDemandConfig(
+    daily_cfg = make_ev_demand_config(
         state="MD",
         release="res_2024_tmy3_2",
         start_date=datetime(2024, 1, 1, 4),
@@ -2760,7 +2792,7 @@ def test_resolve_hourly_prices_daily_is_clock_hour_aligned():
     daily = tuple(0.20 if h in peak_hours else 0.10 for h in range(24))
     start_date = datetime(2024, 1, 1, 4)  # window starts at 04:00, not midnight
     end_date = datetime(2024, 1, 3, 3)
-    config = EVDemandConfig(
+    config = make_ev_demand_config(
         state="MD",
         release="res_2024_tmy3_2",
         start_date=start_date,
@@ -2783,7 +2815,7 @@ def test_cost_minimizing_requires_prices_and_shed_penalty():
     from utils.EVs.ev_demand import EVDemandConfig
 
     with pytest.raises(ValueError, match="cost_minimizing requires one of"):
-        EVDemandConfig(
+        make_ev_demand_config(
             state="MD",
             release="res_2024_tmy3_2",
             start_date=datetime(2024, 1, 1, 4),
@@ -2793,7 +2825,7 @@ def test_cost_minimizing_requires_prices_and_shed_penalty():
         )
 
     with pytest.raises(ValueError, match="shed_load_penalty_usd_per_kwh"):
-        EVDemandConfig(
+        make_ev_demand_config(
             state="MD",
             release="res_2024_tmy3_2",
             start_date=datetime(2024, 1, 1, 4),
@@ -2807,7 +2839,7 @@ def test_off_peak_requires_peak_window_and_soc_targets():
     from utils.EVs.ev_demand import EVDemandConfig
 
     with pytest.raises(ValueError, match="off_peak requires"):
-        EVDemandConfig(
+        make_ev_demand_config(
             state="MD",
             release="res_2024_tmy3_2",
             start_date=datetime(2024, 1, 1, 4),
@@ -2815,7 +2847,7 @@ def test_off_peak_requires_peak_window_and_soc_targets():
             charging_strategy="off_peak",
         )
 
-    cfg = EVDemandConfig(
+    cfg = make_ev_demand_config(
         state="MD",
         release="res_2024_tmy3_2",
         start_date=datetime(2024, 1, 1, 4),
@@ -2832,19 +2864,102 @@ def test_load_md_2024_config_off_peak():
     from utils.EVs.ev_demand import load_ev_demand_config
 
     config = load_ev_demand_config("utils/EVs/configs/md_2024.yaml")
-    assert config.start_date == datetime(2024, 1, 1, 4)
-    assert config.end_date == datetime(2025, 1, 1, 3)
-    assert config.num_simulation_hours() == 366 * 24  # 2024 leap year travel-day window
+    assert config.start_date == datetime(2018, 1, 1, 4)
+    assert config.end_date == datetime(2019, 1, 1, 3)
+    assert config.num_simulation_hours() == 365 * 24  # 2018 non-leap (aligns with AMY2018)
     assert config.charging_strategy == "off_peak_immediate"
-    assert config.peak_clock_hours == (17, 18, 19, 20)
-    assert config.soc_min_fraction is None
-    assert config.soc_safety_buffer_fraction is None
-    assert config.shed_load_penalty_usd_per_kwh is None
+    # Summer BGE peak hours year-round; weekdays only (no holiday carve-out)
+    assert config.peak_clock_hours == tuple(range(10, 20))
+    assert config.peak_clock_hours_summer is None
+    assert config.peak_clock_hours_winter is None
+    assert config.tou_weekends_off_peak is True
+    assert config.tou_holidays_off_peak is False
+    assert config.soc_min_fraction == 0.2
+    assert config.soc_safety_buffer_fraction == 0.2
+    assert config.shed_load_penalty_usd_per_kwh == 1_000_000.0
+    assert config.daily_price_usd_per_kwh is None
     assert config.flat_price_usd_per_kwh is None
-    assert config.allow_emergency_peak_charging is False
+    assert config.tou_on_peak_price_summer_usd_per_kwh == pytest.approx(0.23636)
+    assert config.tou_off_peak_price_summer_usd_per_kwh == pytest.approx(0.09981)
+    # Winter fields mirror summer (year-round summer SOS rates)
+    assert config.tou_on_peak_price_winter_usd_per_kwh == pytest.approx(0.23636)
+    assert config.tou_off_peak_price_winter_usd_per_kwh == pytest.approx(0.09981)
+    assert config.allow_emergency_peak_charging is True
     assert config.temperature_adjustment == "resstock"
     assert config.max_departure_hour == 27
     assert config.max_arrival_hour == 28
+
+
+def test_build_is_off_peak_seasonal_bge_windows():
+    from utils.EVs.charging import build_hours_base, build_is_off_peak
+
+    # Tuesday 2024-07-02 (summer weekday) and Saturday 2024-07-06
+    summer_wd = build_hours_base(datetime(2024, 7, 2, 4), datetime(2024, 7, 3, 3))
+    summer_we = build_hours_base(datetime(2024, 7, 6, 4), datetime(2024, 7, 7, 3))
+    winter_wd = build_hours_base(datetime(2024, 1, 2, 4), datetime(2024, 1, 3, 3))
+    kwargs = dict(
+        peak_clock_hours_summer=tuple(range(10, 20)),
+        peak_clock_hours_winter=(7, 8, 9, 10, 17, 18, 19, 20),
+        summer_months=(6, 7, 8, 9),
+        weekends_off_peak=True,
+        holidays_off_peak=True,
+    )
+    off_s = build_is_off_peak(summer_wd, **kwargs)
+    by_hour_s = dict(zip(summer_wd["hour"].to_list(), off_s.tolist(), strict=True))
+    assert by_hour_s[9] is True
+    assert by_hour_s[10] is False
+    assert by_hour_s[19] is False
+    assert by_hour_s[20] is True
+
+    assert bool(build_is_off_peak(summer_we, **kwargs).all())
+
+    off_w = build_is_off_peak(winter_wd, **kwargs)
+    by_hour_w = dict(zip(winter_wd["hour"].to_list(), off_w.tolist(), strict=True))
+    assert by_hour_w[6] is True
+    assert by_hour_w[7] is False
+    assert by_hour_w[10] is False
+    assert by_hour_w[11] is True
+    assert by_hour_w[16] is True
+    assert by_hour_w[17] is False
+    assert by_hour_w[20] is False
+    assert by_hour_w[21] is True
+
+    # New Year's Day 2024 (Monday) is a BGE holiday → all off-peak
+    nye = build_hours_base(datetime(2024, 1, 1, 4), datetime(2024, 1, 2, 3))
+    assert bool(build_is_off_peak(nye, **kwargs).all())
+
+
+def test_resolve_hourly_prices_seasonal_tou():
+    from utils.EVs.ev_demand import EVDemandConfig, resolve_hourly_prices
+
+    cfg = make_ev_demand_config(
+        state="MD",
+        release="res_2024_tmy3_2",
+        start_date=datetime(2024, 1, 1, 4),
+        end_date=datetime(2024, 1, 3, 3),
+        charging_strategy="cost_minimizing",
+        peak_clock_hours_summer=tuple(range(10, 20)),
+        peak_clock_hours_winter=(7, 8, 9, 10, 17, 18, 19, 20),
+        tou_summer_months=(6, 7, 8, 9),
+        tou_weekends_off_peak=True,
+        tou_holidays_off_peak=True,
+        tou_on_peak_price_summer_usd_per_kwh=0.23636,
+        tou_off_peak_price_summer_usd_per_kwh=0.09981,
+        tou_on_peak_price_winter_usd_per_kwh=0.25482,
+        tou_off_peak_price_winter_usd_per_kwh=0.11732,
+        shed_load_penalty_usd_per_kwh=1000.0,
+    )
+    prices = resolve_hourly_prices(cfg)
+    assert prices is not None
+    assert len(prices) == 48
+    # Jan 1 is a holiday → winter off-peak price all day
+    assert np.allclose(prices[:20], 0.11732)
+    # Jan 2 is a Tuesday → winter on-peak at hour 8
+    # hours_base starts at 04:00 Jan 1; index of Jan 2 08:00:
+    # Jan 1: 04..23 = 20 hours, then Jan 2 00..03 = 4 → index 24 is Jan 2 04:00
+    # Jan 2 08:00 = index 24 + 4 = 28
+    assert prices[28] == pytest.approx(0.25482)
+    assert prices[28 + (21 - 8)] == pytest.approx(0.11732)  # Jan 2 21:00 off-peak
 
 
 def test_config_requires_travel_day_aligned_datetimes(tmp_path):
@@ -2872,7 +2987,7 @@ charging:
 
     # Wrong clock hours rejected in EVDemandConfig.
     with pytest.raises(ValueError, match="start_date must be at 04:00"):
-        EVDemandConfig(
+        make_ev_demand_config(
             state="MD",
             release="res_2024_tmy3_2",
             start_date=datetime(2024, 1, 1, 0),
@@ -2880,7 +2995,7 @@ charging:
             charging_strategy="immediate",
         )
     with pytest.raises(ValueError, match="end_date must be at 03:00"):
-        EVDemandConfig(
+        make_ev_demand_config(
             state="MD",
             release="res_2024_tmy3_2",
             start_date=datetime(2024, 1, 1, 4),
@@ -2893,7 +3008,7 @@ def test_off_peak_immediate_config_requires_peak_only():
     from utils.EVs.ev_demand import EVDemandConfig
 
     with pytest.raises(ValueError, match="peak_clock_hours"):
-        EVDemandConfig(
+        make_ev_demand_config(
             state="MD",
             release="res_2024_tmy3_2",
             start_date=datetime(2024, 1, 1, 4),
@@ -2901,7 +3016,7 @@ def test_off_peak_immediate_config_requires_peak_only():
             charging_strategy="off_peak_immediate",
         )
 
-    cfg = EVDemandConfig(
+    cfg = make_ev_demand_config(
         state="MD",
         release="res_2024_tmy3_2",
         start_date=datetime(2024, 1, 1, 4),
@@ -2917,16 +3032,9 @@ def test_off_peak_immediate_config_requires_peak_only():
 def test_load_ev_demand_config_pums_vehicles_requires_max_vehicles(tmp_path):
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    path = tmp_path / "pums_missing_max.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-02-01T03:00:00
-sampling:
-  ev_assignment: pums_vehicles
-"""
+    path = write_scenario_yaml(
+        tmp_path / "pums_missing_max.yml",
+        sampling={"ev_assignment": "pums_vehicles"},
     )
     with pytest.raises(ValueError, match="max_vehicles is required"):
         load_ev_demand_config(path)
@@ -2935,17 +3043,9 @@ sampling:
 def test_load_ev_demand_config_pums_vehicles_ok(tmp_path):
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    path = tmp_path / "pums_ok.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-02-01T03:00:00
-sampling:
-  ev_assignment: pums_vehicles
-  max_vehicles: 2
-"""
+    path = write_scenario_yaml(
+        tmp_path / "pums_ok.yml",
+        sampling={"ev_assignment": "pums_vehicles", "max_vehicles": 2},
     )
     config = load_ev_demand_config(path)
     assert config.ev_assignment == "pums_vehicles"
@@ -2959,7 +3059,7 @@ sampling:
 def test_config_path_defaults_by_mode():
     from utils.EVs.ev_demand import EVDemandConfig
 
-    adoption = EVDemandConfig(
+    adoption = make_ev_demand_config(
         state="MD",
         release="res_2024_tmy3_2",
         start_date=datetime(2024, 1, 1, 4),
@@ -2970,7 +3070,7 @@ def test_config_path_defaults_by_mode():
     assert adoption.pums_path is None
     assert adoption.weather_dir is None
 
-    pums = EVDemandConfig(
+    pums = make_ev_demand_config(
         state="MD",
         release="res_2024_tmy3_2",
         start_date=datetime(2024, 1, 1, 4),
@@ -2981,7 +3081,7 @@ def test_config_path_defaults_by_mode():
     assert pums.pums_path is not None
     assert pums.ev_ownership_path is None
 
-    with_temp = EVDemandConfig(
+    with_temp = make_ev_demand_config(
         state="MD",
         release="res_2024_tmy3_2",
         start_date=datetime(2024, 1, 1, 4),
@@ -3002,23 +3102,16 @@ def test_calculator_requires_ownership_for_adoption(
             ev_autonomie_df=ev_autonomie_df,
             start_date=datetime(2022, 1, 1, 4),
             end_date=datetime(2022, 1, 8, 3),
-            ev_assignment="resstock_adoption",
+            **CALCULATOR_SCENARIO_KWARGS,
         )
 
 
 def test_load_ev_demand_config_rejects_match_on_vehicles(tmp_path):
     from utils.EVs.ev_demand import load_ev_demand_config
 
-    path = tmp_path / "legacy.yml"
-    path.write_text(
-        """
-state: MD
-release: res_2024_tmy3_2
-start_date: 2024-01-01T04:00:00
-end_date: 2024-02-01T03:00:00
-sampling:
-  match_on_vehicles: false
-"""
+    path = write_scenario_yaml(
+        tmp_path / "legacy.yml",
+        sampling={"match_on_vehicles": False},
     )
     with pytest.raises(ValueError, match="match_on_vehicles"):
         load_ev_demand_config(path)
@@ -3050,8 +3143,8 @@ def test_assign_ev_slots_resstock_adoption(calculator):
         ev_autonomie_df=calculator.ev_autonomie_df,
         start_date=calculator.start_date,
         end_date=calculator.end_date,
-        ev_assignment="resstock_adoption",
         random_state=42,
+        **CALCULATOR_SCENARIO_KWARGS,
     )
     assert calc.match_on_vehicles is False
     assert calc.nhts_sampler.match_on_vehicles is False
@@ -3076,6 +3169,10 @@ def test_assign_ev_slots_pums_vehicles(calculator, mock_metadata):
         ev_assignment="pums_vehicles",
         max_vehicles=2,
         random_state=42,
+        charger_assignment="fixed",
+        charger_power_kw=7.2,
+        home_charging_fraction_assignment="none",
+        temperature_adjustment="none",
     )
     assert calc.match_on_vehicles is True
     assert calc.nhts_sampler.match_on_vehicles is True

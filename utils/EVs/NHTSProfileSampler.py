@@ -315,17 +315,32 @@ class NHTSProfileSampler:
         - *boundary* — the window wrapping midnight, between the last leg's arrival
           and the next day's first departure.
 
-        A closed day keeps that whole boundary window at home. One or both ends open
-        means the reconciler may place the seam (and time-offset jitter) anywhere in
-        the overnight gap, so the template screen credits **no** overnight home — only
-        interior gaps between tours, which survive replay. Annual battery sizing then
-        pairs peak duty with that day's actual home hours.
+        The screen uses the same daily-repeat assumption as the charger energy
+        balance: treat the next day as another copy of this template.
 
-        ``seam_drive_hours`` is accepted for call-site compatibility with the seam
-        reconciler's mirrored drive duration; open-day overnight credit no longer
-        depends on it (worst-case placement leaves none).
+        Closed (starts home, ends home)
+            No seam. Overnight is entirely at home → ``boundary_window``.
+
+        One open edge (starts away XOR ends away)
+            Self-repeat produces a single ``return_home`` or ``leave_home`` seam.
+            Annual replay places that seam with midpoint-centered triangular
+            weights (``TripScheduleGenerator._sample_midpoint_weighted_hour``).
+            The screen uses the deterministic center of that distribution:
+
+                last_arrival ── away ──┬── drive d ──┬── HOME ──► next first_dep
+                                       seam dep      seam arr
+                |<------------- boundary_window = G ------------->|
+
+            With the seam centered, away-before = (G − d) / 2, so
+            home = G − (G − d) / 2 − d = (G − d) / 2. The same algebra
+            holds for ``leave_home`` (home is the left half instead).
+            ``max(0, …)`` covers a mirrored drive longer than the gap
+            (generator clamps duration; no home remains).
+
+        Both ends open
+            Self-repeat is away → away: no home transition. Boundary credit
+            is 0; ``_profile_is_reference_feasible`` rejects these outright.
         """
-        _ = seam_drive_hours  # retained for API compatibility; see docstring
         # Map every drive leg onto the 4am-to-4am axis so "first" / "last" wrap correctly.
         departures = [self._travel_hour(int(hour)) for hour in profile.trip_departure_hours]
         arrivals = [self._travel_hour(int(hour)) for hour in profile.trip_arrival_hours]
@@ -355,14 +370,22 @@ class NHTSProfileSampler:
         interior_home = float(at_home[interior_start:interior_stop].sum())
 
         # --- Boundary / overnight home hours (last arrival → next first departure) ---
+        # Under daily-repeat, "next first departure" is this template's own first
+        # departure, shifted +24 onto the travel-day axis.
         boundary_window = float((first_departure + 24) - last_arrival)
         if profile.starts_home and profile.ends_home:
-            # Closed home day: the whole overnight gap is available for charging.
+            # Closed self-repeat: ends home → next starts home. No seam; full overnight.
             boundary_home = boundary_window
+        elif profile.starts_home != profile.ends_home:
+            # One-open self-repeat: ends away → next starts home (return_home), or
+            # ends home → next starts away (leave_home). Center the mirrored drive
+            # of length ``seam_drive_hours`` in the overnight gap; home is the
+            # residual half (see docstring diagram). Not a free 0.5 discount —
+            # it is the home window left by a centered consecutive-day seam.
+            residual = max(0.0, boundary_window - seam_drive_hours)
+            boundary_home = 0.5 * residual
         else:
-            # Open edge(s): seam placement + time offsets can consume the overnight
-            # window entirely on the annual peak day, so the template screen does not
-            # credit it. Interior tour gaps remain.
+            # Both-open self-repeat: ends away → next starts away. No home visit.
             boundary_home = 0.0
         return interior_home + boundary_home
 
@@ -409,7 +432,7 @@ class NHTSProfileSampler:
         # Home charging budget for the repeated day, after seam compression.
         home_hours = self._reference_home_hours(profile, seam_drive_hours=seam_drive_hours)
         if home_hours <= 0.0:
-            # No interior home gap, and open days get no overnight credit → never charged.
+            # No home window survives the repeated-day seam.
             return False
 
         # Level 2 energy available overnight / between tours (power is not temp-scaled).

@@ -1,6 +1,6 @@
 import pytest
 
-from utils.EVs.ev_demand import EVDemandConfig
+from tests.ev_scenario import make_ev_demand_config
 from utils.EVs.ev_utils import (
     assign_income_midpoints,
     assign_nhts_income_bucket,
@@ -14,7 +14,7 @@ from utils.EVs.ev_utils import (
 
 @pytest.fixture
 def test_config():
-    return EVDemandConfig(state="NY", release="res_2024_tmy3_2")
+    return make_ev_demand_config(state="NY", release="res_2024_tmy3_2")
 
 
 def test_get_census_division_for_state():
