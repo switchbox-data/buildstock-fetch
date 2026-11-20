@@ -7,6 +7,7 @@ from collections.abc import Awaitable
 from pathlib import Path
 from typing import Annotated, Literal, NamedTuple, cast, get_args
 
+import polars as pl
 import psutil
 import questionary
 import typer
@@ -116,6 +117,20 @@ def main(  # noqa: C901
             help="Number of building IDs to download across all upgrades. Use 0 for all buildings.",
         ),
     ] = None,
+    bldg_ids_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--bldg_ids_file",
+            "-b",
+            help=(
+                "Only download these building IDs: a CSV or Parquet file with a 'bldg_id' column,"
+                " or a text file with one ID per line"
+            ),
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ] = None,
     tasks: Annotated[
         int, typer.Option("--tasks", "-t", help="Number of files to download at the same time", min=1, max=100)
     ] = 15,
@@ -139,6 +154,7 @@ def main(  # noqa: C901
     file_types = _parse_and_validate_file_types(file_types_raw) if file_types_raw else None
     upgrade_ids = _parse_and_validate_upgrade_ids(upgrade_id_raw) if upgrade_id_raw else None
     sample = _validate_sample(sample_raw) if sample_raw is not None else None
+    bldg_ids = read_bldg_ids_file(bldg_ids_file) if bldg_ids_file is not None else None
 
     inputs = InputsMaybe(
         product=product,
@@ -190,7 +206,7 @@ def main(  # noqa: C901
     if not inputs_finalized:
         if not verify_inputs(inputs_final):
             cancel()
-        display_cli_args(inputs_final, tasks, connections, processing_tasks, sample)
+        display_cli_args(inputs_final, tasks, connections, processing_tasks, sample, bldg_ids_file)
 
     display_download_parameters(inputs_final)
     release = releases.filter_one(**inputs.as_filter())
@@ -201,6 +217,8 @@ def main(  # noqa: C901
                 console.print(f"[yellow]The following state is not available for trip schedules: {state}[/yellow]")
 
     building_groups = fetch_building_groups(inputs_final)
+    if bldg_ids is not None:
+        building_groups = filter_building_groups_by_id(building_groups, bldg_ids)
     if sample is not None:
         buildings: set[Building] = set()
         for group in building_groups:
@@ -450,7 +468,12 @@ def get_buildings_sample(building_groups: list[BuildingsGroup]) -> set[Building]
 
 
 def display_cli_args(
-    inputs: InputsFinal, tasks: int, connections: int | None, processing_tasks: int | None, sample: Sample | None
+    inputs: InputsFinal,
+    tasks: int,
+    connections: int | None,
+    processing_tasks: int | None,
+    sample: Sample | None,
+    bldg_ids_file: Path | None = None,
 ) -> None:
     console.print("[blue]Paste this in the command line to launch the script again with the same arguments[/]")
     display = (
@@ -471,6 +494,8 @@ def display_cli_args(
         display += f"\\\n\t--processing-tasks {processing_tasks}"
     if sample is not None:
         display += f"\\\n\t--sample {0 if sample == 'all' else sample}"
+    if bldg_ids_file is not None:
+        display += f'\\\n\t--bldg_ids_file "{bldg_ids_file.resolve().as_posix()}"'
     console.print(display)
     questionary.press_any_key_to_continue().ask()
 
@@ -501,6 +526,59 @@ def fetch_building_groups(inputs: InputsFinal) -> list[BuildingsGroup]:
         for state in sorted(inputs.states)
         for upgrade in sorted(inputs.upgrade_ids)
     ]
+
+
+class InvalidBldgIdsFileError(typer.BadParameter):
+    def __init__(self, path: Path, problem: str) -> None:
+        super().__init__(f"{path}: {problem}", param_hint="--bldg_ids_file")
+
+
+def read_bldg_ids_file(path: Path) -> set[int]:
+    """Read the building IDs to download from a file.
+
+    CSV and Parquet files must have a `bldg_id` column; other columns are ignored.
+    Any other file is read as plain text with one ID per line; blank lines and
+    lines starting with `#` are skipped.
+
+    Raises:
+        InvalidBldgIdsFileError: if the file has no IDs, or an ID is not an integer.
+    """
+    suffix = path.suffix.lower()
+    if suffix in (".csv", ".parquet"):
+        frame = pl.scan_parquet(path) if suffix == ".parquet" else pl.scan_csv(path)
+        if "bldg_id" not in frame.collect_schema().names():
+            raise InvalidBldgIdsFileError(path, "no 'bldg_id' column")
+        try:
+            column = frame.select(pl.col("bldg_id").cast(pl.Int64)).collect()["bldg_id"]
+        except pl.exceptions.InvalidOperationError as e:
+            raise InvalidBldgIdsFileError(path, "'bldg_id' values must be integers") from e
+        bldg_ids = set(column.drop_nulls().to_list())
+    else:
+        lines = (line.strip() for line in path.read_text().splitlines())
+        try:
+            bldg_ids = {int(line) for line in lines if line and not line.startswith("#")}
+        except ValueError as e:
+            raise InvalidBldgIdsFileError(path, str(e)) from e
+
+    if not bldg_ids:
+        raise InvalidBldgIdsFileError(path, "contains no building IDs")
+    return bldg_ids
+
+
+def filter_building_groups_by_id(building_groups: list[BuildingsGroup], bldg_ids: set[int]) -> list[BuildingsGroup]:
+    """Keep only the buildings whose ID is in `bldg_ids`, and warn about IDs not found in any group."""
+    filtered = [
+        group._replace(buildings=[building for building in group.buildings if building.id in bldg_ids])
+        for group in building_groups
+    ]
+    missing = bldg_ids - {building.id for group in filtered for building in group.buildings}
+    if missing:
+        preview = ", ".join(map(str, sorted(missing)[:10])) + (", ..." if len(missing) > 10 else "")
+        console.print(
+            f"[yellow]{len(missing)} of {len(bldg_ids)} building IDs were not found in the selected"
+            f" release, states, and upgrades: {preview}[/yellow]"
+        )
+    return filtered
 
 
 def select_buildings_for_sample(buildings: list[Building], sample: Sample) -> list[Building]:
