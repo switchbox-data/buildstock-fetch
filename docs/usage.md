@@ -106,6 +106,29 @@ Once all the inputs have been collected, BuildStock Fetch will ask whether to do
 
 You can also specify the sample size via `--sample` command-line argument. Use `0` to download all files.
 
+#### Downloading specific buildings
+
+If you already know which buildings you want, pass them with `--bldg_ids_file`, and BuildStock Fetch will skip every other building in the selected states and upgrades. The file can be:
+
+- a CSV or Parquet file with a `bldg_id` column (other columns are ignored), or
+- a text file with one building ID per line (blank lines and lines starting with `#` are skipped).
+
+```bash
+bsf \
+  --product resstock \
+  --release_year 2025 \
+  --weather_file amy2018 \
+  --release_version 1 \
+  --states "CA" \
+  --file_type "load_curve_15min" \
+  --upgrade_id "19" \
+  --output_directory ./data \
+  --bldg_ids_file my_buildings.csv \
+  --sample 0
+```
+
+BuildStock Fetch warns you about any IDs it can't find in the selected release, states, and upgrades. `--sample` is applied after the filter, so `--sample 0` downloads every listed building, and `--sample 10` downloads up to 10 of them per state-upgrade pair. Without `--sample`, you'll be asked whether to download all of the matching buildings or a sample.
+
 ### Direct Command Line
 
 You can also use specify the buildstock release, file types, and geography in one go, using direct command line arguments:
